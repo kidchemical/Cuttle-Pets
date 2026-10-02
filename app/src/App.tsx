@@ -1,3 +1,4 @@
+import { loadSettings, saveSettings } from './settings'
 import { petUrl } from './config'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { VRMScene } from './components/VRMScene'
@@ -13,6 +14,7 @@ import { LipSync } from './lip-sync'
 import { bindScene } from './api'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 import { HistoryPanel } from './components/HistoryPanel'
 import { MoodIndicator } from './components/MoodIndicator'
 import { Menu, Pin, Move, RotateCcw, Rotate3D, EyeOff, Settings, Music, RefreshCw } from 'lucide-react'
@@ -60,6 +62,9 @@ const btnStyle: React.CSSProperties = {
 
 export default function App() {
   const sceneRef = useRef<VRMSceneHandle>(null)
+  const [musicEnabled, setMusicEnabled] = useState(true)
+  const [musicPlaying, setMusicPlaying] = useState(false)
+  const musicPlayingRef = useRef(false)
   const [pinned, setPinned] = useState(true)
   const [tracking, setTracking] = useState<'mouse' | 'camera'>('mouse')
   const [showText, setShowText] = useState(true)
@@ -85,11 +90,13 @@ export default function App() {
 
   // Load persisted settings on mount
   useEffect(() => {
-    fetch(petUrl("/settings"))
-      .then((r) => r.json())
+    loadSettings()
       .then((s) => {
+        if (s.pinned !== undefined) { setPinned(s.pinned); void getCurrentWindow().setAlwaysOnTop(s.pinned) }
+        if (s.collapsed !== undefined) setCollapsed(s.collapsed)
         if (s.modelPath) setModelPath(s.modelPath.startsWith('/model/') ? petUrl(s.modelPath) : s.modelPath)
         if (s.ttsEnabled !== undefined) setTtsEnabled(s.ttsEnabled)
+        if (s.musicEnabled !== undefined) setMusicEnabled(s.musicEnabled)
         if (s.showText !== undefined) setShowText(s.showText)
         if (s.hideUI !== undefined) setHideUI(s.hideUI)
         if (s.tracking) { setTracking(s.tracking); sceneRef.current?.setTrackingMode(s.tracking) }
@@ -105,28 +112,47 @@ export default function App() {
         } else {
           // No saved language — persist the detected system language to backend
           const detected = navigator.language.startsWith('zh') ? 'zh' : 'en'
-          fetch(petUrl("/settings"), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ language: detected }),
-          }).catch(() => {})
+          saveSettings({ language: detected })
         }
       })
       .catch(() => {})
   }, [])
 
-  const saveSettings = (patch: Record<string, unknown>) => {
-    fetch(petUrl("/settings"), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    }).catch(() => {})
-  }
-
   useEffect(() => {
     const unlisten = listen('open-settings', () => setSettingsOpen(true))
     return () => { unlisten.then((f) => f()) }
   }, [])
+
+  useEffect(() => {
+    let active = true
+    const refresh = async () => {
+      try {
+        const response = await fetch(petUrl('/model/list'))
+        const data = await response.json()
+        const models = [{ name: 'Default character', url: DEFAULT_MODEL }, ...(data.models || []).map((m: { name: string; url: string }) => ({ name: m.name, url: petUrl(m.url) }))]
+        if (active) await invoke('update_tray_models', { models, selected: modelPath, musicEnabled })
+      } catch (e) { console.warn('Tray model refresh failed', e) }
+    }
+    void refresh()
+    const timer = window.setInterval(refresh, 30000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [modelPath, musicEnabled])
+
+  useEffect(() => {
+    const model = listen<string>('select-model', event => {
+      setModelError(''); setModelPath(event.payload); setDancing(false)
+      saveSettings({ modelPath: event.payload })
+    })
+    const controls = listen<string>('tray-control', event => {
+      if (event.payload === 'music') setMusicEnabled(value => { saveSettings({ musicEnabled: !value }); return !value })
+      if (event.payload === 'text') setShowText(value => { saveSettings({ showText: !value }); return !value })
+      if (event.payload === 'camera') sceneRef.current?.resetCamera()
+      if (event.payload === 'pose') sceneRef.current?.resetPose()
+    })
+    return () => { model.then(f => f()); controls.then(f => f()) }
+  }, [])
+
+  useEffect(() => { musicPlayingRef.current = musicEnabled && musicPlaying; sceneRef.current?.setMusicMode(musicEnabled && musicPlaying) }, [musicEnabled, musicPlaying, modelPath])
 
   useEffect(() => {
     bindScene(sceneRef.current)
@@ -147,17 +173,24 @@ export default function App() {
   }, [])
 
   const handleVrmMessage: OnVrmMessage = useCallback((msg) => {
+    if (msg.musicPlaying !== undefined) {
+      setMusicPlaying(msg.musicPlaying)
+      return
+    }
+    if (msg.demoReset) sceneRef.current?.resetPose()
+    if (msg.sipCoffee) sceneRef.current?.requestCoffeeSip()
+    if (msg.working !== undefined) sceneRef.current?.setWorking(msg.working)
     if (msg.playAction) sceneRef.current?.playAction(msg.playAction, msg.hold ?? false)
     if (msg.emotion && sceneRef.current) {
       const action = emotionActionMap[msg.emotion]
       if (msg.text) {
         // 回复消息：表情和动作同时触发（文字出现1s后由TextBubble延迟调用）
         sceneRef.current.setEmotionWithReset(msg.emotion, msg.emotionDuration ?? 5000, msg.emotionIntensity)
-        if (action && !msg.playAction) sceneRef.current.playAction(action)
+        if (action && !msg.playAction && msg.working !== true) sceneRef.current.playAction(action)
       } else {
         // 思考阶段：hold 动作，10s 后自动 reset
         sceneRef.current.setEmotionWithReset(msg.emotion, msg.emotionDuration ?? 10000, msg.emotionIntensity)
-        if (action && !msg.playAction) sceneRef.current.playAction(action, true)
+        if (action && !msg.playAction && msg.working !== true) sceneRef.current.playAction(action, true)
       }
     }
   }, [])
@@ -180,11 +213,15 @@ export default function App() {
       'akimbo', 'playFingers', 'scratchHead', 'stretch',
       'happy', 'angry', 'greeting', 'excited', 'shy',
       'point', 'salute', 'angryPump',
+      'waving', 'cheering', 'clapping', 'victory', 'praying',
+      'defeated', 'joyfulJump', 'looking', 'pointing', 'breakdance',
+      'sittingIdle', 'sittingTalk', 'talkingIdle', 'phoneCall',
     ]
     const IDLE_THRESHOLD_MS = 30_000
     const FIDGET_CHECK_MS = 15_000 // check every 15s, randomness inside
 
     const timer = setInterval(() => {
+      if (musicPlayingRef.current) return
       const idleMs = Date.now() - lastActivityRef.current
       if (idleMs < IDLE_THRESHOLD_MS) return
       // 50% chance each check to avoid being too predictable
@@ -362,6 +399,7 @@ export default function App() {
     const next = !pinned
     await win.setAlwaysOnTop(next)
     setPinned(next)
+    saveSettings({ pinned: next })
   }
 
   return (
@@ -378,7 +416,7 @@ export default function App() {
       {modelError && <div role="alert" data-no-passthrough style={{ position: 'absolute', top: 20, left: 16, right: 16, zIndex: 1000, background: '#402020', color: 'white', padding: 12, borderRadius: 8 }}>
         {modelError}<button onClick={() => { setModelError(''); setModelPath(DEFAULT_MODEL); saveSettings({ modelPath: DEFAULT_MODEL }) }}>Use default model</button>
       </div>}
-      <VRMScene ref={sceneRef} modelPath={modelPath} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); uploadVrmScreenshot() }} />
+      <VRMScene ref={sceneRef} modelPath={modelPath} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
       {!hideMood && <MoodIndicator uiAlign={uiAlign} />}
       <TextBubble onMessage={handleVrmMessageWithActivity} enabled={showText} ttsEnabled={ttsEnabled} />
       {!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}
@@ -431,7 +469,7 @@ export default function App() {
         }}
       >
         <button
-          onClick={() => setCollapsed((v) => !v)}
+          onClick={() => setCollapsed((v) => { saveSettings({ collapsed: !v }); return !v })}
           style={btnStyle}
           title={collapsed ? t('展开菜单 (Tab)', 'Expand Menu (Tab)') : t('折叠菜单 (Tab)', 'Collapse Menu (Tab)')}
         >

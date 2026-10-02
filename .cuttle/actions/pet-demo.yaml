@@ -1,0 +1,6 @@
+name: pet.demo
+title: Test pet animation
+description: Run one isolated animation or prop sequence on the connected pet.
+type: shell
+run_posix: .venv/bin/python .cuttle/scripts/pet_demo.py
+workdir: .

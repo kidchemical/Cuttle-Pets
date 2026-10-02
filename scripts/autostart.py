@@ -19,6 +19,7 @@ if args.mode == 'enable':
         '[Desktop Entry]', 'Type=Application', 'Name=Cuttle Pets',
         'Comment=Desktop pet with automatic Cuttle connection',
         'Exec=/usr/bin/bash ' + quote(ROOT / 'scripts' / 'login_start.sh'),
+        'Icon=' + str(ROOT / 'app/src-tauri/icons/128x128.png'),
         'Terminal=false', 'X-GNOME-Autostart-enabled=true', 'X-GNOME-Autostart-Delay=10', ''
     ]))
     print('Cuttle Pets will start automatically at desktop login.')

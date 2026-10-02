@@ -24,6 +24,7 @@ import mimetypes
 import os
 import queue
 import shutil
+import tempfile
 import threading
 import time
 import sys
@@ -34,7 +35,7 @@ from typing import Any, Iterable
 from flask import Flask, Response, jsonify, request, send_file
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from bridge import connection
+from bridge import connection, music
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 APP_PUBLIC = REPO_ROOT / "app" / "public"
@@ -57,15 +58,20 @@ PRESET_ACTIONS = (
     "akimbo", "playFingers", "scratchHead", "stretch",
     "happy", "angry", "greeting", "excited", "shy",
     "point", "salute", "angryPump",
+    "waving", "cheering", "clapping", "victory", "praying",
+    "defeated", "joyfulJump", "looking", "pointing", "breakdance",
+    "sittingIdle", "sittingTalk", "talkingIdle", "phoneCall",
 )
 
-# Cuttle chat activity -> (emotion, action, text-template)
+# Cuttle chat activity -> (emotion, action, text-template).
+# thinking/streaming set "working" so the renderer shows the typing pose
+# with the laptop prop; their arm actions stay None to avoid fighting it.
 ACTIVITY_MAP: dict[str, dict[str, Any]] = {
-    "thinking":  {"emotion": "think",     "action": "scratchHead", "duration_ms": 10000},
-    "streaming": {"emotion": "curious",   "action": None,          "duration_ms": 8000},
-    "done":      {"emotion": "happy",     "action": "happy",       "duration_ms": 5000},
-    "error":     {"emotion": "surprised", "action": "point",       "duration_ms": 5000},
-    "idle":      {"emotion": "relaxed",   "action": None,          "duration_ms": 4000},
+    "thinking":  {"emotion": "think",     "action": None,    "duration_ms": 10000, "working": True},
+    "streaming": {"emotion": "curious",   "action": None,    "duration_ms": 8000,  "working": True},
+    "done":      {"emotion": "happy",     "action": "happy", "duration_ms": 5000,  "working": False},
+    "error":     {"emotion": "surprised", "action": "point", "duration_ms": 5000,  "working": False},
+    "idle":      {"emotion": "relaxed",   "action": None,    "duration_ms": 4000,  "working": False},
 }
 
 app = Flask(__name__)
@@ -151,6 +157,7 @@ def cuttle_disconnect():
 # list so a settings window or second monitor copy can also subscribe.
 _subscribers: list[queue.Queue] = []
 _sub_lock = threading.Lock()
+_music_playing = False
 
 
 def broadcast(payload: dict[str, Any]) -> int:
@@ -168,6 +175,17 @@ def broadcast(payload: dict[str, Any]) -> int:
     return delivered
 
 
+def publish_music(active: bool):
+    global _music_playing
+    _music_playing = active
+    broadcast({"musicPlaying": active})
+
+
+@app.get("/music")
+def music_status():
+    return jsonify({"ok": True, "playing": _music_playing})
+
+
 @app.get("/events")
 def events():
     q: queue.Queue = queue.Queue(maxsize=64)
@@ -178,6 +196,7 @@ def events():
         try:
             # Tell the client we're live before the first real frame.
             yield f": connected {int(time.time())}\n\n"
+            yield "data: " + json.dumps({"musicPlaying": _music_playing}) + "\n\n"
             while True:
                 try:
                     frame = q.get(timeout=15)
@@ -198,19 +217,40 @@ def events():
 
 
 # ── settings ───────────────────────────────────────────────────────────────
+_settings_lock = threading.RLock()
+
+
 def _load_settings() -> dict[str, Any]:
-    try:
-        return json.loads(SETTINGS_PATH.read_text())
-    except (OSError, ValueError):
-        return {}
+    with _settings_lock:
+        try:
+            data = json.loads(SETTINGS_PATH.read_text())
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
 
 
 def _save_settings(patch: dict[str, Any]) -> dict[str, Any]:
-    current = _load_settings()
-    current.update(patch)
-    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(current, indent=2))
-    return current
+    with _settings_lock:
+        current = _load_settings()
+        for key, value in patch.items():
+            if key in ("voice", "persona") and isinstance(value, dict):
+                previous = current.get(key, {})
+                current[key] = {**(previous if isinstance(previous, dict) else {}), **value}
+            else:
+                current[key] = value
+        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd, filename = tempfile.mkstemp(prefix=".settings-", dir=SETTINGS_PATH.parent)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w") as stream:
+                json.dump(current, stream, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(filename, SETTINGS_PATH)
+        finally:
+            if os.path.exists(filename):
+                os.unlink(filename)
+        return current
 
 
 @app.get("/settings")
@@ -288,8 +328,48 @@ def say():
     return jsonify({"ok": True, "delivered": broadcast(payload), "payload": payload})
 
 
+# Manual animation checks temporarily take priority over live-chat reactions.
+_demo_until = 0.0
+_demo_generation = 0
+_demo_timer = None
+_demo_lock = threading.RLock()
+
+
+@app.post("/demo")
+def demo():
+    global _demo_until, _demo_generation, _demo_timer
+    kind = (request.get_json(silent=True) or {}).get("sequence", "")
+    if kind not in (*PRESET_ACTIONS, "typing", "coffee", "stop"):
+        return jsonify({"ok": False, "error": "Unknown demo sequence"}), 400
+    with _demo_lock:
+        _demo_generation += 1
+        generation = _demo_generation
+        if _demo_timer:
+            _demo_timer.cancel()
+        _demo_until = time.monotonic() + 30 if kind != "stop" else 0
+        payload = {"demoReset": True, "working": kind in ("typing", "coffee")}
+        if kind in PRESET_ACTIONS:
+            payload["playAction"] = kind
+        if kind == "coffee":
+            payload["sipCoffee"] = True
+        delivered = broadcast(payload)
+        if kind != "stop":
+            def finish():
+                global _demo_until
+                with _demo_lock:
+                    if generation == _demo_generation:
+                        _demo_until = 0
+                        broadcast({"demoReset": True, "working": False})
+            _demo_timer = threading.Timer(30, finish)
+            _demo_timer.daemon = True
+            _demo_timer.start()
+    return jsonify({"ok": True, "delivered": delivered, "sequence": kind})
+
+
 @app.post("/pet/event")
 def pet_event():
+    if time.monotonic() < _demo_until:
+        return jsonify({"ok": True, "suppressed": "manual demo"})
     """Map a Cuttle chat activity to an emote + action + text."""
     body = request.get_json(force=True, silent=True) or {}
     key = body.get("state")
@@ -304,6 +384,7 @@ def pet_event():
         "emotionDuration": int(body.get("emotionDuration", spec["duration_ms"])),
         "text": detail or spec.get("text", ""),
         "replyDone": key == "done",
+        "working": bool(body.get("working", spec.get("working", False))),
     }
     action = body.get("action") or spec["action"]
     if action:
@@ -337,12 +418,16 @@ def preview():
 @app.get("/voice")
 @app.post("/voice")
 def voice():
+    if request.method == "POST":
+        _save_settings({"voice": request.get_json() or {}})
     return jsonify(_load_settings().get("voice", {"enabled": False}))
 
 
 @app.get("/persona")
 @app.post("/persona")
 def persona():
+    if request.method == "POST":
+        _save_settings({"persona": request.get_json() or {}})
     return jsonify(_load_settings().get("persona", {}))
 
 
@@ -516,5 +601,6 @@ def _clamp(v: Any, lo: float = 0.0, hi: float = 1.0) -> float:
 
 if __name__ == "__main__":
     _ensure_dirs()
+    threading.Thread(target=music.watch, args=(publish_music,), daemon=True).start()
     print(f"cuttle-pet control server on http://{HOST}:{PORT}  (data: {DATA_DIR})")
     app.run(host=HOST, port=PORT, threaded=True, debug=False)

@@ -7,6 +7,8 @@ import type { VRM } from '@pixiv/three-vrm'
 import { EmoteController } from '../emote'
 import { LipSync } from '../lip-sync'
 import { MotionController } from '../motion-controller'
+import { buildTypingPoseCache, restoreTypingPose, applyTypingPose, applySipPose, applyMusicPose } from '../typing-pose'
+import type { TypingPoseCache } from '../typing-pose'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
 export type TouchRegion = 'head' | 'arm' | 'leg' | 'chest' | 'belly' | 'buttocks'
@@ -35,7 +37,12 @@ export interface VRMSceneHandle {
   isDancing: () => boolean
   setBgmVolume: (v: number) => void
   /** Unified reset: camera + resetToIdle + expressions to zero */
+  resetPose: () => void
   reset: () => void
+  /** Working mode: typing pose + laptop prop (eases in/out) */
+  setMusicMode: (active: boolean) => void
+  requestCoffeeSip: () => void
+  setWorking: (active: boolean) => void
 }
 
 // ── Blink state ───────────────────────────────────────────────────────────────
@@ -181,6 +188,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   const panCameraRef = useRef<((dx: number, dy: number) => void) | null>(null)
   const rotateCameraRef = useRef<((dx: number, dy: number) => void) | null>(null)
   const lipSyncRef = useRef<LipSync>(LipSync.getInstance())
+  const musicModeRef = useRef(false)
+  const sipRequestedRef = useRef(false)
+  const workingTargetRef = useRef(false)
   const onTouchRef = useRef(onTouch)
   onTouchRef.current = onTouch
   const onModelErrorRef = useRef(onModelError)
@@ -225,10 +235,24 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     setBgmVolume(v: number) {
       motionRef.current?.setVolume(v)
     },
+    resetPose() {
+      workingTargetRef.current = false
+      sipRequestedRef.current = false
+      motionRef.current?.resetToIdle()
+      emoteRef.current?.resetAll()
+    },
     reset() {
+      workingTargetRef.current = false
+      sipRequestedRef.current = false
       resetCameraRef.current?.()
       motionRef.current?.resetToIdle()
       emoteRef.current?.resetAll()
+    },
+    setMusicMode(active: boolean) { musicModeRef.current = active },
+    requestCoffeeSip() { sipRequestedRef.current = true },
+    setWorking(active: boolean) {
+      if (active && !workingTargetRef.current) motionRef.current?.resetToIdle()
+      workingTargetRef.current = active
     },
   }))
 
@@ -293,6 +317,18 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     let motion: MotionController | null = null
     let emote: EmoteController | null = null
     let handPose: HandPoseCache | null = null
+    let typingCache: TypingPoseCache | null = null
+    let laptop: THREE.Object3D | null = null
+    let phone: THREE.Object3D | null = null
+    let cup: THREE.Object3D | null = null
+    let headphones: THREE.Group | null = null
+    let nextMusicDance = 0
+    let workingBlend = 0
+    // Coffee-sip state: sipActive while raising/lowering, sipBlend eases 0→1→0
+    let sipActive = false
+    let sipBlend = 0
+    let sipT0 = 0
+    let nextSipAt = Infinity
     const blinkState = createBlinkState()
     const saccades = new EyeSaccadeController()
     const lookAtTarget = { x: 0, y: 0, z: -100 }
@@ -382,6 +418,76 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
         // Build hand pose cache (applied every frame in animate loop)
         handPose = buildHandPoseCache(loadedVrm)
+        typingCache = buildTypingPoseCache(loadedVrm)
+
+        // Lightweight native prop, scaled with the avatar and attached to its head.
+        const headBone = loadedVrm.humanoid?.getNormalizedBoneNode('head')
+        if (headBone) {
+          headphones = new THREE.Group()
+          const radius = modelSize.y * 0.075
+          const plastic = new THREE.MeshStandardMaterial({ color: 0x252533, roughness: 0.6 })
+          const accent = new THREE.MeshStandardMaterial({ color: 0x66bbff, roughness: 0.4 })
+          const band = new THREE.Mesh(new THREE.TorusGeometry(radius, radius * 0.09, 8, 32, Math.PI), plastic)
+          headphones.add(band)
+          for (const side of [-1, 1]) {
+            const pad = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.3, radius * 0.3, radius * 0.25, 16), accent)
+            pad.rotation.z = Math.PI / 2
+            pad.position.x = side * radius
+            headphones.add(pad)
+          }
+          headphones.position.y = modelSize.y * 0.04
+          headphones.visible = false
+          headBone.add(headphones)
+        }
+
+        // Laptop prop for working mode (CC0 model by Kenney). Positioned in
+        // front of the pet at waist height; hidden unless working.
+        // Keep the keyboard and screen facing the pet, not the viewer.
+        new GLTFLoader().load(
+          '/laptop.glb',
+          (laptopGltf) => {
+            laptop = laptopGltf.scene
+            laptop.rotation.y = 0
+            laptop.position.set(
+              modelCenter.x,
+              box.min.y + modelSize.y * 0.42,
+              modelCenter.z + 0.30,
+            )
+            laptop.visible = false
+            scene.add(laptop)
+          },
+          undefined,
+          (laptopErr) => console.warn('Failed to load laptop prop:', laptopErr),
+        )
+
+        // Hand props: cellphone (shown during phoneCall action) and coffee
+        // cup (shown during working coffee sips). Both ride on the right
+        // hand bone; scale is normalized by bounding box since sources vary.
+        const propLoader = new GLTFLoader()
+        function attachHandProp(url: string, targetHeight: number, offset: [number, number, number], set: (o: THREE.Object3D) => void) {
+          propLoader.load(
+            url,
+            (gltf) => {
+              const obj = gltf.scene
+              const bbox = new THREE.Box3().setFromObject(obj)
+              const size = new THREE.Vector3()
+              bbox.getSize(size)
+              if (size.y > 0) obj.scale.multiplyScalar(targetHeight / size.y)
+              obj.position.set(...offset)
+              obj.visible = false
+              if (typingCache?.handR) {
+                typingCache.handR.add(obj)
+                set(obj)
+              } else {
+                console.warn(`No right-hand bone for prop ${url}`)
+              }
+            },
+            undefined,
+            (err) => console.warn(`Failed to load prop ${url}:`, err),
+          )
+        }
+        attachHandProp('/phone.glb', 0.16, [0.02, 0.05, 0.04], (o) => { phone = o })
+        attachHandProp('/cup.glb', 0.11, [0, 0.10, 0.02], (o) => { cup = o })
 
         // Initialize emote controller
         emote = new EmoteController(loadedVrm)
@@ -390,32 +496,12 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         // ── Initialize MotionController ──────────────────────────────────────
         motion = new MotionController(loadedVrm)
         motionRef.current = motion
-
-        // Dance camera: auto-fit from hips position, centered on upper body
-        const danceRadius = (modelSize.y / 1.6) / Math.tan((FOV / 2 * Math.PI) / 180)
-
-        motion.onDanceStart = () => {
-          const hipsNode = loadedVrm.humanoid?.getNormalizedBoneNode('hips')
-          if (hipsNode) {
-            const hipsWorld = new THREE.Vector3()
-            hipsNode.getWorldPosition(hipsWorld)
-            // Pivot at hips height (upper body center)
-            pivot.set(hipsWorld.x, hipsWorld.y, hipsWorld.z)
-          } else {
-            pivot.copy(modelCenter)
-          }
-          orbitRadius = danceRadius
-          orbitTheta = 0
-          orbitPhi = Math.PI / 2
-          updateCameraOrbit()
+        // Show the cellphone prop while the phoneCall action is playing
+        motion.onActionChange = (actionName) => {
+          if (phone) phone.visible = actionName === 'phoneCall'
         }
-        motion.onDanceStop = () => {
-          pivot.copy(initPivot)
-          orbitRadius = initRadius
-          orbitTheta = initTheta
-          orbitPhi = initPhi
-          updateCameraOrbit()
-        }
+
+        // Animation state changes leave the user’s camera framing untouched.
 
         // Load idle animation (non-blocking for fast startup)
         motion.loadIdle(idleAnimationPath).catch((err) =>
@@ -575,7 +661,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         getCurrentWindow().startDragging()
         return
       } else if (e.button === 1) {
-        dragMode = 'dolly'
+        dragMode = e.shiftKey ? 'pan' : 'dolly'
         e.preventDefault()
       } else if (e.button === 2) {
         dragMode = 'rotate'
@@ -618,8 +704,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           MAX_RADIUS,
         )
       } else if (dragMode === 'pan') {
-        pivot.x -= dx * PAN_SPEED
-        pivot.y += dy * PAN_SPEED
+        panCameraRef.current?.(dx, dy)
       }
       updateCameraOrbit()
     }
@@ -696,11 +781,71 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       const delta = clock.getDelta()
 
       if (vrm) {
+        // Remove last frame’s procedural layer, including bones absent from the idle clip.
+        if (typingCache) restoreTypingPose(typingCache)
         // 1. Animation mixer
         motion?.update(delta)
 
         // 1.5. Relaxed hand pose — skip during dance (VMD has own hand anim)
         if (handPose && !motion?.isDancing) applyRelaxedHandPose(handPose, clock.elapsedTime)
+
+        // 1.6. Working mode: ease toward target, layer typing pose on top
+        const workingTarget = workingTargetRef.current && !motion?.actionPlaying && !motion?.isDancing ? 1 : 0
+        workingBlend += (workingTarget - workingBlend) * Math.min(1, delta * 4)
+        if (Math.abs(workingBlend) < 0.001) workingBlend = workingTarget
+        if (typingCache && workingBlend > 0) {
+          applyTypingPose(typingCache, clock.elapsedTime, workingBlend)
+        }
+        if (laptop) laptop.visible = workingBlend > 0.02
+
+        // 1.7. Coffee sip: every 40–90s of sustained working, raise the cup
+        // for ~4.5s (blend ramps up/down over the first/last quarter)
+        const now = clock.elapsedTime
+        if (workingBlend > 0.8) {
+          if (sipRequestedRef.current) {
+            nextSipAt = now
+            sipRequestedRef.current = false
+          }
+          if (nextSipAt === Infinity) nextSipAt = now + 25
+          if (!sipActive && now >= nextSipAt) {
+            sipActive = true
+            sipT0 = now
+          }
+          if (sipActive) {
+            const SIP_DUR = 4.5
+            const st = now - sipT0
+            if (st >= SIP_DUR) {
+              sipActive = false
+              sipBlend = 0
+              nextSipAt = now + 40 + Math.random() * 50
+            } else {
+              const k = st / SIP_DUR
+              sipBlend = k < 0.25 ? k / 0.25 : k > 0.75 ? (1 - k) / 0.25 : 1
+            }
+          }
+        } else {
+          sipActive = false
+          sipBlend = 0
+          nextSipAt = Infinity
+        }
+        if (typingCache && sipBlend > 0) {
+          applySipPose(typingCache, now, sipBlend * workingBlend)
+        }
+        if (cup) cup.visible = sipBlend > 0.3
+
+        const listening = musicModeRef.current && !workingTargetRef.current
+        if (headphones) headphones.visible = listening
+        if (listening && !motion?.actionPlaying && !motion?.isDancing && workingBlend < 0.02) {
+          if (typingCache) applyMusicPose(typingCache, now, 1)
+          if (!nextMusicDance) nextMusicDance = now + 20 + Math.random() * 25
+          if (now >= nextMusicDance) {
+            const choices = ['breakdance', 'cheering', 'joyfulJump']
+            void motion?.playAction(choices[Math.floor(Math.random() * choices.length)])
+            nextMusicDance = now + 45 + Math.random() * 45
+          }
+        } else if (!listening) {
+          nextMusicDance = 0
+        }
 
         // 2. Humanoid update
         vrm.humanoid?.update()
@@ -786,6 +931,19 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       emoteRef.current = null
       motion?.dispose()
       motionRef.current = null
+      if (laptop) {
+        scene.remove(laptop)
+        laptop = null
+      }
+      if (headphones) {
+        headphones.removeFromParent()
+        headphones.traverse(o => { if (o instanceof THREE.Mesh) { o.geometry.dispose(); (o.material as THREE.Material).dispose() } })
+      }
+      phone?.removeFromParent()
+      phone = null
+      cup?.removeFromParent()
+      cup = null
+      typingCache = null
       hitTarget.dispose()
       delete (window as any).__clawHitTest
       renderer.dispose()

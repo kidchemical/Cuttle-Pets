@@ -259,13 +259,6 @@ export function SettingsPanel({
     })
   }
 
-  const saveModelPath = (modelPath: string) => {
-    fetch(petUrl("/settings"), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelPath }),
-    }).catch(() => {})
-  }
 
   const setVoice = (voice: string) => {
     postVoiceSettings({ voice }).then(() => setCurrentVoice(voice)).catch(() => {})
@@ -554,7 +547,7 @@ export function SettingsPanel({
               <div style={labelStyle}>{t('内置VRM模型', 'Built-in VRM Models')}</div>
               <select
                 value={BUILTIN_MODELS.includes(currentModel) ? currentModel : ''}
-                onChange={(e) => { onModelChange(e.target.value); saveModelPath(e.target.value) }}
+                onChange={(e) => { onModelChange(e.target.value) }}
                 style={selectStyle}
               >
                 {!BUILTIN_MODELS.includes(currentModel) && <option value="" disabled>{t('未选择', 'Not selected')}</option>}
@@ -568,7 +561,7 @@ export function SettingsPanel({
                   <div style={labelStyle}>{t('自定义VRM模型', 'Custom VRM Models')}</div>
                   <select
                     value={!BUILTIN_MODELS.includes(currentModel) ? currentModel : ''}
-                    onChange={(e) => { onModelChange(e.target.value); saveModelPath(e.target.value) }}
+                    onChange={(e) => { onModelChange(e.target.value) }}
                     style={selectStyle}
                   >
                     {BUILTIN_MODELS.includes(currentModel) && <option value="" disabled>{t('未选择', 'Not selected')}</option>}
@@ -601,7 +594,6 @@ export function SettingsPanel({
                           .then((d) => { if (d.models) setModels(d.models.map((m: { name: string; url: string }) => ({ ...m, url: petUrl(m.url) }))) })
                           .catch(() => {})
                         onModelChange(petUrl(data.url))
-                        saveModelPath(petUrl(data.url))
                       }
                     } catch (err) {
                       setModelImportError(err instanceof Error ? err.message : 'Model import failed')

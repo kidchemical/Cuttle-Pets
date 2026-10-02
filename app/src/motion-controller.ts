@@ -25,6 +25,8 @@ export interface MotionPreset {
   label: string
   type: MotionFileType
   url: string
+  /** FBX take name for multi-take packs (e.g. Quaternius UAL) */
+  take?: string
 }
 
 // Actions: short one-shot gestures triggered by emotions / interactions
@@ -44,6 +46,25 @@ export const actionPresets: Record<string, MotionPreset> = {
   point:        { label: '指点',     type: 'fbx', url: '/point.fbx' },
   salute:       { label: '敬礼',     type: 'fbx', url: '/salute.fbx' },
   angryPump:    { label: '暴怒',     type: 'fbx', url: '/angryPump.fbx' },
+
+  // Free Mixamo clips (same bytes as a mixamo.com download with a free
+  // Adobe account, mirrored via GitHub)
+  waving:       { label: '挥手',     type: 'fbx', url: '/mixamo_waving.fbx' },
+  cheering:     { label: '欢呼',     type: 'fbx', url: '/mixamo_cheering.fbx' },
+  clapping:     { label: '鼓掌',     type: 'fbx', url: '/mixamo_clapping.fbx' },
+  victory:      { label: '胜利',     type: 'fbx', url: '/mixamo_victory.fbx' },
+  praying:      { label: '祈祷',     type: 'fbx', url: '/mixamo_praying.fbx' },
+  defeated:     { label: '沮丧',     type: 'fbx', url: '/mixamo_defeated.fbx' },
+  joyfulJump:   { label: '欢跳',     type: 'fbx', url: '/mixamo_joyfuljump.fbx' },
+  looking:      { label: '张望',     type: 'fbx', url: '/mixamo_looking.fbx' },
+  pointing:     { label: '指向',     type: 'fbx', url: '/mixamo_pointing.fbx' },
+  breakdance:   { label: '霹雳舞',   type: 'fbx', url: '/mixamo_breakdance.fbx' },
+
+  // CC0 Quaternius UAL takes (multi-take pack, selected by take name)
+  sittingIdle:  { label: '坐下',     type: 'fbx', url: '/ual1.fbx', take: 'Armature|Sitting_Idle_Loop' },
+  sittingTalk:  { label: '坐聊',     type: 'fbx', url: '/ual1.fbx', take: 'Armature|Sitting_Talking_Loop' },
+  talkingIdle:  { label: '交谈',     type: 'fbx', url: '/ual1.fbx', take: 'Armature|Idle_Talking_Loop' },
+  phoneCall:    { label: '打电话',   type: 'fbx', url: '/ual2.fbx', take: 'Armature|Idle_TalkingPhone_Loop' },
 }
 
 // Dances: looping full-body animations with optional BGM
@@ -54,6 +75,7 @@ export interface DancePreset extends MotionPreset {
 export const dancePresets: Record<string, DancePreset> = {
   jile: { label: '极乐净土', type: 'vmd', url: '/jile.vmd', bgm: '/jile.mp3' },
   love: { label: '恋爱循环', type: 'vmd', url: '/love.vmd', bgm: '/love.mp3' },
+  ualDance: { label: '街舞', type: 'fbx', url: '/ual1.fbx', take: 'Armature|Dance_Loop' },
 }
 
 // ── Utility: re-anchor root position ────────────────────────────────────────
@@ -116,6 +138,8 @@ export class MotionController {
   // Callbacks for external coordination (camera switching etc.)
   onDanceStart?: () => void
   onDanceStop?: () => void
+  /** Fired with the action name on start, null when back to idle (for props) */
+  onActionChange?: (name: string | null) => void
 
   constructor(vrm: VRM) {
     this.vrm = vrm
@@ -194,6 +218,7 @@ export class MotionController {
       this.idleAction = this.mixer.clipAction(this.idleClip)
       this.crossFadeTo(this.idleAction)
     }
+    this.onActionChange?.(null)
 
     if (wasDancing) this.onDanceStop?.()
   }
@@ -226,6 +251,7 @@ export class MotionController {
     action.setLoop(THREE.LoopOnce, 1)
     action.clampWhenFinished = true  // always clamp to avoid T-pose on finish
     this.crossFadeTo(action)
+    this.onActionChange?.(name)
 
     let settled = false
     const settle = () => {
@@ -241,14 +267,18 @@ export class MotionController {
           this._actionPlaying = false
           this.disableIK()
           this.startIdle()
+          this.onActionChange?.(null)
         }, 10000)
       } else {
         this._actionPlaying = false
         this.disableIK()
         this.startIdle()
+        this.onActionChange?.(null)
       }
     }
-    const onFinished = () => settle()
+    const onFinished = (event: { action: THREE.AnimationAction }) => {
+      if (event.action === action) settle()
+    }
     this.mixer?.addEventListener('finished', onFinished)
 
     // Safety timeout: guarantee _actionPlaying resets even if 'finished' never fires
@@ -277,6 +307,7 @@ export class MotionController {
 
       this.clearTimers()
       this._actionPlaying = false
+      this.onActionChange?.(null)
 
       this.onDanceStart?.()
 
@@ -352,7 +383,8 @@ export class MotionController {
       return this.loadVMDWithIK(preset.url)
     }
 
-    const cached = this.clipCache.get(preset.url)
+    const cacheKey = preset.take ? `${preset.url}|${preset.take}` : preset.url
+    const cached = this.clipCache.get(cacheKey)
     if (cached) return cached
 
     let clip: THREE.AnimationClip | null = null
@@ -364,7 +396,7 @@ export class MotionController {
           if (clip) reAnchorRootPositionTrack(clip, this.vrm)
           break
         case 'fbx':
-          clip = await loadMixamoAnimation(preset.url, this.vrm)
+          clip = await loadMixamoAnimation(preset.url, this.vrm, preset.take)
           break
       }
     } catch (err) {
@@ -373,8 +405,8 @@ export class MotionController {
     }
 
     if (clip) {
-      clip.name = preset.url
-      this.clipCache.set(preset.url, clip)
+      clip.name = cacheKey
+      this.clipCache.set(cacheKey, clip)
     }
     return clip
   }

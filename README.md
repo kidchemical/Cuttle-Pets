@@ -44,6 +44,42 @@ any browser or Tauri runtime.
 VRChat avatar *redistribution* is off-limits under VRChat's terms; author your
 own character. The bundled `app/public/model1.vrm` is upstream's sample and is
 covered by their asset terms, not the MIT code license — swap it before sharing.
+The laptop prop (`app/public/laptop.glb`) is Kenney's CC0 model via
+[Poly Pizza](https://poly.pizza/m/GnbwSUiVty) — public domain, no attribution
+required. It appears automatically while Cuttle is working, with a
+procedural typing pose (see `app/src/typing-pose.ts`).
+
+Bundled animation packs in `app/public/`:
+
+- `mixamo_*.fbx` — 10 Mixamo clips (waving, cheering, clapping, victory,
+  praying, defeated, joyful jump, looking, pointing, breakdance). Same bytes
+  as a [mixamo.com](https://www.mixamo.com) download (free Adobe account),
+  mirrored via GitHub. More Mixamo FBX work directly: download, drop the file
+  in `app/public/`, add a preset in `motion-controller.ts`.
+- `ual1.fbx` — [Quaternius Universal Animation Library](https://quaternius.com/packs/universalanimationlibrary.html)
+  (CC0, no attribution required). Multi-take pack; presets select takes by
+  name (`take: 'Armature|Sitting_Idle_Loop'`): sitting idle / sitting talking
+  / talking idle actions plus a `ualDance` dance. The loader
+  (`app/src/mixamo-loader.ts`) detects the Quaternius rig and retargets it
+  with the same math as Mixamo.
+- `ual2.fbx` — [Universal Animation Library 2](https://quaternius.com/packs/universalanimationlibrary2.html)
+  (CC0): provides the `phoneCall` action (`Armature|Idle_TalkingPhone_Loop`).
+  The pet holds up a cellphone prop while it plays.
+
+Try them: `cuttle-pet action waving`, `cuttle-pet action sittingIdle`,
+`cuttle-pet action phoneCall`, or pick the `ualDance` dance from the pet menu.
+
+Hand props (`app/public/phone.glb`, `app/public/cup.glb`) are CC0 via
+[Poly Pizza](https://poly.pizza) (phone by Quaternius, cup by Kenney) —
+public domain. The phone appears during the `phoneCall` action; the coffee
+cup appears in the right hand every 40–90s of sustained working for a ~4s
+sip (`applySipPose` in `app/src/typing-pose.ts`).
+
+Extra character models (`models/model2.vrm` … `model5.vrm`) are the remaining
+defaults from upstream [claw-sama](https://github.com/luckybugqqq/claw-sama)
+(MIT) — pick them in Settings → Model. Note: simple models without VRM
+expressions or detailed eyes degrade gracefully (unknown expression names
+are silently ignored), so animations, props, and lip-sync keep working.
 
 ## Control API
 

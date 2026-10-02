@@ -17,6 +17,10 @@ interface VrmMessage {
   sendFirstTts?: boolean
   appendText?: boolean
   replyDone?: boolean
+  demoReset?: boolean
+  sipCoffee?: boolean
+  musicPlaying?: boolean
+  working?: boolean
 }
 
 export type OnVrmMessage = (msg: VrmMessage) => void
@@ -29,14 +33,9 @@ function cjkRatio(text: string): number {
 }
 
 // Dynamic rate based on CJK proportion
-function getCharRate(text: string, ttsEnabled: boolean): number {
+function getCharRate(text: string, _ttsEnabled: boolean): number {
   const ratio = cjkRatio(text)
-  if (ttsEnabled) {
-    // CJK: 200ms/char, English: 60ms/char, interpolate
-    return Math.round(200 * ratio + 60 * (1 - ratio))
-  }
-  // CJK: 80ms/char, English: 30ms/char, interpolate
-  return Math.round(80 * ratio + 30 * (1 - ratio))
+  return Math.round(20 * ratio + 6 * (1 - ratio))
 }
 const HIDE_DELAY_MS = 2000     // delay after everything is done before hiding
 const POP_DURATION_MS = 300
@@ -247,6 +246,15 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true }: { o
 
   // Stable handleMessage — never causes SSE reconnect
   const handleMessage = useCallback((msg: VrmMessage) => {
+    if (msg.musicPlaying !== undefined) {
+      onMessageRef.current?.(msg)
+      return
+    }
+    if (msg.demoReset) {
+      hideBubbleRef.current()
+      onMessageRef.current?.(msg)
+      return
+    }
     if (msg.clearText) {
       hideBubbleRef.current()
       return
@@ -570,7 +578,7 @@ const boxStyle: React.CSSProperties = {
 
 const textStyle: React.CSSProperties = {
   color: '#fff',
-  fontSize: 22,
+  fontSize: 14,
   lineHeight: 1.6,
   wordBreak: 'break-word',
   fontFamily: '"Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif',

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     Emitter, Manager,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuItem, CheckMenuItem, Submenu, IsMenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
 };
 
@@ -167,15 +167,37 @@ async fn stop_speech_recognition() -> Result<(), String> {
 }
 
 
-fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+#[derive(serde::Deserialize)]
+struct TrayModel { name: String, url: String }
+
+fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music_enabled: bool) -> tauri::Result<Menu<tauri::Wry>> {
     let show = MenuItem::with_id(app, "show", "Show / Hide", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+    let models_items: Vec<CheckMenuItem<tauri::Wry>> = models.iter().map(|model|
+        CheckMenuItem::with_id(app, format!("model:{}", model.url), &model.name, true, model.url == selected, None::<&str>)
+    ).collect::<tauri::Result<_>>()?;
+    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = models_items.iter().map(|item| item as &dyn IsMenuItem<tauri::Wry>).collect();
+    let models_menu = Submenu::with_items(app, "Character model", true, &refs)?;
+    let music = CheckMenuItem::with_id(app, "music", "React to music", true, music_enabled, None::<&str>)?;
+    let text = MenuItem::with_id(app, "text", "Toggle text bubbles", true, None::<&str>)?;
+    let camera = MenuItem::with_id(app, "camera", "Reset camera", true, None::<&str>)?;
+    let pose = MenuItem::with_id(app, "pose", "Stop animation", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    Menu::with_items(app, &[&show, &models_menu, &music, &text, &camera, &pose, &settings, &sep, &quit])
+}
 
-    let menu = Menu::with_items(app, &[&show, &settings, &sep, &quit])?;
+#[tauri::command]
+fn update_tray_models(app: tauri::AppHandle, models: Vec<TrayModel>, selected: String, music_enabled: bool) -> Result<(), String> {
+    let menu = tray_menu(&app, &models, &selected, music_enabled).map_err(|e| e.to_string())?;
+    if let Some(tray) = app.tray_by_id("cuttle-pet") { tray.set_menu(Some(menu)).map_err(|e| e.to_string())?; }
+    Ok(())
+}
 
-    TrayIconBuilder::new()
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let menu = tray_menu(app.handle(), &[TrayModel { name: "Default character".into(), url: "/model1.vrm".into() }], "/model1.vrm", true)?;
+
+    TrayIconBuilder::with_id("cuttle-pet")
         .icon(app.default_window_icon().unwrap().clone())
         .tooltip("Cuttle Pets")
         .menu(&menu)
@@ -214,7 +236,8 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 "quit" => {
                     app.exit(0);
                 }
-                _ => {}
+                id if id.starts_with("model:") => { let _ = window.emit("select-model", &id[6..]); }
+                id => { let _ = window.emit("tray-control", id); }
             }
         })
         .build(app)?;
@@ -237,6 +260,7 @@ pub fn run() {
             .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION | tauri_plugin_window_state::StateFlags::SIZE)
             .build())
         .invoke_handler(tauri::generate_handler![
+            update_tray_models,
             pick_vrm_file,
             pick_dance_file,
             pick_music_file,
