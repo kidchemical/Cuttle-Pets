@@ -2,6 +2,7 @@ node_modules/
 dist/
 app/dist/
 app/src-tauri/target/
+app/src-tauri/gen/
 __pycache__/
 *.pyc
 models/*.vrm

@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from flask import Flask, Response, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, jsonify, request, send_file
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 APP_PUBLIC = REPO_ROOT / "app" / "public"
@@ -64,6 +64,39 @@ ACTIVITY_MAP: dict[str, dict[str, Any]] = {
 }
 
 app = Flask(__name__)
+
+
+# ── CORS ───────────────────────────────────────────────────────────────────
+# The renderer runs in a Tauri webview whose origin is `tauri://localhost` on
+# Linux, `http://tauri.localhost` on Windows/macOS. Those origins are opaque to
+# Flask, so every fetch and the EventSource stream need explicit permission.
+# The server is loopback-only and unauthenticated, so this does not widen the
+# trust boundary meaningfully.
+ALLOWED_ORIGINS = os.environ.get(
+    "CUTTLE_PET_ORIGINS",
+    ",".join([
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "http://localhost:1420",
+        "http://127.0.0.1:1420",
+    ]),
+).split(",")
+
+
+@app.after_request
+def add_cors_headers(resp):
+    origin = request.headers.get("Origin")
+    if origin and (origin in ALLOWED_ORIGINS or origin.startswith("tauri://")):
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+    else:
+        # No Origin (curl, CLI, python client) needs no CORS at all.
+        resp.headers.setdefault("Access-Control-Allow-Origin", "*")
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    resp.headers["Access-Control-Max-Age"] = "600"
+    return resp
 
 
 # ── fan-out ────────────────────────────────────────────────────────────────
