@@ -3,6 +3,9 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { LipSync } from '../lip-sync'
 
 interface VrmMessage {
+  playAction?: string
+  hold?: boolean
+  clearText?: boolean
   text?: string
   emotion?: string
   emotionDuration?: number
@@ -244,6 +247,10 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true }: { o
 
   // Stable handleMessage — never causes SSE reconnect
   const handleMessage = useCallback((msg: VrmMessage) => {
+    if (msg.clearText) {
+      hideBubbleRef.current()
+      return
+    }
     // Audio-only message (legacy path, kept for compatibility)
     if (!msg.text && msg.audioUrl && !msg.appendText) {
       audioReceivedRef.current++
@@ -288,7 +295,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true }: { o
 
     // Emotion-only message
     if (!msg.text) {
-      if (msg.emotion) {
+      if (msg.emotion || msg.playAction) {
         onMessageRef.current?.({ ...msg, emotionDuration: msg.emotionDuration ?? 10000 })
         if (thinkingRef.current) {
           setThinking(false)

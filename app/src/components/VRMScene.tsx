@@ -15,6 +15,7 @@ interface VRMSceneProps {
   modelPath: string
   idleAnimationPath?: string
   onTouch?: (region: TouchRegion) => void
+  onModelError?: (message: string) => void
   onModelLoaded?: () => void
 }
 
@@ -161,6 +162,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   idleAnimationPath = '/idle_loop.vrma',
   onTouch,
   onModelLoaded,
+  onModelError,
 }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [ripples, setRipples] = useState<{ id: number; x: number; y: number; confirmed: boolean }[]>([])
@@ -181,6 +183,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   const lipSyncRef = useRef<LipSync>(LipSync.getInstance())
   const onTouchRef = useRef(onTouch)
   onTouchRef.current = onTouch
+  const onModelErrorRef = useRef(onModelError)
+  onModelErrorRef.current = onModelError
   const onModelLoadedRef = useRef(onModelLoaded)
   onModelLoadedRef.current = onModelLoaded
 
@@ -300,6 +304,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         const loadedVrm = gltf.userData.vrm as VRM
         if (!loadedVrm) {
           console.error('No VRM data found in GLTF')
+          onModelErrorRef.current?.('This file does not contain a supported VRM character.')
           return
         }
 
@@ -427,6 +432,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       () => {},
       (err) => {
         console.error('Failed to load VRM:', err)
+        onModelErrorRef.current?.('Could not load the model. Check that the pet server is running and choose a valid .vrm file.')
       },
     )
 

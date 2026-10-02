@@ -10,6 +10,7 @@ mod speech_macos;
 
 static MONITORING: AtomicBool = AtomicBool::new(false);
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[derive(Clone, serde::Serialize)]
 struct CursorPosition {
     x: i32,
@@ -49,6 +50,9 @@ async fn pick_music_file() -> Result<Option<String>, String> {
 
 #[tauri::command]
 async fn start_cursor_monitor(window: tauri::Window) -> Result<(), String> {
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let _ = &window;
+
     if MONITORING.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -164,16 +168,16 @@ async fn stop_speech_recognition() -> Result<(), String> {
 
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "显示/隐藏", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Show / Hide", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
     let menu = Menu::with_items(app, &[&show, &settings, &sep, &quit])?;
 
     TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
-        .tooltip("Claw Sama")
+        .tooltip("Cuttle Pets")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
@@ -229,6 +233,9 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_window_state::Builder::default()
+            .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION | tauri_plugin_window_state::StateFlags::SIZE)
+            .build())
         .invoke_handler(tauri::generate_handler![
             pick_vrm_file,
             pick_dance_file,
@@ -251,21 +258,8 @@ pub fn run() {
                 ns_app.activate();
             }
 
+            #[cfg(target_os = "macos")]
             let window = app.get_webview_window("main").unwrap();
-
-            // Position window at bottom-right of screen
-            {
-                use tauri::PhysicalPosition;
-                if let Some(monitor) = window.current_monitor().unwrap_or(None) {
-                    let screen = monitor.size();
-                    let win = window
-                        .outer_size()
-                        .unwrap_or(tauri::PhysicalSize::new(450, 600));
-                    let x = screen.width.saturating_sub(win.width) as i32;
-                    let y = screen.height.saturating_sub(win.height) as i32;
-                    let _ = window.set_position(PhysicalPosition::new(x, y));
-                }
-            }
 
             setup_tray(app)?;
 
@@ -275,8 +269,8 @@ pub fn run() {
                 use tauri::menu::{MenuBuilder, SubmenuBuilder};
 
                 let app_menu = SubmenuBuilder::new(app, "Claw Sama")
-                    .item(&MenuItem::with_id(app, "app_toggle", "显示/隐藏", true, Some("CmdOrCtrl+Shift+H"))?)
-                    .item(&MenuItem::with_id(app, "app_settings", "设置", true, Some("CmdOrCtrl+,"))?)
+                    .item(&MenuItem::with_id(app, "app_toggle", "Show / Hide", true, Some("CmdOrCtrl+Shift+H"))?)
+                    .item(&MenuItem::with_id(app, "app_settings", "Settings", true, Some("CmdOrCtrl+,"))?)
                     .separator()
                     .quit()
                     .build()?;

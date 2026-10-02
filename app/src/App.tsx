@@ -66,6 +66,7 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(false)
 
   const [ttsEnabled, setTtsEnabled] = useState(true)
+  const [modelError, setModelError] = useState('')
   const [modelPath, setModelPath] = useState(DEFAULT_MODEL)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -84,10 +85,10 @@ export default function App() {
 
   // Load persisted settings on mount
   useEffect(() => {
-    fetch(`{petUrl("/settings")}`)
+    fetch(petUrl("/settings"))
       .then((r) => r.json())
       .then((s) => {
-        if (s.modelPath) setModelPath(s.modelPath)
+        if (s.modelPath) setModelPath(s.modelPath.startsWith('/model/') ? petUrl(s.modelPath) : s.modelPath)
         if (s.ttsEnabled !== undefined) setTtsEnabled(s.ttsEnabled)
         if (s.showText !== undefined) setShowText(s.showText)
         if (s.hideUI !== undefined) setHideUI(s.hideUI)
@@ -104,7 +105,7 @@ export default function App() {
         } else {
           // No saved language — persist the detected system language to backend
           const detected = navigator.language.startsWith('zh') ? 'zh' : 'en'
-          fetch(`{petUrl("/settings")}`, {
+          fetch(petUrl("/settings"), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ language: detected }),
@@ -115,7 +116,7 @@ export default function App() {
   }, [])
 
   const saveSettings = (patch: Record<string, unknown>) => {
-    fetch(`{petUrl("/settings")}`, {
+    fetch(petUrl("/settings"), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -146,16 +147,17 @@ export default function App() {
   }, [])
 
   const handleVrmMessage: OnVrmMessage = useCallback((msg) => {
+    if (msg.playAction) sceneRef.current?.playAction(msg.playAction, msg.hold ?? false)
     if (msg.emotion && sceneRef.current) {
       const action = emotionActionMap[msg.emotion]
       if (msg.text) {
         // 回复消息：表情和动作同时触发（文字出现1s后由TextBubble延迟调用）
         sceneRef.current.setEmotionWithReset(msg.emotion, msg.emotionDuration ?? 5000, msg.emotionIntensity)
-        if (action) sceneRef.current.playAction(action)
+        if (action && !msg.playAction) sceneRef.current.playAction(action)
       } else {
         // 思考阶段：hold 动作，10s 后自动 reset
         sceneRef.current.setEmotionWithReset(msg.emotion, msg.emotionDuration ?? 10000, msg.emotionIntensity)
-        if (action) sceneRef.current.playAction(action, true)
+        if (action && !msg.playAction) sceneRef.current.playAction(action, true)
       }
     }
   }, [])
@@ -203,7 +205,7 @@ export default function App() {
   useEffect(() => {
     if (!dancing) return
     const timer = setInterval(() => {
-      fetch(`{petUrl("/mood/adjust")}`, {
+      fetch(petUrl("/mood/adjust"), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ delta: 1, max: 90 }),
@@ -218,7 +220,7 @@ export default function App() {
     const intervalMs = screenObserveInterval * 1000
 
     const doObserve = () => {
-      fetch(`{petUrl("/screen/observe")}`, { method: 'POST' })
+      fetch(petUrl("/screen/observe"), { method: 'POST' })
         .catch(() => {})
     }
 
@@ -237,7 +239,7 @@ export default function App() {
       screenshotTimer.current = null
       const dataUrl = sceneRef.current?.captureScreenshot()
       if (!dataUrl) return
-      fetch(`{petUrl("/persona/screenshot")}`, {
+      fetch(petUrl("/persona/screenshot"), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: dataUrl }),
@@ -247,7 +249,7 @@ export default function App() {
 
   const clearContext = async () => {
     try {
-      await fetch(`{petUrl("/context/clear")}`, { method: 'POST' })
+      await fetch(petUrl("/context/clear"), { method: 'POST' })
     } catch { /* ignore */ }
   }
 
@@ -337,7 +339,7 @@ export default function App() {
     // Always write to session history (3s cooldown)
     if (now - lastTouchMemoTime > TOUCH_MEMO_COOLDOWN) {
       lastTouchMemoTime = now
-      fetch(`{petUrl("/session/memo")}`, {
+      fetch(petUrl("/session/memo"), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: prompt }),
@@ -347,7 +349,7 @@ export default function App() {
     // Send to backend for verbal response (60s cooldown, 50% chance)
     if (now - lastTouchChatTime > TOUCH_CHAT_COOLDOWN && Math.random() < 0.5) {
       lastTouchChatTime = now
-      fetch(`{petUrl("/touch")}`, {
+      fetch(petUrl("/touch"), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ region, prompt }),
@@ -373,7 +375,10 @@ export default function App() {
       }}
     >
       <ResizeHandles />
-      <VRMScene ref={sceneRef} modelPath={modelPath} onTouch={handleTouch} onModelLoaded={uploadVrmScreenshot} />
+      {modelError && <div role="alert" data-no-passthrough style={{ position: 'absolute', top: 20, left: 16, right: 16, zIndex: 1000, background: '#402020', color: 'white', padding: 12, borderRadius: 8 }}>
+        {modelError}<button onClick={() => { setModelError(''); setModelPath(DEFAULT_MODEL); saveSettings({ modelPath: DEFAULT_MODEL }) }}>Use default model</button>
+      </div>}
+      <VRMScene ref={sceneRef} modelPath={modelPath} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); uploadVrmScreenshot() }} />
       {!hideMood && <MoodIndicator uiAlign={uiAlign} />}
       <TextBubble onMessage={handleVrmMessageWithActivity} enabled={showText} ttsEnabled={ttsEnabled} />
       {!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}
@@ -386,7 +391,7 @@ export default function App() {
         visible={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         currentModel={modelPath}
-        onModelChange={(m) => { setModelPath(m); setDancing(false); saveSettings({ modelPath: m }) }}
+        onModelChange={(m) => { setModelError(''); setModelPath(m); setDancing(false); saveSettings({ modelPath: m }) }}
         hideUI={hideUI}
         onHideUIChange={(v) => { setHideUI(v); saveSettings({ hideUI: v }) }}
         showText={showText}
@@ -525,7 +530,7 @@ export default function App() {
                 }
                 setDancing(true)
                 // Record dance event in session history (no LLM reply)
-                fetch(`{petUrl("/session/memo")}`, {
+                fetch(petUrl("/session/memo"), {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ text: `[用户邀请你跳了一支舞:${label}]` }),

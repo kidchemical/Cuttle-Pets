@@ -64,7 +64,7 @@ export function HistoryPanel({ visible, onClose, language = 'zh' }: HistoryPanel
   useEffect(() => {
     if (!visible) return
     setLoading(true)
-    fetch(`{petUrl("/history")}`)
+    fetch(petUrl("/history"))
       .then((r) => r.json())
       .then((data) => {
         setMessages(data.messages || [])

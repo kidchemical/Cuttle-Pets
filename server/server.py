@@ -26,10 +26,15 @@ import queue
 import shutil
 import threading
 import time
+import sys
+from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Iterable
 
 from flask import Flask, Response, jsonify, request, send_file
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from bridge import connection
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 APP_PUBLIC = REPO_ROOT / "app" / "public"
@@ -97,6 +102,48 @@ def add_cors_headers(resp):
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     resp.headers["Access-Control-Max-Age"] = "600"
     return resp
+
+
+# Saved credentials are never returned to the renderer. Reject untrusted browser
+# origins before any credential access; CORS alone does not prevent writes.
+@app.before_request
+def guard_connection_requests():
+    if request.path.startswith("/cuttle/connection"):
+        if request.remote_addr not in ("127.0.0.1", "::1"):
+            return jsonify({"ok": False, "error": "Local access required"}), 403
+        origin = request.headers.get("Origin")
+        if origin and origin not in ALLOWED_ORIGINS:
+            return jsonify({"ok": False, "error": "Origin not allowed"}), 403
+        if request.method == "POST" and not request.is_json:
+            return jsonify({"ok": False, "error": "JSON required"}), 415
+
+
+@app.get("/cuttle/connection")
+def cuttle_connection_status():
+    try:
+        return jsonify(connection.status())
+    except connection.ConnectionError as exc:
+        return jsonify({"ok": False, "state": "disconnected", "error": str(exc)}), 400
+
+
+@app.post("/cuttle/connection")
+def cuttle_connect():
+    body = request.get_json() or {}
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+    try:
+        return jsonify(connection.connect(body.get("username", ""), body.get("password", ""),
+                                           body.get("url") or "https://127.0.0.1:8080"))
+    except connection.ConnectionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/cuttle/connection/disconnect")
+def cuttle_disconnect():
+    try:
+        return jsonify(connection.disconnect())
+    except connection.ConnectionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 # ── fan-out ────────────────────────────────────────────────────────────────
@@ -360,7 +407,13 @@ def _list_dir(directory: Path, suffixes: Iterable[str]) -> list[dict[str, Any]]:
 @app.get("/model/list")
 def model_list():
     _ensure_dirs()
-    return jsonify({"models": _list_dir(MODELS_DIR, (".vrm",))})
+    models = _list_dir(MODELS_DIR, (".vrm",))
+    known = {m["name"] for m in models}
+    for model in _list_dir(REPO_ROOT / "models", (".vrm",)):
+        if model["name"] not in known:
+            model["url"] = f"/model/project/{quote(model['name'])}"
+            models.append(model)
+    return jsonify({"models": models})
 
 
 @app.post("/model/import")
@@ -369,10 +422,17 @@ def model_import():
     src = (request.get_json(force=True, silent=True) or {}).get("path")
     if not src or not Path(src).is_file():
         return jsonify({"ok": False, "error": "need a readable local path"}), 400
+    if Path(src).suffix.lower() != ".vrm":
+        return jsonify({"ok": False, "error": "Choose a .vrm model file"}), 400
     dest = MODELS_DIR / Path(src).name
     if dest.resolve() != Path(src).resolve():
         shutil.copy2(src, dest)
-    return jsonify({"ok": True, "name": dest.name, "url": f"/model/serve/{dest.name}"})
+    return jsonify({"ok": True, "name": dest.name, "url": f"/model/serve/{quote(dest.name)}"})
+
+
+@app.get("/model/project/<path:name>")
+def project_model_serve(name: str):
+    return _serve_from(REPO_ROOT / "models", name)
 
 
 @app.get("/model/serve/<path:name>")

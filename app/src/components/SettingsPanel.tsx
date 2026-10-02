@@ -1,3 +1,4 @@
+import { CuttleConnection } from './CuttleConnection'
 import { petUrl } from '../config'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, Play, Loader, Sparkles, Trash2, Upload, Music } from 'lucide-react'
@@ -44,7 +45,7 @@ interface SettingsPanelProps {
   onDanceChange: (id: string, preset?: DancePreset) => void
 }
 
-type Tab = 'general' | 'voice' | 'model' | 'persona' | 'dance'
+type Tab = 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance'
 
 const BUILTIN_MODELS = ['/model1.vrm', '/model2.vrm', '/model3.vrm', '/model4.vrm', '/model5.vrm']
 
@@ -110,7 +111,8 @@ export function SettingsPanel({
   const t = (zh: string, en: string) => language === 'en' ? en : zh
 
   const [tab, setTab] = useState<Tab>('general')
-  const [models, setModels] = useState<string[]>([])
+  const [modelImportError, setModelImportError] = useState('')
+  const [models, setModels] = useState<{ name: string; url: string }[]>([])
   const [soulContent, setSoulContent] = useState('')
   const [identityContent, setIdentityContent] = useState('')
   const [personaDirty, setPersonaDirty] = useState(false)
@@ -167,12 +169,12 @@ export function SettingsPanel({
 
   useEffect(() => {
     if (!visible) return
-    fetch(`{petUrl("/model/list")}`)
+    fetch(petUrl("/model/list"))
       .then((r) => r.json())
-      .then((data) => { if (data.models) setModels(data.models) })
+      .then((data) => { if (data.models) setModels(data.models.map((m: { name: string; url: string }) => ({ ...m, url: petUrl(m.url) }))) })
       .catch(() => setModels([]))
     // Fetch current voice + provider
-    fetch(`{petUrl("/voice")}`)
+    fetch(petUrl("/voice"))
       .then((r) => r.json())
       .then((data) => {
         setCurrentVoice(data.voice || '')
@@ -186,7 +188,7 @@ export function SettingsPanel({
   // Fetch persona files when model tab / persona sub-tab is active
   useEffect(() => {
     if (!visible || tab !== 'persona') return
-    fetch(`{petUrl("/persona")}`)
+    fetch(petUrl("/persona"))
       .then((r) => r.json())
       .then((data) => {
         setSoulContent(data.soul || '')
@@ -197,7 +199,7 @@ export function SettingsPanel({
   }, [visible, tab])
 
   const fetchCustomDances = useCallback(() => {
-    fetch(`{petUrl("/dance/list")}`)
+    fetch(petUrl("/dance/list"))
       .then((r) => r.json())
       .then((data) => { if (data.dances) setCustomDances(data.dances) })
       .catch(() => setCustomDances([]))
@@ -210,7 +212,7 @@ export function SettingsPanel({
 
   const savePersona = useCallback(() => {
     setPersonaSaving(true)
-    fetch(`{petUrl("/persona")}`, {
+    fetch(petUrl("/persona"), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ soul: soulContent, identity: identityContent }),
@@ -227,7 +229,7 @@ export function SettingsPanel({
     setGenerating(true)
     try {
       // Save screenshot to server first
-      const saveRes = await fetch(`{petUrl("/persona/screenshot")}`, {
+      const saveRes = await fetch(petUrl("/persona/screenshot"), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: dataUrl }),
@@ -235,7 +237,7 @@ export function SettingsPanel({
       const saveData = await saveRes.json()
       if (!saveData.ok) throw new Error(saveData.error || 'save screenshot failed')
       // Generate persona from saved screenshot
-      const genRes = await fetch(`{petUrl("/persona/generate")}`, {
+      const genRes = await fetch(petUrl("/persona/generate"), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       })
@@ -250,7 +252,7 @@ export function SettingsPanel({
   }, [captureVrmScreenshot])
 
   const postVoiceSettings = (body: Record<string, string | undefined>) => {
-    return fetch(`{petUrl("/voice")}`, {
+    return fetch(petUrl("/voice"), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -258,7 +260,7 @@ export function SettingsPanel({
   }
 
   const saveModelPath = (modelPath: string) => {
-    fetch(`{petUrl("/settings")}`, {
+    fetch(petUrl("/settings"), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ modelPath }),
@@ -295,7 +297,7 @@ export function SettingsPanel({
     // Stop any current preview first
     stopPreview()
     setPreviewingId(voiceId)
-    fetch(`{petUrl("/preview")}`, {
+    fetch(petUrl("/preview"), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ voice: voiceId, provider: currentProvider }),
@@ -332,19 +334,20 @@ export function SettingsPanel({
 
         {/* Tabs */}
         <div style={tabBarStyle}>
-          {(['general', 'voice', 'model', 'persona', 'dance'] as const).map((tb) => (
+          {(['general', 'cuttle', 'voice', 'model', 'persona', 'dance'] as const).map((tb) => (
             <button
               key={tb}
               onClick={() => setTab(tb)}
               style={{ ...tabStyle, ...(tab === tb ? activeTabStyle : {}) }}
             >
-              {{ general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance') }[tb]}
+              {{ cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance') }[tb]}
             </button>
           ))}
         </div>
 
         {/* Tab content */}
         <div style={contentStyle}>
+          {tab === 'cuttle' && <CuttleConnection />}
           {tab === 'general' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -570,35 +573,38 @@ export function SettingsPanel({
                   >
                     {BUILTIN_MODELS.includes(currentModel) && <option value="" disabled>{t('未选择', 'Not selected')}</option>}
                     {models.map((m) => (
-                      <option key={m} value={m}>{decodeURIComponent(m.split('/').pop() || m)}</option>
+                      <option key={m.url} value={m.url}>{m.name}</option>
                     ))}
                   </select>
                 </div>
               )}
 
+              {modelImportError && <div role="alert" style={{ color: '#ffaaaa' }}>{modelImportError}</div>}
               <div style={{ marginTop: 12 }}>
                 <div style={labelStyle}>{t('导入自定义模型', 'Import Custom Model')}</div>
                 <button
                   onClick={async () => {
-                    const filePath = await invoke<string | null>('pick_vrm_file')
-                    if (!filePath) return
+                    setModelImportError('')
                     try {
-                      const res = await fetch(`{petUrl("/model/import")}`, {
+                      const filePath = await invoke<string | null>('pick_vrm_file')
+                      if (!filePath) return
+                      const res = await fetch(petUrl("/model/import"), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ path: filePath }),
                       })
                       const data = await res.json()
+                      if (!res.ok || !data.ok) throw new Error(data.error || 'Model import failed')
                       if (data.url) {
-                        fetch(`{petUrl("/model/list")}`)
+                        fetch(petUrl("/model/list"))
                           .then((r) => r.json())
-                          .then((d) => { if (d.models) setModels(d.models) })
+                          .then((d) => { if (d.models) setModels(d.models.map((m: { name: string; url: string }) => ({ ...m, url: petUrl(m.url) }))) })
                           .catch(() => {})
-                        onModelChange(data.url)
-                        saveModelPath(data.url)
+                        onModelChange(petUrl(data.url))
+                        saveModelPath(petUrl(data.url))
                       }
                     } catch (err) {
-                      console.warn('Import model failed:', err)
+                      setModelImportError(err instanceof Error ? err.message : 'Model import failed')
                     }
                   }}
                   style={{ ...applyBtnStyle, width: '100%' }}
@@ -606,7 +612,7 @@ export function SettingsPanel({
                   {t('浏览本地文件…', 'Browse local files…')}
                 </button>
                 <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 4 }}>
-                  {t('选择本地 .vrm 文件，将保存到工作区 models 目录', 'Select a .vrm file to save to workspace models directory')}
+                  {t('选择 .vrm 文件导入宠物模型库', 'Choose a .vrm file to import into your pet model library. Files in this project’s models folder also appear above.')}
                 </div>
               </div>
             </div>
@@ -735,7 +741,7 @@ export function SettingsPanel({
                         <div
                           onClick={(e) => {
                             e.stopPropagation()
-                            fetch(`{petUrl("/dance/delete")}`, {
+                            fetch(petUrl("/dance/delete"), {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ id: dance.id }),
@@ -780,7 +786,7 @@ export function SettingsPanel({
                       if (!vmdPath) { setImportingDance(false); return }
 
                       // Import VMD
-                      const vmdRes = await fetch(`{petUrl("/dance/import")}`, {
+                      const vmdRes = await fetch(petUrl("/dance/import"), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ path: vmdPath }),
@@ -791,7 +797,7 @@ export function SettingsPanel({
                       // Ask for optional BGM
                       const mp3Path = await invoke<string | null>('pick_music_file')
                       if (mp3Path) {
-                        await fetch(`{petUrl("/dance/import")}`, {
+                        await fetch(petUrl("/dance/import"), {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ path: mp3Path }),

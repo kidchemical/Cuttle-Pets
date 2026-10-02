@@ -10,3 +10,12 @@ models/*.vmd
 models/*.fbx
 models/*.vrma
 data/
+
+# Cuttle install-local overlay
+.cuttle/personal/
+
+# Cuttle agent scratch
+/temp/
+
+# Local Python environment
+/.venv/

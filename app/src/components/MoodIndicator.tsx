@@ -206,7 +206,7 @@ export function MoodIndicator({ uiAlign = 'right' }: MoodIndicatorProps) {
   }, [uiAlign, userDragged])
 
   useEffect(() => {
-    fetch(`{petUrl("/settings")}`)
+    fetch(petUrl("/settings"))
       .then((r) => r.json())
       .then((s) => { if (s.moodIndex !== undefined) { setMood(s.moodIndex); displayPercentRef.current = s.moodIndex } })
       .catch(() => {})
@@ -219,7 +219,7 @@ export function MoodIndicator({ uiAlign = 'right' }: MoodIndicatorProps) {
   }, [])
 
   useEffect(() => {
-    const es = new EventSource(`{petUrl("/events")}`)
+    const es = new EventSource(petUrl("/events"))
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data)

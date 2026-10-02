@@ -19,6 +19,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from bridge import connection
 
 SERVER = os.environ.get("CUTTLE_PET_SERVER", "http://127.0.0.1:8790").rstrip("/")
 
@@ -42,7 +46,7 @@ def _request(method: str, path: str, body: dict | None = None, timeout: float = 
         raise CliError(f"{exc.code} {exc.reason}: {detail}") from None
     except urllib.error.URLError as exc:
         raise CliError(f"cannot reach the pet server at {SERVER} ({exc.reason}). "
-                       f"Start it with: python server/server.py") from None
+                       f"Start it with: .venv/bin/python server/server.py") from None
     try:
         return json.loads(raw)
     except ValueError:
@@ -54,6 +58,28 @@ def _intensity(value: float) -> float:
 
 
 # ── commands ───────────────────────────────────────────────────────────────
+def cmd_connect(a: argparse.Namespace) -> int:
+    import getpass
+    try:
+        username = a.username or input("Cuttle username: ").strip()
+        password = getpass.getpass("Cuttle password: ")
+        result = connection.connect(username, password, a.cuttle_url)
+        print(f"Connected as {result['username']}. Future launches reconnect automatically.")
+        return 0
+    except (connection.ConnectionError, EOFError) as exc:
+        raise CliError(str(exc) or "Sign-in cancelled") from None
+    except KeyboardInterrupt:
+        print("\nSign-in cancelled", file=sys.stderr)
+        return 1
+
+
+def cmd_connection(a: argparse.Namespace) -> int:
+    try:
+        return _report(connection.disconnect() if a.disconnect else connection.status())
+    except connection.ConnectionError as exc:
+        raise CliError(str(exc)) from None
+
+
 def cmd_emote(a: argparse.Namespace) -> int:
     body: dict = {}
     if a.vrchat:
@@ -186,6 +212,14 @@ def build_parser() -> argparse.ArgumentParser:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--server", help=f"control server (default {SERVER}, or $CUTTLE_PET_SERVER)")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    connect = sub.add_parser("connect", help="sign in once and remember the Cuttle connection")
+    connect.add_argument("--username")
+    connect.add_argument("--cuttle-url", default="https://127.0.0.1:8080")
+    connect.set_defaults(func=cmd_connect)
+    connection_cmd = sub.add_parser("connection", help="check saved Cuttle connection or disconnect")
+    connection_cmd.add_argument("--disconnect", action="store_true")
+    connection_cmd.set_defaults(func=cmd_connection)
 
     e = sub.add_parser("emote", help="set an expression")
     e.add_argument("emotion", help="preset name (happy, think, …) or --vrchat expression")
