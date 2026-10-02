@@ -1,0 +1,11 @@
+node_modules/
+dist/
+app/dist/
+app/src-tauri/target/
+__pycache__/
+*.pyc
+models/*.vrm
+models/*.vmd
+models/*.fbx
+models/*.vrma
+data/
