@@ -22,6 +22,8 @@ export interface TypingPoseCache {
   head: THREE.Object3D | null
   eyeL: THREE.Object3D | null
   eyeR: THREE.Object3D | null
+  midInterR: THREE.Object3D | null
+  midDistR: THREE.Object3D | null
   spine: THREE.Object3D | null
   keyboardL: THREE.Object3D | null
   keyboardR: THREE.Object3D | null
@@ -70,6 +72,8 @@ export function buildTypingPoseCache(vrm: VRM): TypingPoseCache {
     head: getBone(vrm, 'head'),
     eyeL: getBone(vrm, 'leftEye'),
     eyeR: getBone(vrm, 'rightEye'),
+    midInterR: getBone(vrm, 'rightMiddleIntermediate'),
+    midDistR: getBone(vrm, 'rightMiddleDistal'),
     spine: getBone(vrm, 'spine'),
     keyboardL: getBone(vrm, 'leftMiddleProximal') ?? getBone(vrm, 'leftHand'),
     keyboardR: getBone(vrm, 'rightMiddleProximal') ?? getBone(vrm, 'rightHand'),
@@ -195,11 +199,8 @@ export function applySipPose(cache: TypingPoseCache, time: number, amount: numbe
   const mouth = head.getWorldPosition(new THREE.Vector3())
     .addScaledVector(faceDir, faceOffset + .04)
   mouth.y -= .02
-  // Drink to the arm's own side of the mouth rather than dead center: the
-  // wrist sits here but the fingers extend ~10cm along the forearm axis
-  // (up-left from the low right elbow), so parking the wrist ~6cm right of
-  // the lips lands the fingertips on the mouth. Applied before bone
-  // measuring so the IK below still lands exact.
+  // Drink to the arm's own side of the mouth rather than dead center —
+  // a right hand holds the cup right-of-lips, not on the philtrum.
   {
     const side = upperR.getWorldPosition(new THREE.Vector3()).sub(mouth)
     side.y = 0
