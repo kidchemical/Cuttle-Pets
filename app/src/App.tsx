@@ -521,6 +521,8 @@ export default function App() {
           setCustomDancePreset(preset)
           saveSettings({ currentDance: id, customDancePreset: preset })
         }}
+        bubbleSettings={bubbleSettings}
+        onBubbleSettingsChange={handleBubbleSettingsChange}
       />
       {!hideUI && <div
         style={{
