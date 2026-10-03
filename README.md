@@ -1,12 +1,12 @@
 <div align="center">
 
-# Cuttle Pets
+<img src="docs/media/logo.png" alt="Cuttle Pets" width="420">
 
 **A transparent, always-on-top 3D desktop pet that reacts to your coding agents in real time.**
 
 When Cuttle works, she types. When it's done, she cheers. When tests go green, she tells you.
 
-[Quick start](#quick-start) · [What she does](#what-she-does) · [Cuttle bridge](#cuttle-bridge) · [Control API](#control-api) · [Models & animation](#models--animation) · [Building](#building)
+[Quick start](#quick-start) · [What she does](#what-she-does) · [Any agent can drive her](#any-agent-can-drive-her) · [Cuttle bridge](#cuttle-bridge) · [Control API](#control-api) · [Models & animation](#models--animation) · [Windows](#windows) · [Building](#building)
 
 [![MIT license](https://img.shields.io/badge/license-MIT-7048e8.svg)](LICENSE.txt) [![Linux | Windows | macOS](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-191b45.svg)](#requirements) [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3b82f6.svg)](#requirements) [![Tauri 2](https://img.shields.io/badge/tauri-2-2fa37a.svg)](#building)
 
@@ -17,17 +17,19 @@ When Cuttle works, she types. When it's done, she cheers. When tests go green, s
 </div>
 
 > [!NOTE]
-> **A companion to [Cuttle](https://github.com/kidchemical/Cuttle), not a part of it.** The pet is a separate app with no dependency on the Cuttle daemon — it keeps running even if Cuttle restarts. It also works fully standalone: drive it from any script over HTTP or the CLI.
+> **A companion to [Cuttle](https://github.com/kidchemical/Cuttle), not a part of it.** The pet is a separate app with no dependency on the Cuttle daemon — it keeps running even if Cuttle restarts. It also works fully standalone: any agent, script, or shell can drive it over HTTP or the CLI.
 
 ## What she does
 
 | Moment | Reaction |
 | --- | --- |
 | Agent starts thinking | Ponders, types at her tiny laptop |
-| Agent streams code | Typing pose with beat-synced head nod while music plays |
+| Agent streams code | Typing pose with laptop, coffee mug, and speech bubble |
 | Work finishes | Cheers, waves, or dances |
 | Tests go green | Tells you in a speech bubble |
-| You go idle / lock the screen | Steps away — render loop stops, window hides |
+| Music plays on your desktop | Headphones on, beat-synced nod (PipeWire + MPRIS) |
+| Your cursor moves | Eyes and head follow it |
+| You lock the screen | Steps away — render loop stops, window hides |
 
 <div align="center">
 
@@ -35,9 +37,13 @@ When Cuttle works, she types. When it's done, she cheers. When tests go green, s
 | --- | --- |
 | <img src="docs/media/wave.gif" alt="The pet waving hello" width="300"> | <img src="docs/media/working.gif" alt="The pet typing on a tiny laptop with a coffee mug beside her" width="300"> |
 
+| Music reactions | She watches your cursor | Dance break |
+| --- | --- | --- |
+| <img src="docs/media/music.gif" alt="The pet wearing headphones and nodding to music" width="250"> | <img src="docs/media/gaze.gif" alt="The pet's eyes and head following the cursor as it moves" width="250"> | <img src="docs/media/dance.gif" alt="The pet dancing" width="250"> |
+
 <img src="docs/media/say.png" alt="The pet showing a speech bubble that says Tests are green!" width="420">
 
-<sub>Captures from a live pet. Swap in your own VRM model and she keeps every trick.</sub>
+<sub>Captured from a live pet against a transparent background. Swap in your own VRM model and she keeps every trick.</sub>
 
 </div>
 
@@ -64,22 +70,44 @@ cd app && npm install && npm run tauri dev
 python3 ../cli/cuttle_pet.py say "Hello from the terminal!" --emotion happy
 ```
 
-Or launch everything at once on Linux:
+Or launch everything at once:
 
 ```bash
-bash start_pet.sh
+bash start_pet.sh                     # Linux
+powershell -ExecutionPolicy Bypass -File .\start_pet.ps1   # Windows
 ```
 
 ### Try it
 
 ```bash
 python3 cli/cuttle_pet.py status
+python3 cli/cuttle_pet.py say "Hello!" --emotion happy
 python3 cli/cuttle_pet.py emote surprised --intensity 0.8
 python3 cli/cuttle_pet.py action greeting
 python3 cli/cuttle_pet.py event thinking --detail "Reading three files…"
 python3 cli/cuttle_pet.py event done --detail "Test complete!"
 python3 cli/cuttle_pet.py watch      # stream pet events to stdout
 ```
+
+## Any agent can drive her
+
+The control surface is plain HTTP plus a stdlib-only Python CLI — no Cuttle, no API keys, no SDK. If your agent can run a shell command, it can pet:
+
+```bash
+# Claude Code, Codex, Muse Code, OpenCode, Cursor, … — all the same:
+python3 cli/cuttle_pet.py event thinking --detail "Refactoring auth…"
+python3 cli/cuttle_pet.py event done --detail "Ship it!"
+```
+
+or raw HTTP from any language:
+
+```bash
+curl -X POST http://127.0.0.1:8790/pet/event \
+  -H 'Content-Type: application/json' \
+  -d '{"state":"done","detail":"Deploy finished"}'
+```
+
+CLI exit codes are script-safe (`0` on success), so agents can chain commands reliably. The Cuttle bridge below is just one opinionated driver — bring your own for any other harness.
 
 ## Architecture
 
@@ -88,7 +116,7 @@ flowchart LR
   subgraph You
     CLI[cuttle-pet CLI]
     Bridge[Cuttle bridge]
-    Any[Any script / HTTP]
+    Any[Any agent / script / HTTP]
   end
   CLI & Bridge & Any --> Server[Flask control server :8790<br/>settings · models · SSE events]
   Server --> Pet[Tauri pet window<br/>transparent · always-on-top<br/>three.js + three-vrm]
@@ -142,18 +170,35 @@ Actions: `akimbo playFingers scratchHead stretch happy angry greeting excited sh
 
 Use **VRM** (`.vrm`) — export free from [VRoid Studio](https://vroid.studio), or from Unity via [UniVRM](https://github.com/vrm-c/UniVRM) (MIT). Import with `cuttle-pet models --import file.vrm`.
 
-Bundled motion: 10 Mixamo clips (Adobe free account terms), the CC0 [Quaternius](https://quaternius.com) animation libraries (sitting, talking, phone call, dance), and CC0 hand props (laptop, phone, coffee cup — the cup appears for a ~4s sip every minute or so of sustained work). Beat sync nods along to your music via PipeWire, with MPRIS fallback.
+Bundled motion: 10 Mixamo clips (Adobe free account terms), the CC0 [Quaternius](https://quaternius.com) animation libraries (sitting, talking, phone call, dance), and CC0 hand props (laptop, phone, coffee cup — the cup appears for a ~4s sip every minute or so of sustained work). Beat sync nods along to your music via PipeWire, with MPRIS fallback — headphones appear automatically while music plays, including during typing.
 
 Full provenance for every bundled binary lives in [`docs/ASSET_LICENSES.md`](docs/ASSET_LICENSES.md) — code is MIT, assets keep their own terms.
 
 ## Window & desktop
 
-Transparent, always-on-top, no decorations, skipped taskbar — drag her anywhere, Tab folds the menu, F4 settings, F5 reload. Position restores on launch (Xwayland shim on Wayland). She pauses her render loop and hides on screensaver/lock. Enable login autostart with `python3 scripts/autostart.py enable`.
+Transparent, always-on-top, no decorations, skipped taskbar — drag her anywhere, Tab folds the menu, F4 settings, F5 reload. Position restores on launch (Xwayland shim on Wayland). She pauses her render loop and hides on screensaver/lock.
+
+**Always-on-top is the default** and stays that way across restarts. To toggle it: click the pin button in the pet toolbar, or from any script:
+
+```bash
+python3 cli/cuttle_pet.py settings pinned false   # unpin
+python3 cli/cuttle_pet.py settings pinned true    # pin again
+```
+
+Enable login autostart (Linux) with `python3 scripts/autostart.py enable`.
+
+## Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_pet.ps1
+```
+
+Same behavior as `start_pet.sh`: reuses a running control server, starts the bridge unless `$env:CUTTLE_PET_BRIDGE` is `'0'`, then opens the Tauri dev window. Needs Python 3 + Flask, Node 20+, and Rust on `PATH`. (Release binaries are planned; dev-window launch for now.)
 
 ## Development
 
 ```bash
-python3 -m pytest tests/          # Python suite (server, bridge, beats)
+python3 -m pytest tests/          # Python suite (server, bridge, beats, CLI)
 cd app && npx tsc --noEmit        # renderer typecheck
 ```
 

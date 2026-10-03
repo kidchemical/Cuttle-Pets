@@ -203,7 +203,11 @@ def cmd_verbs(a: argparse.Namespace) -> int:
 
 def _report(res: dict) -> int:
     print(json.dumps(res, indent=2))
-    return 0 if res.get("ok") else 1
+    # Endpoints like /settings return bare dicts with no "ok" flag; only an
+    # explicit failure reports nonzero (agents check exit codes).
+    if res.get("ok", True) is False or "error" in res:
+        return 1
+    return 0
 
 
 # ── parser ─────────────────────────────────────────────────────────────────
