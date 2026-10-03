@@ -27,13 +27,13 @@ export class MusicMotion {
     this.audioAvailable = available
     this.audioAt = now
   }
-  step(delta: number, now: number, options: MusicSettings, listening: boolean, preview: boolean, working: boolean, sip: number) {
-    const dt = clamp(delta, 0, .05)
+  step(delta: number, now: number, options: MusicSettings, listening: boolean, preview: boolean, working: boolean, sip: number, speed = 1) {
+    const dt = clamp(delta, 0, .1)
     const locked = options.beatSync && now - this.lastLock < 10
     this.bpm = smooth(this.bpm, locked ? this.lockedBpm : options.manualBpm, dt, 1.5)
     const correction = locked ? clamp(this.phaseError * 1.5, -.18, .18) * dt : 0
     this.phaseError -= correction
-    this.phase = (this.phase + this.bpm / 60 * dt + correction) % 2
+    this.phase = (this.phase + this.bpm / 60 * dt * speed + correction) % 2
     const freshAudio = now - this.audioAt < 2
     const amplitude = freshAudio ? this.audioLevel : 0
     const reactive = options.amplitudeReactive && this.audioAvailable

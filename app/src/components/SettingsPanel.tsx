@@ -1,3 +1,7 @@
+import './settings.css'
+import { normalizeCustomDances } from '../custom-dances'
+import { AnimationSettingsPanel } from './AnimationSettingsPanel'
+import type { AnimationSettings } from '../animation-settings'
 import { MusicSettingsPanel } from './MusicSettingsPanel'
 import type { MusicSettings, HeadphoneFit } from '../music-settings'
 import { CuttleConnection } from './CuttleConnection'
@@ -5,7 +9,7 @@ import { petUrl } from '../config'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, Play, Loader, Sparkles, Trash2, Upload, Music } from 'lucide-react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { invoke } from '@tauri-apps/api/core'
+import { isTauri, invoke } from '@tauri-apps/api/core'
 import { dancePresets, type DancePreset } from '../motion-controller'
 import { RENDER_QUALITIES, presetSettings, resolvePreset, type QualityDetails, type QualitySettings } from '../render-quality'
 import { BUBBLE_PREVIEW_TEXT, DEFAULT_BUBBLE_SETTINGS, FONT_CHOICES, type BubbleSettings } from '../bubble-settings'
@@ -19,6 +23,12 @@ interface DanceItem {
 }
 
 interface SettingsPanelProps {
+  standalone?: boolean
+  animationSettings: AnimationSettings
+  onAnimationSettingsChange: (value: AnimationSettings) => void
+  onAnimationPreview?: (id: string, preset?: DancePreset) => void
+  onAnimationStop?: () => void
+  onBubblePreview?: () => void
   musicSettings: MusicSettings
   headphoneFit: HeadphoneFit
   musicEnabled: boolean
@@ -51,7 +61,7 @@ interface SettingsPanelProps {
   screenObserveInterval: number
   onScreenObserveIntervalChange: (v: number) => void
   /** Return a data URL screenshot of the current VRM canvas */
-  captureVrmScreenshot?: () => string | null
+  captureVrmScreenshot?: () => string | null | Promise<string | null>
   language: 'zh' | 'en'
   onLanguageChange: (v: 'zh' | 'en') => void
   currentDance: string
@@ -64,7 +74,7 @@ interface SettingsPanelProps {
   onPinnedChange: (v: boolean) => void
 }
 
-type Tab = 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance' | 'quality' | 'display'
+type Tab = 'animations' | 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance' | 'quality' | 'display'
 
 const BUILTIN_MODELS = ['/model1.vrm', '/model2.vrm', '/model3.vrm', '/model4.vrm', '/model5.vrm']
 
@@ -113,6 +123,7 @@ const QWEN_MODELS = [
 ]
 
 export function SettingsPanel({
+  standalone = false, animationSettings, onAnimationSettingsChange, onAnimationPreview, onAnimationStop, onBubblePreview,
   musicSettings, headphoneFit, musicEnabled, onMusicEnabledChange, onMusicSettingsChange, onHeadphoneFitChange, onMusicPreview,
   visible, onClose, currentModel, onModelChange,
   hideUI, onHideUIChange,
@@ -140,6 +151,7 @@ export function SettingsPanel({
   const updateQualityDetails = useCallback((patch: Partial<QualityDetails>) => {
     const details: QualityDetails = {
       pixelRatioCap: qualitySettings.pixelRatioCap,
+      maxFps: qualitySettings.maxFps,
       springBones: qualitySettings.springBones,
       ...patch,
     }
@@ -194,7 +206,7 @@ export function SettingsPanel({
 
   // Force disable pass-through when panel is visible
   useEffect(() => {
-    if (!visible) return
+    if (!visible || !isTauri()) return
     const win = getCurrentWindow()
     win.setIgnoreCursorEvents(false)
     // Keep forcing it in case of race conditions with cursor monitor
@@ -236,12 +248,12 @@ export function SettingsPanel({
   const fetchCustomDances = useCallback(() => {
     fetch(petUrl("/dance/list"))
       .then((r) => r.json())
-      .then((data) => { if (data.dances) setCustomDances(data.dances) })
+      .then((data) => { if (data.dances) setCustomDances(normalizeCustomDances(data.dances)) })
       .catch(() => setCustomDances([]))
   }, [])
 
   useEffect(() => {
-    if (!visible || tab !== 'dance') return
+    if (!visible || (tab !== 'dance' && tab !== 'animations')) return
     fetchCustomDances()
   }, [visible, tab, fetchCustomDances])
 
@@ -259,7 +271,7 @@ export function SettingsPanel({
 
   const generatePersona = useCallback(async () => {
     if (!captureVrmScreenshot) return
-    const dataUrl = captureVrmScreenshot()
+    const dataUrl = await captureVrmScreenshot()
     if (!dataUrl) return
     setGenerating(true)
     try {
@@ -351,8 +363,9 @@ export function SettingsPanel({
   }, [bubbleSettings, onBubbleSettingsChange])
 
   const previewBubble = useCallback(() => {
-    (window as any).__clawPreviewBubble?.(BUBBLE_PREVIEW_TEXT)
-  }, [])
+    if (onBubblePreview) onBubblePreview()
+    else (window as any).__clawPreviewBubble?.(BUBBLE_PREVIEW_TEXT)
+  }, [onBubblePreview])
 
   // Live preview: show sample text shortly after any display change (or tab open)
   useEffect(() => {
@@ -366,31 +379,34 @@ export function SettingsPanel({
   const voices = currentProvider === 'qwen' ? QWEN_VOICES : EDGE_VOICES
 
   return (
-    <div style={{ ...overlayStyle, ...(tab === 'music' && musicPreview ? { background: 'transparent', alignItems: 'flex-end' } : {}) }} data-no-passthrough onClick={onClose}>
-      <div style={{ ...panelStyle, width: panelWidth, maxWidth: '90vw', transform: `translate(${panelPos.x}px, ${panelPos.y}px)` }} data-no-passthrough onClick={(e) => e.stopPropagation()}>
-        <div style={headerStyle} onMouseDown={onDragStart}>
-          <span style={{ fontSize: 16, fontWeight: 600, cursor: 'grab' }}>{t('设置', 'Settings')}</span>
-          <button onClick={onClose} style={closeBtnStyle}>
+    <div className={standalone ? "pet-settings-window" : "pet-settings-panel"} style={{ ...overlayStyle, ...(standalone ? { background: '#1b1d25', alignItems: 'stretch', padding: 0 } : {}), ...(!standalone && tab === 'music' && musicPreview ? { background: 'transparent', alignItems: 'flex-end' } : {}) }} data-no-passthrough onClick={onClose}>
+      <div className="settings-shell" style={{ ...panelStyle, ...(standalone ? { width: '100%', height: '100%', borderRadius: 0, display: 'flex', flexDirection: 'column' } : { width: panelWidth, maxWidth: '90vw', transform: `translate(${panelPos.x}px, ${panelPos.y}px)` }) }} data-no-passthrough onClick={(e) => e.stopPropagation()}>
+        <div className="settings-header" style={headerStyle} onMouseDown={standalone ? undefined : onDragStart}>
+          <div><h1 style={{ fontSize: 20, margin: 0 }}>{t('设置', 'Settings')}</h1><p className="settings-caption">{t('个性化你的桌面伙伴', 'Make your desktop companion your own')}</p></div>
+          {!standalone && <button aria-label="Close settings" onClick={onClose} style={closeBtnStyle}>
             <X size={16} />
-          </button>
+          </button>}
         </div>
 
         {/* Tabs */}
-        <div style={tabBarStyle}>
-          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'dance', 'quality', 'display'] as const).map((tb) => (
+        <nav className="settings-tabs" aria-label="Settings sections" style={tabBarStyle}>
+          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'dance', 'animations', 'quality', 'display'] as const).map((tb) => (
             <button
               key={tb}
+              className="settings-tab" aria-current={tab === tb ? "page" : undefined}
               onClick={() => setTab(tb)}
               style={{ ...tabStyle, ...(tab === tb ? activeTabStyle : {}) }}
             >
-              {{ music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tb]}
+              {{ animations: t('动画', 'Animations'), music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tb]}
             </button>
           ))}
-        </div>
+        </nav>
 
         {/* Tab content */}
-        <div style={{ ...contentStyle, maxHeight: tab === 'music' && musicPreview ? '32vh' : '60vh', overflowY: 'auto', paddingRight: 4 }}>
-          {tab === 'music' && <MusicSettingsPanel fit={headphoneFit} music={musicSettings} enabled={musicEnabled} onFitChange={onHeadphoneFitChange} onMusicChange={onMusicSettingsChange} onEnabledChange={onMusicEnabledChange} onPreview={handlePreview} />}
+        <div className="settings-content" style={{ ...contentStyle, maxHeight: standalone ? undefined : tab === 'music' && musicPreview ? '32vh' : '60vh', ...(standalone ? { flex: 1, minHeight: 0 } : {}), overflowY: 'auto', paddingRight: 4 }}>
+          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), animations: t('动画', 'Animations'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tab]}</h2><p>{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</p></div>}
+          {tab === 'music'  && <MusicSettingsPanel fit={headphoneFit} music={musicSettings} enabled={musicEnabled} onFitChange={onHeadphoneFitChange} onMusicChange={onMusicSettingsChange} onEnabledChange={onMusicEnabledChange} onPreview={handlePreview} />}
+          {tab === 'animations' && <AnimationSettingsPanel settings={animationSettings} onChange={onAnimationSettingsChange} customDances={customDances} onPreview={onAnimationPreview} onStop={onAnimationStop} />}
           {tab === 'cuttle' && <CuttleConnection />}
           {tab === 'general' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -425,7 +441,7 @@ export function SettingsPanel({
                     onChange={(e) => onVolumeChange(Number(e.target.value) / 100)}
                     style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
                   />
-                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 28, textAlign: 'right' }}>{Math.round(volume * 100)}</span>
+                  <span style={{ fontSize: 12, color: '#aebbd0', width: 28, textAlign: 'right' }}>{Math.round(volume * 100)}</span>
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -464,7 +480,7 @@ export function SettingsPanel({
                   ))}
                 </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              {!standalone && (<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: 14 }}>{t('设置面板宽度', 'Panel width')}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <input
@@ -476,9 +492,9 @@ export function SettingsPanel({
                     onChange={(e) => onPanelWidthChange(Number(e.target.value))}
                     style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
                   />
-                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 44, textAlign: 'right' }}>{panelWidth}px</span>
+                  <span style={{ fontSize: 12, color: '#aebbd0', width: 44, textAlign: 'right' }}>{panelWidth}px</span>
                 </div>
-              </div>
+              </div>)}
               <ToggleRow label={t('窗口置顶', 'Stay on top')} value={pinned} onChange={onPinnedChange} />
               <ToggleRow label={t('隐藏UI', 'Hide UI')} value={hideUI} onChange={onHideUIChange} />
               <ToggleRow label={t('隐藏心情条', 'Hide Mood Bar')} value={hideMood} onChange={onHideMoodChange} />
@@ -497,7 +513,7 @@ export function SettingsPanel({
                         onChange={(e) => onScreenObserveIntervalChange(Number(e.target.value))}
                         style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
                       />
-                      <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 36, textAlign: 'right' }}>{screenObserveInterval}s</span>
+                      <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{screenObserveInterval}s</span>
                     </div>
                   </div>
 
@@ -542,7 +558,7 @@ export function SettingsPanel({
                       placeholder="sk-..."
                       style={{ ...inputStyle, width: '100%' }}
                     />
-                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 4 }}>
+                    <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 4 }}>
                       {t('从阿里云百炼控制台获取 API Key', 'Get API Key from Alibaba Cloud console')}
                     </div>
                   </div>
@@ -581,7 +597,7 @@ export function SettingsPanel({
                     >
                       <div>
                         <div>{v.label}</div>
-                        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginTop: 1 }}>{v.id}</div>
+                        <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 1 }}>{v.id}</div>
                       </div>
                       <div
                         onClick={(e) => { e.stopPropagation(); preview(v.id) }}
@@ -613,6 +629,7 @@ export function SettingsPanel({
             <div style={sectionStyle}>
               <div style={labelStyle}>{t('内置VRM模型', 'Built-in VRM Models')}</div>
               <select
+                aria-label="Built-in VRM models"
                 value={BUILTIN_MODELS.includes(currentModel) ? currentModel : ''}
                 onChange={(e) => { onModelChange(e.target.value) }}
                 style={selectStyle}
@@ -627,6 +644,7 @@ export function SettingsPanel({
                 <div style={{ marginTop: 12 }}>
                   <div style={labelStyle}>{t('自定义VRM模型', 'Custom VRM Models')}</div>
                   <select
+                    aria-label="Custom VRM models"
                     value={!BUILTIN_MODELS.includes(currentModel) ? currentModel : ''}
                     onChange={(e) => { onModelChange(e.target.value) }}
                     style={selectStyle}
@@ -670,7 +688,7 @@ export function SettingsPanel({
                 >
                   {t('浏览本地文件…', 'Browse local files…')}
                 </button>
-                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 4 }}>
+                <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 4 }}>
                   {t('选择 .vrm 文件导入宠物模型库', 'Choose a .vrm file to import into your pet model library. Files in this project’s models folder also appear above.')}
                 </div>
               </div>
@@ -758,7 +776,7 @@ export function SettingsPanel({
                       <span>{preset.label}</span>
                     </div>
                     {preset.bgm && (
-                      <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>{t('含BGM', 'w/ BGM')}</span>
+                      <span style={{ fontSize: 11, color: '#aebbd0' }}>{t('含BGM', 'w/ BGM')}</span>
                     )}
                   </div>
                 ))}
@@ -793,7 +811,7 @@ export function SettingsPanel({
                           <div>
                             <div>{dance.label}</div>
                             {dance.bgmUrl && (
-                              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 1 }}>{t('含BGM', 'w/ BGM')}</div>
+                              <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 1 }}>{t('含BGM', 'w/ BGM')}</div>
                             )}
                           </div>
                         </div>
@@ -803,7 +821,7 @@ export function SettingsPanel({
                             fetch(petUrl("/dance/delete"), {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ id: dance.id }),
+                              body: JSON.stringify({ name: dance.id }),
                             })
                               .then(() => {
                                 fetchCustomDances()
@@ -876,7 +894,7 @@ export function SettingsPanel({
                     : <Upload size={14} />}
                   {importingDance ? t('导入中…', 'Importing…') : t('选择 VMD 舞蹈文件…', 'Select VMD dance file…')}
                 </button>
-                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 4 }}>
+                <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 4 }}>
                   {t('选择 .vmd 舞蹈文件后，可选择配套 .mp3 音乐文件', 'Select a .vmd dance file, then optionally pick a matching .mp3')}
                 </div>
               </div>
@@ -890,7 +908,7 @@ export function SettingsPanel({
                   {RENDER_QUALITIES.map((q) => (
                     <button
                       key={q}
-                      onClick={() => onQualitySettingsChange(presetSettings(q))}
+                      onClick={() => onQualitySettingsChange({ ...presetSettings(q), maxFps: qualitySettings.maxFps })}
                       style={{
                         ...smallBtnStyle,
                         background: qualitySettings.preset === q ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
@@ -913,15 +931,23 @@ export function SettingsPanel({
                   <input
                     type="range"
                     min={0.5}
-                    max={3}
+                    max={4}
                     step={0.25}
                     value={qualitySettings.pixelRatioCap}
                     onChange={(e) => updateQualityDetails({ pixelRatioCap: Number(e.target.value) })}
                     style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
                   />
-                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 36, textAlign: 'right' }}>{parseFloat(qualitySettings.pixelRatioCap.toFixed(2))}x</span>
+                  <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{parseFloat(qualitySettings.pixelRatioCap.toFixed(2))}x</span>
                 </div>
               </div>
+              <label className="settings-control-row"><span>{t('帧率限制', 'Frame rate limit')}</span>
+                <select aria-label="Frame rate limit" value={qualitySettings.maxFps} onChange={e => updateQualityDetails({ maxFps: Number(e.target.value) })} style={{ ...selectStyle, width: 170 }}>
+                  {![0, 15, 24, 30, 60, 90, 120, 144, 165, 240].includes(qualitySettings.maxFps) && <option value={qualitySettings.maxFps}>{qualitySettings.maxFps} FPS</option>}
+                  {[15, 24, 30, 60, 90, 120, 144, 165, 240].map(fps => <option key={fps} value={fps}>{fps} FPS</option>)}
+                  <option value={0}>{t('无限制', 'Uncapped')}</option>
+                </select>
+              </label>
+              <p className="settings-help">{t('较低的帧率降低资源使用。此限制独立于画质预设。', 'Lower caps use fewer resources. Frame rate is independent of the visual preset.')}</p>
               <ToggleRow label={t('弹簧骨骼（耳朵/头发）', 'Spring bones (ears/hair)')} value={qualitySettings.springBones} onChange={(v) => updateQualityDetails({ springBones: v })} />
             </div>
           )}
@@ -952,7 +978,7 @@ export function SettingsPanel({
                     onChange={(e) => setBubble({ scale: Number(e.target.value) })}
                     style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
                   />
-                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{Math.round(bubbleSettings.scale * 100)}%</span>
+                  <span style={{ fontSize: 12, color: '#aebbd0', width: 40, textAlign: 'right' }}>{Math.round(bubbleSettings.scale * 100)}%</span>
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -985,7 +1011,7 @@ export function SettingsPanel({
                     onChange={(e) => setBubble({ bottom: Number(e.target.value) })}
                     style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
                   />
-                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{bubbleSettings.bottom}px</span>
+                  <span style={{ fontSize: 12, color: '#aebbd0', width: 40, textAlign: 'right' }}>{bubbleSettings.bottom}px</span>
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1012,7 +1038,7 @@ export function SettingsPanel({
                     onChange={(e) => setBubble({ fontSize: Number(e.target.value) })}
                     style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
                   />
-                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{bubbleSettings.fontSize}px</span>
+                  <span style={{ fontSize: 12, color: '#aebbd0', width: 40, textAlign: 'right' }}>{bubbleSettings.fontSize}px</span>
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1048,7 +1074,7 @@ export function SettingsPanel({
                         onChange={(e) => setBubble({ textShadowIntensity: Number(e.target.value) })}
                         style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
                       />
-                      <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{Math.round(bubbleSettings.textShadowIntensity * 100)}%</span>
+                      <span style={{ fontSize: 12, color: '#aebbd0', width: 40, textAlign: 'right' }}>{Math.round(bubbleSettings.textShadowIntensity * 100)}%</span>
                     </div>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1063,7 +1089,7 @@ export function SettingsPanel({
                         onChange={(e) => setBubble({ textShadowBlur: Number(e.target.value) })}
                         style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
                       />
-                      <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{bubbleSettings.textShadowBlur}px</span>
+                      <span style={{ fontSize: 12, color: '#aebbd0', width: 40, textAlign: 'right' }}>{bubbleSettings.textShadowBlur}px</span>
                     </div>
                   </div>
                 </>
@@ -1092,7 +1118,7 @@ export function SettingsPanel({
                         onChange={(e) => setBubble({ bubbleAlpha: Number(e.target.value) })}
                         style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
                       />
-                      <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{Math.round(bubbleSettings.bubbleAlpha * 100)}%</span>
+                      <span style={{ fontSize: 12, color: '#aebbd0', width: 40, textAlign: 'right' }}>{Math.round(bubbleSettings.bubbleAlpha * 100)}%</span>
                     </div>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1107,7 +1133,7 @@ export function SettingsPanel({
                         onChange={(e) => setBubble({ borderRadius: Number(e.target.value) })}
                         style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
                       />
-                      <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{bubbleSettings.borderRadius}px</span>
+                      <span style={{ fontSize: 12, color: '#aebbd0', width: 40, textAlign: 'right' }}>{bubbleSettings.borderRadius}px</span>
                     </div>
                   </div>
                 </>
@@ -1204,7 +1230,7 @@ const tabStyle: React.CSSProperties = {
   border: 'none',
   borderRadius: 6,
   background: 'transparent',
-  color: 'rgba(255, 255, 255, 0.6)',
+  color: '#aebbd0',
   fontSize: 13,
   fontWeight: 500,
   cursor: 'pointer',
@@ -1227,7 +1253,7 @@ const sectionStyle: React.CSSProperties = {
 
 const labelStyle: React.CSSProperties = {
   fontSize: 13,
-  color: 'rgba(255, 255, 255, 0.6)',
+  color: '#aebbd0',
   marginBottom: 2,
 }
 

@@ -1,3 +1,4 @@
+import { DEFAULT_ANIMATIONS, normalizeAnimations, animationSpeed, animationOptions, type AnimationSettings } from './animation-settings'
 /**
  * MotionController — unified animation system supporting VRMA, VMD, and FBX.
  *
@@ -119,6 +120,15 @@ function reAnchorRootPositionTrack(clip: THREE.AnimationClip, vrm: VRM) {
 // ── MotionController ────────────────────────────────────────────────────────
 
 export class MotionController {
+  private animationSettings: AnimationSettings = DEFAULT_ANIMATIONS
+  private actionKeys = new Map<THREE.AnimationAction, string>()
+  private safetyWatch: { action: THREE.AnimationAction; elapsed: number; duration: number; settle: () => void } | null = null
+  private danceKey = 'dance:jile'
+  setAnimationSettings(settings: AnimationSettings) {
+    this.animationSettings = normalizeAnimations(settings)
+    for (const [action, id] of this.actionKeys) action.setEffectiveTimeScale(animationSpeed(this.animationSettings, id))
+    if (this.bgmAudio) this.bgmAudio.playbackRate = Math.max(.0625, animationSpeed(this.animationSettings, this.danceKey))
+  }
   private vrm: VRM
   private mixer: THREE.AnimationMixer | null = null
   private idleClip: THREE.AnimationClip | null = null
@@ -132,7 +142,6 @@ export class MotionController {
   private _actionPlaying = false
   private _ikActive = false
   private holdTimer: ReturnType<typeof setTimeout> | null = null
-  private _actionSafetyTimer: ReturnType<typeof setTimeout> | null = null
   private bgmAudio: HTMLAudioElement | null = null
 
   // Callbacks for external coordination (camera switching etc.)
@@ -162,12 +171,20 @@ export class MotionController {
 
   update(delta: number) {
     if (this.mixer) this.mixer.update(delta)
+    const watch = this.safetyWatch
+    if (watch) {
+      watch.elapsed += delta * watch.action.getEffectiveTimeScale()
+      if (watch.elapsed >= watch.duration + 1) watch.settle()
+    }
     if (this._ikActive) this.ikHandler.update()
   }
 
   // ── CrossFade helper ─────────────────────────────────────────────────────
 
-  private crossFadeTo(newAction: THREE.AnimationAction, duration = 0.3) {
+  private crossFadeTo(newAction: THREE.AnimationAction, id = 'idle') {
+    const duration = animationOptions(this.animationSettings, id).transition / this.animationSettings.speed
+    this.actionKeys.set(newAction, id)
+    newAction.setEffectiveTimeScale(animationSpeed(this.animationSettings, id))
     newAction.reset().setEffectiveWeight(1).play()
     const prev = this.currentAction ?? this.idleAction
     if (prev && prev !== newAction) {
@@ -196,8 +213,8 @@ export class MotionController {
   // ── Clear current action (private) ──────────────────────────────────────
 
   private clearTimers() {
+    this.safetyWatch = null
     if (this.holdTimer) { clearTimeout(this.holdTimer); this.holdTimer = null }
-    if (this._actionSafetyTimer) { clearTimeout(this._actionSafetyTimer); this._actionSafetyTimer = null }
   }
 
   // ── Reset to idle (public) ──────────────────────────────────────────────
@@ -250,7 +267,7 @@ export class MotionController {
     const action = this.mixer.clipAction(clip)
     action.setLoop(THREE.LoopOnce, 1)
     action.clampWhenFinished = true  // always clamp to avoid T-pose on finish
-    this.crossFadeTo(action)
+    this.crossFadeTo(action, `action:${name}`)
     this.onActionChange?.(name)
 
     let settled = false
@@ -268,7 +285,7 @@ export class MotionController {
           this.disableIK()
           this.startIdle()
           this.onActionChange?.(null)
-        }, 10000)
+        }, animationOptions(this.animationSettings, `action:${name}`).hold * 1000)
       } else {
         this._actionPlaying = false
         this.disableIK()
@@ -281,16 +298,18 @@ export class MotionController {
     }
     this.mixer?.addEventListener('finished', onFinished)
 
-    // Safety timeout: guarantee _actionPlaying resets even if 'finished' never fires
+    // Playback-time safety guard: guarantee _actionPlaying resets even if 'finished' never fires
     const duration = clip.duration > 0 ? clip.duration : 3
-    this._actionSafetyTimer = setTimeout(() => settle(), (duration + 1) * 1000)
+    this.safetyWatch = { action, duration, elapsed: 0, settle }
   }
 
   // ── Dance (looping VMD/FBX/VRMA) ───────────────────────────────────────
 
-  async playDance(nameOrPreset: string | DancePreset) {
+  async playDance(nameOrPreset: string | DancePreset, preferenceKey?: string) {
     if (this._isDancing) return
     this._isDancing = true
+    const gen = ++this._actionGeneration
+    this.danceKey = preferenceKey ?? `dance:${typeof nameOrPreset === 'string' ? nameOrPreset : nameOrPreset.url}`
 
     try {
       // Accept preset name, URL, or full DancePreset object
@@ -300,6 +319,7 @@ export class MotionController {
         ? await this.loadClip(preset)
         : await this.loadClipByUrl(nameOrPreset as string)
 
+      if (gen !== this._actionGeneration) return
       if (!clip) {
         this._isDancing = false
         return
@@ -316,6 +336,7 @@ export class MotionController {
       if (preset?.bgm) {
         this.bgmAudio = new Audio(preset.bgm)
         this.bgmAudio.loop = true
+        this.bgmAudio.playbackRate = Math.max(.0625, animationSpeed(this.animationSettings, this.danceKey))
         this.bgmAudio.volume = this._volume
         this.bgmAudio.play().catch(() => {})
       }
@@ -323,7 +344,7 @@ export class MotionController {
       if (!this.mixer) { this._isDancing = false; return }
       const danceAction = this.mixer.clipAction(clip)
       danceAction.setLoop(THREE.LoopRepeat, Infinity)
-      this.crossFadeTo(danceAction)
+      this.crossFadeTo(danceAction, this.danceKey)
     } catch (err) {
       console.error('Failed to start dance:', err)
       this._isDancing = false
@@ -364,6 +385,7 @@ export class MotionController {
       this.mixer.uncacheRoot(this.vrm.scene)
       this.mixer = null
     }
+    this.actionKeys.clear()
     this.idleAction = null
     this.currentAction = null
   }

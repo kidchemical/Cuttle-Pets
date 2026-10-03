@@ -1,0 +1,93 @@
+"""Standalone browser smoke test; run against Vite with all pet API calls mocked.
+
+python tests/browser/settings_window.py --base-url http://127.0.0.1:1431
+Requires Playwright plus its Chromium browser. Screenshots go under temp/.
+"""
+import argparse
+from pathlib import Path
+import json
+from playwright.sync_api import sync_playwright
+parser = argparse.ArgumentParser()
+parser.add_argument('--base-url', default='http://127.0.0.1:1431')
+base_url = parser.parse_args().base_url.rstrip('/')
+scratch = Path(__file__).resolve().parents[2] / 'temp'
+scratch.mkdir(exist_ok=True)
+saved = {}
+def mock(route):
+    path = route.request.url.split(':8790')[-1]
+    if path == '/settings':
+        if route.request.method == 'POST': saved.update(route.request.post_data_json)
+        body = saved
+    elif path == '/model/list': body = {'models': [{'name': 'Example.vrm', 'url': '/model/serve/Example.vrm'}]}
+    elif path == '/music': body = {'analysis': {'status': 'listening'}}
+    elif path == '/cuttle/connection': body = {'ok': True, 'state': 'disconnected'}
+    elif path == '/dance/list': body = {'dances': [{'name': 'Test imported dance.vmd', 'url': '/dance/serve/Test imported dance.vmd'}]}
+    else: body = {}
+    route.fulfill(status=200, content_type='application/json', body=json.dumps(body), headers={'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type'})
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    context = browser.new_context(viewport={'width': 760, 'height': 800})
+    context.route('http://127.0.0.1:8790/**', mock)
+    page = context.new_page()
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.goto(f'{base_url}/?settings')
+    page.get_by_role('button', name='Animations', exact=True).click()
+    page.get_by_role('option', name='Test imported dance').wait_for()
+    assert page.locator('canvas').count() == 0
+    assert page.get_by_role('button', name='Close settings', exact=True).count() == 0
+    peer = context.new_page()
+    peer.goto(f'{base_url}/?settings')
+    peer.evaluate("""() => { window.commands=[]; window.bus = new BroadcastChannel('cuttle-pet-windows'); bus.onmessage = e => { if (e.data.name==='pet-command') { commands.push(e.data.payload); if(e.data.payload.type==='screenshot') bus.postMessage({name:'pet-screenshot',payload:{request:e.data.payload.request,image:'data:image/png;base64,test'}}) } } }""")
+    page.get_by_label('Global animation speed', exact=True).fill('2')
+    page.get_by_role('option', name='Happy', exact=False).click()
+    page.get_by_label('Individual speed', exact=True).fill('0.5')
+    page.get_by_text('Effective speed: 1.00×').wait_for()
+    page.get_by_role('button', name='Preview on pet', exact=True).click()
+    peer.wait_for_function("commands.some(c => c.type==='animation' && c.id==='action:happy')")
+    peer.get_by_role('button', name='Animations', exact=True).click()
+    assert peer.get_by_label('Global animation speed', exact=True).input_value() == '2'
+    page.reload()
+    page.get_by_role('button', name='Animations', exact=True).click()
+    assert page.get_by_label('Global animation speed', exact=True).input_value() == '2'
+    page.get_by_role('option', name='Happy', exact=False).click()
+    assert page.get_by_label('Individual speed', exact=True).input_value() == '0.5'
+    page.screenshot(path=str(scratch / 'animation-settings.png'))
+    page.get_by_role('button', name='Reset this animation', exact=True).click()
+    assert page.get_by_label('Individual speed', exact=True).input_value() == '1'
+    page.get_by_role('button', name='Reset all animations', exact=True).click()
+    assert page.get_by_label('Global animation speed', exact=True).input_value() == '1'
+    page.get_by_role('button', name='Quality', exact=True).click()
+    page.get_by_label('Frame rate limit').select_option('120')
+    page.get_by_role('button', name='Low', exact=True).click()
+    assert page.get_by_label('Frame rate limit').input_value() == '120'
+    page.reload()
+    page.get_by_role('button', name='Quality', exact=True).click()
+    assert page.get_by_label('Frame rate limit').input_value() == '120'
+    page.get_by_role('button', name='Model', exact=True).click()
+    page.get_by_label('Custom VRM models').wait_for()
+    assert page.get_by_label('Built-in VRM models').evaluate("e => getComputedStyle(e).colorScheme") == 'dark'
+    option = page.get_by_label('Custom VRM models').locator('option').last
+    assert option.evaluate("e => getComputedStyle(e).backgroundColor") == 'rgb(32, 40, 56)'
+    assert option.evaluate("e => getComputedStyle(e).color") == 'rgb(237, 242, 251)'
+    page.screenshot(path=str(scratch / 'settings-model.png'))
+    page.get_by_role('button', name='Music', exact=True).click()
+    page.get_by_role('checkbox', name='Preview headphones and nodding without music').check()
+    peer.wait_for_function("commands.filter(c=>c.type==='music-preview').at(-1)?.active === true")
+    with page.expect_response(lambda r: r.url.endswith('/settings') and r.request.method == 'POST'):
+        page.locator('input[type=range]').nth(3).fill('1.2')
+    assert peer.evaluate("commands.filter(c=>c.type==='music-preview').at(-1).active") is True
+    for tab in ['General','Music','Cuttle','Voice','Model','Persona','Dance','Quality','Display']:
+        page.get_by_role('button', name=tab, exact=True).click()
+    page.get_by_role('button', name='Persona', exact=True).click()
+    page.get_by_role('button', name='Auto Generate', exact=True).click()
+    peer.wait_for_function("commands.some(c => c.type==='screenshot')")
+    page.set_viewport_size({'width': 480, 'height': 500})
+    for tab in ['General','Music','Cuttle','Voice','Model','Persona','Dance','Quality','Display','Animations']:
+        page.get_by_role('button', name=tab, exact=True).click()
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), tab
+        assert page.locator('.settings-content').evaluate('e => e.scrollWidth <= e.clientWidth'), tab
+    page.screenshot(path=str(scratch / 'animation-settings-small.png'))
+    assert not errors, errors
+    print('Browser checks passed: standalone settings, imported list, live sync, preview routing, reload persistence, reset, all tabs, small window, no page errors.')
+    browser.close()

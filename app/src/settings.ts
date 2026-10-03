@@ -1,8 +1,9 @@
+import { publishPreferences } from './window-sync'
 import { petUrl } from './config'
 type Settings = Record<string, any>
 const CACHE = 'cuttle-pet-preferences-v1'
 const PENDING = 'cuttle-pet-pending-preferences-v1'
-const keys = new Set(['modelPath','ttsEnabled','musicEnabled','musicSettings','headphoneFits','showText','hideUI','tracking','volume','uiAlign','hideMood','screenObserve','screenObserveInterval','currentDance','customDancePreset','language','pinned','collapsed','quality','bubbleSettings','panelWidth'])
+const keys = new Set(['modelPath','ttsEnabled','musicEnabled','musicSettings','headphoneFits','showText','hideUI','tracking','volume','uiAlign','hideMood','screenObserve','screenObserveInterval','currentDance','customDancePreset','language','pinned','collapsed','quality','bubbleSettings','panelWidth','animationSettings'])
 const preferences = (data: Settings): Settings => Object.fromEntries(Object.entries(data).filter(([key]) => keys.has(key)))
 function read(key: string): Settings {
   try { return JSON.parse(localStorage.getItem(key) || '{}') || {} } catch { return {} }
@@ -44,6 +45,7 @@ export function saveSettings(patch: Settings) {
   pending = { ...pending, ...clean }
   write(CACHE, { ...read(CACHE), ...clean })
   write(PENDING, { ...inFlight, ...pending })
+  publishPreferences(clean)
   void flush()
 }
 export function getCachedSetting(key: string, fallback: any = undefined): any {

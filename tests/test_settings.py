@@ -24,6 +24,8 @@ class SettingsTests(unittest.TestCase):
                  'modelPath': '/model/project/test.vrm', 'currentDance': 'ualDance',
                  'screenObserve': False, 'screenObserveInterval': 90,
                  'headphoneFits': {'/cosmic.vrm': {'scale': 1.4, 'y': 8}},
+                 'quality': {'pixelRatioCap': 2, 'maxFps': 120, 'springBones': True, 'preset': 'high'},
+                 'animationSettings': {'speed': 1.5, 'overrides': {'action:happy': {'speed': 0.5, 'transition': 0.2, 'hold': 4}}},
                  'musicSettings': {'minBpm': 95, 'maxBpm': 195, 'nod': 24}}
         for key, value in prefs.items():
             self.assertEqual(self.client.post('/settings', json={key: value}).status_code, 200)

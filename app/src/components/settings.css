@@ -1,0 +1,109 @@
+/* Shared settings tokens also apply to nested music and connection controls. */
+.pet-settings-window, .pet-settings-panel {
+  color-scheme: dark;
+  --settings-bg: #171c26;
+  --settings-surface: #202838;
+  --settings-border: #39465c;
+  --settings-text: #edf2fb;
+  --settings-muted: #aebbd0;
+  --settings-accent: #84b6ff;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.pet-settings-window .settings-shell {
+  display: grid !important;
+  grid-template-columns: 152px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: 0 !important;
+  background: var(--settings-bg) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  color: var(--settings-text) !important;
+}
+.pet-settings-window .settings-header {
+  grid-column: 1 / -1;
+  padding: 20px 24px;
+  margin: 0 !important;
+  border-bottom: 1px solid var(--settings-border);
+  background: #1c2330;
+  cursor: default !important;
+}
+.settings-caption { margin: 4px 0 0; font-size: 12px; color: var(--settings-muted); }
+.pet-settings-window .settings-tabs {
+  display: flex !important;
+  flex-direction: column;
+  flex-wrap: nowrap !important;
+  gap: 5px !important;
+  padding: 16px 10px !important;
+  margin: 0 !important;
+  background: #1c2330 !important;
+  border-right: 1px solid var(--settings-border);
+  border-radius: 0 !important;
+  overflow-y: auto;
+}
+.pet-settings-window .settings-tab {
+  flex: 0 0 auto !important;
+  text-align: left;
+  height: 38px !important;
+  padding: 0 12px;
+  color: var(--settings-muted) !important;
+  font-size: 13px !important;
+  background: transparent !important;
+}
+.pet-settings-window .settings-tab[aria-current="page"] {
+  color: #fff !important;
+  background: #304c75 !important;
+  box-shadow: inset 3px 0 var(--settings-accent);
+}
+.pet-settings-window .settings-content {
+  padding: 24px !important;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.settings-section-heading { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--settings-border); }
+.settings-section-heading h2 { margin: 0; font-size: 22px; font-weight: 600; }
+.settings-section-heading p, .settings-help { margin: 6px 0 0; font-size: 12px; color: var(--settings-muted); }
+.settings-control-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+:is(.pet-settings-window, .pet-settings-panel) :is(button, input, select, textarea) { font-family: inherit; }
+:is(.pet-settings-window, .pet-settings-panel) :is(select, textarea, input:not([type="range"]):not([type="checkbox"]):not([type="color"])) {
+  color-scheme: dark;
+  color: var(--settings-text) !important;
+  background: var(--settings-surface) !important;
+  border: 1px solid var(--settings-border) !important;
+  border-radius: 8px !important;
+  font-size: 13px !important;
+}
+:is(.pet-settings-window, .pet-settings-panel) select { min-height: 38px; padding: 6px 10px !important; }
+:is(.pet-settings-window, .pet-settings-panel) select option {
+  color: #edf2fb !important;
+  background: #202838 !important;
+}
+:is(.pet-settings-window, .pet-settings-panel) :is(textarea, input[type="text"], input[type="password"]) { padding: 10px !important; }
+:is(.pet-settings-window, .pet-settings-panel) ::placeholder { color: #98a8c0; opacity: 1; }
+:is(.pet-settings-window, .pet-settings-panel) input[type="range"] { accent-color: var(--settings-accent) !important; cursor: pointer; }
+:is(.pet-settings-window, .pet-settings-panel) input[type="checkbox"] { accent-color: var(--settings-accent); margin-right: 7px; }
+:is(.pet-settings-window, .pet-settings-panel) button:not(.settings-tab) {
+  border-radius: 8px !important;
+  color: var(--settings-text);
+  background: var(--settings-surface);
+  border: 1px solid var(--settings-border);
+  cursor: pointer;
+  transition: filter .15s;
+}
+:is(.pet-settings-window, .pet-settings-panel) button:not([style]) { padding: 9px 12px; text-align: left; }
+:is(.pet-settings-window, .pet-settings-panel) button:hover:not(:disabled) { filter: brightness(1.16); }
+:is(.pet-settings-window, .pet-settings-panel) button:disabled { opacity: .5; cursor: not-allowed; }
+:is(.pet-settings-window, .pet-settings-panel) :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--settings-accent) !important; outline-offset: 3px; }
+:is(.pet-settings-window, .pet-settings-panel) * { scrollbar-width: thin; scrollbar-color: #52627c transparent; }
+@media (max-width: 600px) {
+  .pet-settings-window .settings-shell { grid-template-columns: 112px minmax(0, 1fr); }
+  .pet-settings-window .settings-content { padding: 16px !important; }
+  .pet-settings-window .settings-header { padding: 16px; }
+  .pet-settings-window .settings-tab { padding: 0 9px; }
+  .settings-control-row { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .animation-layout { grid-template-columns: minmax(0, 1fr) !important; }
+  .settings-content div[style*="justify-content"] { flex-wrap: wrap; gap: 10px; }
+  .animation-list { height: 210px !important; }
+}

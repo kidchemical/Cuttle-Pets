@@ -187,6 +187,25 @@ python3 cli/cuttle_pet.py settings pinned true    # pin again
 
 Enable login autostart (Linux) with `python3 scripts/autostart.py enable`.
 
+## Animation settings
+
+Open **Settings** from the pet toolbar, tray menu, or **F4**. Settings opens in a
+separate, resizable desktop window, independent of the pet viewport. Changes apply
+live and are saved locally and to the control server.
+
+**Quality → Frame rate limit** controls the FPS cap separately from visual presets.
+Choose a cap from 15–240 FPS or **Uncapped**; saved custom caps are also preserved.
+
+The **Animations** tab has a global speed multiplier and a searchable, scrollable
+list of idle, gesture, dance, imported dance, and procedural animations. Select an
+animation to adjust its individual speed; the effective speed is global × individual.
+Clips also have a transition duration, and gestures have a held-pose duration for
+interactions that request a hold. Use **Preview on pet**, **Stop preview**, and the
+reset buttons to try changes. Procedural music motion can also be previewed from the
+Music tab. Speech remains synchronized to its audio; music beat matching works best
+at 1×. At effective speeds below 0.0625×, dance audio stays at 0.0625× (the browser's
+minimum playback rate).
+
 ## Windows
 
 ```powershell
@@ -201,6 +220,20 @@ Same behavior as `start_pet.sh`: reuses a running control server, starts the bri
 python3 -m pytest tests/          # Python suite (server, bridge, beats, CLI)
 cd app && npx tsc --noEmit        # renderer typecheck
 ```
+
+Animation regression tests (from the repository root):
+
+```bash
+app/node_modules/.bin/tsx tests/animation_settings.test.ts
+app/node_modules/.bin/tsx tests/preferences.test.ts
+# Optional browser smoke test; install Playwright + Chromium, and start Vite first:
+npm --prefix app run dev -- --port 1431
+# In another terminal:
+python tests/browser/settings_window.py --base-url http://127.0.0.1:1431
+```
+
+The browser smoke test mocks all pet-server calls, checks persistence and live
+window synchronization, and saves screenshots under `temp/`.
 
 ## License
 

@@ -10,7 +10,8 @@ import { TextBubble } from './components/TextBubble'
 import type { OnVrmMessage } from './components/TextBubble'
 import { ChatInput } from './components/ChatInput'
 import { ResizeHandles } from './components/ResizeHandles'
-import { SettingsPanel } from './components/SettingsPanel'
+import { openSettingsWindow, subscribeWindowEvent, replyScreenshot, type PetCommand } from './window-sync'
+import { DEFAULT_ANIMATIONS, normalizeAnimations, type AnimationSettings } from './animation-settings'
 import { usePassThrough } from './hooks/usePassThrough'
 import { dancePresets, actionPresets } from './motion-controller'
 import { LipSync } from './lip-sync'
@@ -76,6 +77,8 @@ export default function App() {
   const [pinned, setPinned] = useState(true)
   const [tracking, setTracking] = useState<'mouse' | 'camera'>('mouse')
   const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => presetSettings('high'))
+  const qualitySettingsRef = useRef(qualitySettings)
+  qualitySettingsRef.current = qualitySettings
   const qualityPreset = qualitySettings.preset
   const [showText, setShowText] = useState(true)
   const [collapsed, setCollapsed] = useState(false)
@@ -83,7 +86,8 @@ export default function App() {
   const [ttsEnabled, setTtsEnabled] = useState(true)
   const [modelError, setModelError] = useState('')
   const [modelPath, setModelPath] = useState(DEFAULT_MODEL)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [animationSettings, setAnimationSettings] = useState<AnimationSettings>(DEFAULT_ANIMATIONS)
+  const openSettings = useCallback(() => { void openSettingsWindow().catch(error => setModelError(String(error))) }, [])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [hideUI, setHideUI] = useState(false)
   const [volume, setVolume] = useState(0.5)
@@ -96,12 +100,11 @@ export default function App() {
   const [screenObserveInterval, setScreenObserveInterval] = useState(60)
   const [language, setLanguage] = useState<'zh' | 'en'>(() => navigator.language.startsWith('zh') ? 'zh' : 'en')
   const [bubbleSettings, setBubbleSettings] = useState<BubbleSettings>({ ...DEFAULT_BUBBLE_SETTINGS })
-  const [panelWidth, setPanelWidth] = useState(400)
   const t = (zh: string, en: string) => language === 'en' ? en : zh
   const [viewportHovered, setViewportHovered] = useState(false)
   // Hover is true only when the cursor is over the model or a button
   // (see usePassThrough), plus pointer enter/leave and window focus below.
-  usePassThrough(!settingsOpen && !historyOpen, setViewportHovered)
+  usePassThrough(!historyOpen, setViewportHovered)
   useEffect(() => {
     const onBlur = () => setViewportHovered(false)
     window.addEventListener('blur', onBlur)
@@ -109,47 +112,61 @@ export default function App() {
   }, [])
   const hoverControlsStyle = { visibility: viewportHovered ? 'visible' as const : 'hidden' as const }
 
-  const handleMusicPreview = useCallback((active: boolean) => sceneRef.current?.setMusicPreview(active), [])
-
-  // Load persisted settings on mount
-  useEffect(() => {
-    loadSettings()
-      .then((s) => {
-        { const pin = s.pinned ?? true; setPinned(pin); void getCurrentWindow().setAlwaysOnTop(pin); void invoke('set_pinned', { pinned: pin }).catch(() => {}) }
-        if (s.collapsed !== undefined) setCollapsed(s.collapsed)
-        if (s.modelPath) setModelPath(s.modelPath.startsWith('/model/') ? petUrl(s.modelPath) : s.modelPath)
-        if (s.ttsEnabled !== undefined) setTtsEnabled(s.ttsEnabled)
-        if (s.musicEnabled !== undefined) setMusicEnabled(s.musicEnabled)
-        if (s.musicSettings) setMusicSettings(normalizeMusic(s.musicSettings))
-        if (s.headphoneFits) setHeadphoneFits(s.headphoneFits)
-        if (s.showText !== undefined) setShowText(s.showText)
-        if (s.hideUI !== undefined) setHideUI(s.hideUI)
-        if (s.tracking) { setTracking(s.tracking); sceneRef.current?.setTrackingMode(s.tracking) }
-        if (s.quality !== undefined) setQualitySettings(normalizeQualitySettings(s.quality))
-        if (s.volume !== undefined) { setVolume(s.volume); LipSync.getInstance().setVolume(s.volume); sceneRef.current?.setBgmVolume(s.volume) }
-        if (s.uiAlign) setUiAlign(s.uiAlign)
-        if (s.hideMood !== undefined) setHideMood(s.hideMood)
-        if (s.screenObserve !== undefined) setScreenObserve(s.screenObserve)
-        if (s.screenObserveInterval !== undefined) setScreenObserveInterval(s.screenObserveInterval)
-        if (s.bubbleSettings) setBubbleSettings(normalizeBubbleSettings(s.bubbleSettings))
-        if (typeof s.panelWidth === 'number' && Number.isFinite(s.panelWidth)) setPanelWidth(Math.min(640, Math.max(300, s.panelWidth)))
-        if (s.currentDance) setCurrentDance(s.currentDance)
-        if (s.customDancePreset) setCustomDancePreset(s.customDancePreset)
-        if (s.language) {
-          setLanguage(s.language)
-        } else {
-          // No saved language — persist the detected system language to backend
-          const detected = navigator.language.startsWith('zh') ? 'zh' : 'en'
-          saveSettings({ language: detected })
-        }
-      })
-      .catch(() => {})
+  const applyPreferences = useCallback((s: Record<string, any>, initial = false) => {
+    if (s.pinned !== undefined) { const pin = s.pinned; setPinned(pin); void getCurrentWindow().setAlwaysOnTop(pin); void invoke('set_pinned', { pinned: pin }).catch(() => {}) }
+    if (s.collapsed !== undefined) setCollapsed(s.collapsed)
+    if (s.modelPath) { setModelError(''); setModelPath(s.modelPath.startsWith('/model/') ? petUrl(s.modelPath) : s.modelPath); setDancing(false) }
+    if (s.ttsEnabled !== undefined) setTtsEnabled(s.ttsEnabled)
+    if (s.musicEnabled !== undefined) setMusicEnabled(s.musicEnabled)
+    if (s.musicSettings) setMusicSettings(normalizeMusic(s.musicSettings))
+    if (s.headphoneFits) setHeadphoneFits(s.headphoneFits)
+    if (s.showText !== undefined) setShowText(s.showText)
+    if (s.hideUI !== undefined) setHideUI(s.hideUI)
+    if (s.tracking) { setTracking(s.tracking); sceneRef.current?.setTrackingMode(s.tracking) }
+    if (s.quality !== undefined) setQualitySettings(normalizeQualitySettings(s.quality))
+    if (s.volume !== undefined) { setVolume(s.volume); LipSync.getInstance().setVolume(s.volume); sceneRef.current?.setBgmVolume(s.volume) }
+    if (s.uiAlign) setUiAlign(s.uiAlign)
+    if (s.hideMood !== undefined) setHideMood(s.hideMood)
+    if (s.screenObserve !== undefined) setScreenObserve(s.screenObserve)
+    if (s.screenObserveInterval !== undefined) setScreenObserveInterval(s.screenObserveInterval)
+    if (s.bubbleSettings) setBubbleSettings(normalizeBubbleSettings(s.bubbleSettings))
+    if (s.currentDance) setCurrentDance(s.currentDance)
+    if (s.customDancePreset !== undefined) setCustomDancePreset(s.customDancePreset || undefined)
+    if (s.language) {
+      setLanguage(s.language)
+    } else if (initial) {
+      // No saved language — persist the detected system language to backend
+      const detected = navigator.language.startsWith('zh') ? 'zh' : 'en'
+      saveSettings({ language: detected })
+    }
+    if (s.animationSettings) setAnimationSettings(normalizeAnimations(s.animationSettings))
   }, [])
-
   useEffect(() => {
-    const unlisten = listen('open-settings', () => setSettingsOpen(true))
-    return () => { unlisten.then((f) => f()) }
-  }, [])
+    let active = true
+    const changed: Record<string, any> = {}
+    const stop = subscribeWindowEvent<Record<string, any>>('pet-preferences', patch => { Object.assign(changed, patch); applyPreferences(patch) })
+    void loadSettings().then(s => { if (active) applyPreferences({ ...s, ...changed }, true) })
+    return () => { active = false; stop() }
+  }, [applyPreferences])
+  useEffect(() => subscribeWindowEvent<PetCommand>('pet-command', command => {
+    if (command.type === 'animation') {
+      sceneRef.current?.resetPose()
+      if (command.id === 'idle') return
+      if (command.id === 'typing' || command.id === 'sip') {
+        sceneRef.current?.setWorking(true)
+        if (command.id === 'sip') sceneRef.current?.requestCoffeeSip()
+      } else if (command.id.startsWith('action:')) sceneRef.current?.playAnimationOnce(command.id.slice(7))
+      else if (command.id.startsWith('dance:')) sceneRef.current?.playDance(command.preset ?? command.id.slice(6), command.id)
+    }
+    if (command.type === 'stop') { sceneRef.current?.resetPose(); setDancing(false) }
+    if (command.type === 'music-preview') sceneRef.current?.setMusicPreview(command.active)
+    if (command.type === 'bubble-preview') (window as any).__clawPreviewBubble?.('Hello! This is your text bubble preview.')
+    if (command.type === 'screenshot') replyScreenshot(command.request, sceneRef.current?.captureScreenshot() ?? null)
+  }), [])
+  useEffect(() => {
+    const unlisten = listen('open-settings', openSettings)
+    return () => { void unlisten.then(f => f()) }
+  }, [openSettings])
 
   useEffect(() => {
     let active = true
@@ -177,7 +194,7 @@ export default function App() {
     const controls = listen<string>('tray-control', event => {
       if (event.payload === 'music') setMusicEnabled(value => { saveSettings({ musicEnabled: !value }); return !value })
       if (event.payload.startsWith('quality:')) {
-        const qs = presetSettings(normalizeQuality(event.payload.slice('quality:'.length)))
+        const qs = { ...presetSettings(normalizeQuality(event.payload.slice('quality:'.length))), maxFps: qualitySettingsRef.current.maxFps }
         setQualitySettings(qs)
         saveSettings({ quality: qs })
       }
@@ -194,31 +211,6 @@ export default function App() {
     bindScene(sceneRef.current)
     return () => bindScene(null)
   })
-
-  const handleVolumeChange = useCallback((v: number) => {
-    setVolume(v)
-    LipSync.getInstance().setVolume(v)
-    sceneRef.current?.setBgmVolume(v)
-    saveSettings({ volume: v })
-  }, [])
-
-  const handleTrackingChange = useCallback((mode: 'mouse' | 'camera') => {
-    sceneRef.current?.setTrackingMode(mode)
-    setTracking(mode)
-    saveSettings({ tracking: mode })
-  }, [])
-
-  const handleQualitySettingsChange = useCallback((qs: QualitySettings) => {
-    const safe = normalizeQualitySettings(qs)
-    setQualitySettings(safe)
-    saveSettings({ quality: safe })
-  }, [])
-
-  const handleBubbleSettingsChange = useCallback((bs: BubbleSettings) => {
-    const safe = normalizeBubbleSettings(bs)
-    setBubbleSettings(safe)
-    saveSettings({ bubbleSettings: safe })
-  }, [])
 
   const handleVrmMessage: OnVrmMessage = useCallback((msg) => {
     // Screensaver/lock suspend: full render suspend + window hide (see
@@ -355,7 +347,7 @@ export default function App() {
       }
       if (e.key === 'F4') {
         e.preventDefault()
-        setSettingsOpen((v) => !v)
+        openSettings()
       }
       if (e.key === 'F5') {
         e.preventDefault()
@@ -476,7 +468,7 @@ export default function App() {
       {modelError && <div role="alert" data-no-passthrough style={{ position: 'absolute', top: 20, left: 16, right: 16, zIndex: 1000, background: '#402020', color: 'white', padding: 12, borderRadius: 8 }}>
         {modelError}<button onClick={() => { setModelError(''); setModelPath(DEFAULT_MODEL); saveSettings({ modelPath: DEFAULT_MODEL }) }}>Use default model</button>
       </div>}
-      <VRMScene ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
+      <VRMScene animationSettings={animationSettings} ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
       <div style={hoverControlsStyle}>{!hideMood && <MoodIndicator uiAlign={uiAlign} />}</div>
       <TextBubble onMessage={handleVrmMessageWithActivity} enabled={showText} ttsEnabled={ttsEnabled} bubble={bubbleSettings} />
       <div style={hoverControlsStyle}>{!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}</div>
@@ -484,54 +476,6 @@ export default function App() {
         visible={historyOpen}
         onClose={() => setHistoryOpen(false)}
         language={language}
-      />
-      <SettingsPanel
-        musicSettings={musicSettings}
-        headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)}
-        musicEnabled={musicEnabled}
-        onMusicEnabledChange={v => { setMusicEnabled(v); saveSettings({ musicEnabled: v }) }}
-        onMusicSettingsChange={v => { const musicSettings = normalizeMusic(v); setMusicSettings(musicSettings); saveSettings({ musicSettings }) }}
-        onHeadphoneFitChange={v => setHeadphoneFits(previous => { const headphoneFits = { ...previous, [modelFitKey(modelPath)]: normalizeFit(v) }; saveSettings({ headphoneFits }); return headphoneFits })}
-        onMusicPreview={handleMusicPreview}
-        visible={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        currentModel={modelPath}
-        onModelChange={(m) => { setModelError(''); setModelPath(m); setDancing(false); saveSettings({ modelPath: m }) }}
-        hideUI={hideUI}
-        onHideUIChange={(v) => { setHideUI(v); saveSettings({ hideUI: v }) }}
-        showText={showText}
-        onShowTextChange={(v) => { setShowText(v); saveSettings({ showText: v }) }}
-        ttsEnabled={ttsEnabled}
-        onTtsEnabledChange={(v) => { setTtsEnabled(v); saveSettings({ ttsEnabled: v }) }}
-        tracking={tracking}
-        onTrackingChange={handleTrackingChange}
-        qualitySettings={qualitySettings}
-        onQualitySettingsChange={handleQualitySettingsChange}
-        volume={volume}
-        onVolumeChange={handleVolumeChange}
-        uiAlign={uiAlign}
-        onUiAlignChange={(v) => { setUiAlign(v); saveSettings({ uiAlign: v }) }}
-        hideMood={hideMood}
-        onHideMoodChange={(v) => { setHideMood(v); saveSettings({ hideMood: v }) }}
-        screenObserve={screenObserve}
-        onScreenObserveChange={(v) => { setScreenObserve(v); saveSettings({ screenObserve: v }) }}
-        screenObserveInterval={screenObserveInterval}
-        onScreenObserveIntervalChange={(v) => { setScreenObserveInterval(v); saveSettings({ screenObserveInterval: v }) }}
-        captureVrmScreenshot={() => sceneRef.current?.captureScreenshot() ?? null}
-        language={language}
-        onLanguageChange={(v) => { setLanguage(v); saveSettings({ language: v }) }}
-        currentDance={currentDance}
-        onDanceChange={(id, preset) => {
-          setCurrentDance(id)
-          setCustomDancePreset(preset)
-          saveSettings({ currentDance: id, customDancePreset: preset })
-        }}
-        bubbleSettings={bubbleSettings}
-        onBubbleSettingsChange={handleBubbleSettingsChange}
-        panelWidth={panelWidth}
-        onPanelWidthChange={(v) => { setPanelWidth(v); saveSettings({ panelWidth: v }) }}
-        pinned={pinned}
-        onPinnedChange={(v) => { void applyPinned(v) }}
       />
       {!hideUI && <div
         style={{
@@ -553,7 +497,7 @@ export default function App() {
         </button>
         {!collapsed && <>
           <button
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => openSettings()}
             style={btnStyle}
             title={t('设置 (F4)', 'Settings (F4)')}
           >
@@ -638,7 +582,7 @@ export default function App() {
                   ? customDancePreset.label
                   : dancePresets[currentDance]?.label ?? currentDance
                 if (currentDance.startsWith('custom:') && customDancePreset) {
-                  sceneRef.current?.playDance(customDancePreset)
+                  sceneRef.current?.playDance(customDancePreset, `dance:${currentDance}`)
                 } else {
                   sceneRef.current?.playDance(currentDance)
                 }

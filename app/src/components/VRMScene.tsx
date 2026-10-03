@@ -1,3 +1,5 @@
+import { FramePacer } from '../frame-pacer'
+import { DEFAULT_ANIMATIONS, animationSpeed, type AnimationSettings } from '../animation-settings'
 import { MusicMotion } from '../music-motion'
 import { prepareLaptop, cupPositions } from '../work-props'
 import { DEFAULT_MUSIC, DEFAULT_FIT, type MusicSettings, type HeadphoneFit } from '../music-settings'
@@ -16,6 +18,7 @@ import type { TypingPoseCache } from '../typing-pose'
 export type TouchRegion = 'head' | 'arm' | 'leg' | 'chest' | 'belly' | 'buttocks'
 
 interface VRMSceneProps {
+  animationSettings?: AnimationSettings
   musicSettings?: MusicSettings
   headphoneFit?: HeadphoneFit
   modelPath: string
@@ -29,7 +32,7 @@ interface VRMSceneProps {
 export type TrackingMode = 'mouse' | 'camera'
 
 import type { RenderQuality, QualitySettings } from '../render-quality'
-import { DEFAULT_MAX_FPS, QUALITY_PRESETS, normalizeQualitySettings } from '../render-quality'
+import { QUALITY_PRESETS, normalizeQualitySettings } from '../render-quality'
 import { defaultViewFromBounds, isValidView, loadSavedCameraView, saveCameraView, type CameraView } from '../camera-framing'
 import { collectEarMorphSlots, dampenEarMorphs, type EarMorphSlot } from '../ear-morph-dampen'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -47,7 +50,7 @@ export interface VRMSceneHandle {
   captureScreenshot: () => string | null
   panCamera: (dx: number, dy: number) => void
   rotateCamera: (dx: number, dy: number) => void
-  playDance: (nameOrPreset: string | import('../motion-controller').DancePreset) => void
+  playDance: (nameOrPreset: string | import('../motion-controller').DancePreset, preferenceKey?: string) => void
   stopDance: () => void
   isDancing: () => boolean
   setBgmVolume: (v: number) => void
@@ -193,6 +196,7 @@ function applyRelaxedHandPose(cache: HandPoseCache, time: number) {
 
 export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMScene({
   modelPath,
+  animationSettings = DEFAULT_ANIMATIONS,
   musicSettings = DEFAULT_MUSIC,
   headphoneFit = DEFAULT_FIT,
   qualitySettings,
@@ -224,6 +228,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   const musicModeRef = useRef(false)
   const musicPreviewRef = useRef(false)
   const musicDanceActiveRef = useRef(false)
+  const animationSettingsRef = useRef(animationSettings)
+  animationSettingsRef.current = animationSettings
+  useEffect(() => { motionRef.current?.setAnimationSettings(animationSettings) }, [animationSettings])
   const musicSettingsRef = useRef(musicSettings)
   musicSettingsRef.current = musicSettings
   const qualityDetailsRef = useRef(normalizeQualitySettings(qualitySettings))
@@ -269,9 +276,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     rotateCamera(dx: number, dy: number) {
       rotateCameraRef.current?.(dx, dy)
     },
-    playDance(nameOrPreset: string | import('../motion-controller').DancePreset) {
+    playDance(nameOrPreset: string | import('../motion-controller').DancePreset, preferenceKey?: string) {
       musicDanceActiveRef.current = false
-      motionRef.current?.playDance(nameOrPreset)
+      motionRef.current?.playDance(nameOrPreset, preferenceKey)
     },
     stopDance() {
       motionRef.current?.resetToIdle()
@@ -605,6 +612,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
         // ── Initialize MotionController ──────────────────────────────────────
         motion = new MotionController(loadedVrm)
+        motion.setAnimationSettings(animationSettingsRef.current)
         motionRef.current = motion
         // Show the cellphone prop while the phoneCall action is playing
         motion.onActionChange = (actionName) => {
@@ -928,13 +936,14 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     // ── Animation loop ────────────────────────────────────────────────────────
     // Pauses when the page is hidden (minimized / locked / screensaver) so the
     // pet deactivates instead of burning CPU/GPU underneath the screensaver.
-    // Quality caps pixel ratio; frame rate is a fixed cap (DEFAULT_MAX_FPS).
+    // Quality controls pixel ratio and the independently selected frame-rate cap.
     // Delta is clamped so capped frames and resume-from-pause never cause
     // animation jumps.
     const clock = new THREE.Clock()
     let animFrameId: number
     let renderingPaused = document.hidden
-    let lastFrameAt = 0
+    const framePacer = new FramePacer()
+    const animationTimes = { hands: 0, typing: 0, sip: 0 }
 
     function animate() {
       animFrameId = requestAnimationFrame(animate)
@@ -943,26 +952,27 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       if (renderer.getPixelRatio() !== targetRatio) renderer.setPixelRatio(targetRatio)
       {
         const now = performance.now()
-        if (now - lastFrameAt < 1000 / DEFAULT_MAX_FPS) return
-        lastFrameAt = now
+        if (!framePacer.shouldRender(now, cfg.maxFps)) return
       }
-      const delta = Math.min(clock.getDelta(), 0.05)
+      const delta = Math.min(clock.getDelta(), 0.1)
 
       if (vrm) {
+        const prefs = animationSettingsRef.current
+        for (const key of ['hands', 'typing', 'sip'] as const) animationTimes[key] += delta * animationSpeed(prefs, key)
         // Remove last frame’s procedural layer, including bones absent from the idle clip.
         if (typingCache) restoreTypingPose(typingCache)
         // 1. Animation mixer
         motion?.update(delta)
 
         // 1.5. Relaxed hand pose — skip during dance (VMD has own hand anim)
-        if (handPose && !motion?.isDancing) applyRelaxedHandPose(handPose, clock.elapsedTime)
+        if (handPose && !motion?.isDancing) applyRelaxedHandPose(handPose, animationTimes.hands)
 
         // 1.6. Working mode: ease toward target, layer typing pose on top
         const workingTarget = workingTargetRef.current && !motion?.actionPlaying && !motion?.isDancing ? 1 : 0
         workingBlend += (workingTarget - workingBlend) * Math.min(1, delta * 4)
         if (Math.abs(workingBlend) < 0.001) workingBlend = workingTarget
         if (typingCache && workingBlend > 0) {
-          applyTypingPose(typingCache, clock.elapsedTime, workingBlend)
+          applyTypingPose(typingCache, animationTimes.typing, workingBlend)
         }
         if (laptop) {
           laptop.visible = workingBlend > .02
@@ -976,7 +986,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
         // 1.7. Coffee sip: every 40–90s of sustained working, raise the cup
         // for ~4.5s (blend ramps up/down over the first/last quarter)
-        const now = clock.elapsedTime
+        const now = animationTimes.sip
         if (workingBlend > 0.8) {
           if (sipRequestedRef.current) {
             nextSipAt = now
@@ -1025,7 +1035,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           headphones.rotation.set(THREE.MathUtils.degToRad(fit.rx), THREE.MathUtils.degToRad(fit.ry), THREE.MathUtils.degToRad(fit.rz))
           headphones.visible = listening
         }
-        const musicPose = musicMotionRef.current.step(delta, performance.now() / 1000, musicOptions, listening, musicPreviewRef.current, workingTargetRef.current, sipBlend)
+        const musicPose = musicMotionRef.current.step(delta, performance.now() / 1000, musicOptions, listening, musicPreviewRef.current, workingTargetRef.current, sipBlend, animationSpeed(prefs, 'music'))
         if (typingCache && !motion?.actionPlaying && !motion?.isDancing) applyMusicAngles(typingCache, musicPose.pitch, musicPose.roll)
         if (listening && !motion?.actionPlaying && !motion?.isDancing) {
           if (!nextMusicDance) nextMusicDance = now + 20 + Math.random() * 25
@@ -1061,16 +1071,16 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         }
 
         // 4. LookAt update
-        vrm.lookAt?.update(delta)
+        vrm.lookAt?.update(delta * animationSpeed(prefs, 'eyes'))
 
         // 5. Eye saccades (airi style)
-        saccades.update(vrm, lookAtTarget, delta)
+        saccades.update(vrm, lookAtTarget, delta * animationSpeed(prefs, 'eyes'))
 
         // 5. Blinking
-        updateBlink(vrm, delta, blinkState)
+        updateBlink(vrm, delta * animationSpeed(prefs, 'blink'), blinkState)
 
         // 6. Emote transitions
-        emote?.update(delta)
+        emote?.update(delta * animationSpeed(prefs, 'expressions'))
 
         // 7. Lip sync
         lipSyncRef.current.update(vrm, delta)
@@ -1141,7 +1151,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       if (!renderingPaused) return
       renderingPaused = false
       clock.getDelta()
-      lastFrameAt = 0
+      framePacer.reset()
       animFrameId = requestAnimationFrame(animate)
     }
     // Set while a screensaver/lock suspend is in force; only setSuspended

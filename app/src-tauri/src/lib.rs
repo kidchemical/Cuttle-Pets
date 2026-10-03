@@ -12,6 +12,24 @@ static MONITORING: AtomicBool = AtomicBool::new(false);
 static PINNED: AtomicBool = AtomicBool::new(true);
 
 #[tauri::command]
+fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App("index.html?settings".into()))
+        .title("Cuttle Pets — Settings")
+        .inner_size(760.0, 800.0)
+        .min_inner_size(480.0, 500.0)
+        .resizable(true)
+        .decorations(true)
+        .transparent(false)
+        .build().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn set_pinned(pinned: bool) {
     PINNED.store(pinned, Ordering::Relaxed);
 }
@@ -258,11 +276,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                         let _ = window.set_focus();
                     }
                 }
-                "settings" => {
-                    show_main(&window);
-                    let _ = window.set_focus();
-                    let _ = window.emit("open-settings", ());
-                }
+                "settings" => { let _ = open_settings_window(app.clone()); }
                 "quit" => {
                     app.exit(0);
                 }
@@ -294,6 +308,7 @@ pub fn run() {
             .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION | tauri_plugin_window_state::StateFlags::SIZE)
             .build())
         .invoke_handler(tauri::generate_handler![
+            open_settings_window,
             set_pinned,
             update_tray_models,
             pick_vrm_file,
@@ -348,7 +363,7 @@ pub fn run() {
                 app.set_menu(menu)?;
 
                 let win = window.clone();
-                app.on_menu_event(move |_app, event| {
+                app.on_menu_event(move |app, event| {
                     match event.id().as_ref() {
                         "app_toggle" => {
                             if win.is_visible().unwrap_or(false) {
@@ -358,11 +373,7 @@ pub fn run() {
                                 let _ = win.set_focus();
                             }
                         }
-                        "app_settings" => {
-                            show_main(&win);
-                            let _ = win.set_focus();
-                            let _ = win.emit("open-settings", ());
-                        }
+                        "app_settings" => { let _ = open_settings_window(app.clone()); }
                         _ => {}
                     }
                 });
