@@ -1,315 +1,162 @@
-# cuttle-pet
+<div align="center">
 
-A transparent, always-on-top 3D desktop pet driven by Cuttle — CLI, chat
-activity, or direct HTTP.
+# Cuttle Pets
 
-Vendored from [claw-sama](https://github.com/luckybugqqq/claw-sama) (MIT). The
-Tauri + three.js + `@pixiv/three-vrm` renderer is upstream's, unmodified in its
-rendering path; the OpenClaw gateway it used to talk to has been replaced by a
-local control server.
+**A transparent, always-on-top 3D desktop pet that reacts to your coding agents in real time.**
 
-```
-cuttle-pet/
-  app/       Tauri + React + three.js renderer (vendored, MIT)
-  server/    Flask control server — the only thing the app talks to
-  cli/       cuttle-pet — emote / action / say / event / click-through
-  bridge/    polls Cuttle live-status and drives the pet
-  models/    your .vrm files (gitignored)
-```
+When Cuttle works, she types. When it's done, she cheers. When tests go green, she tells you.
+
+[Quick start](#quick-start) · [What she does](#what-she-does) · [Cuttle bridge](#cuttle-bridge) · [Control API](#control-api) · [Models & animation](#models--animation) · [Building](#building)
+
+[![MIT license](https://img.shields.io/badge/license-MIT-7048e8.svg)](LICENSE.txt) [![Linux | Windows | macOS](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-191b45.svg)](#requirements) [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3b82f6.svg)](#requirements) [![Tauri 2](https://img.shields.io/badge/tauri-2-2fa37a.svg)](#building)
+
+<br>
+
+<img src="docs/media/hero.png" alt="Cuttle Pets: a 3D anime-style desktop pet with cat ears, idling transparently over your desktop" width="420">
+
+</div>
+
+> [!NOTE]
+> **A companion to [Cuttle](https://github.com/kidchemical/Cuttle), not a part of it.** The pet is a separate app with no dependency on the Cuttle daemon — it keeps running even if Cuttle restarts. It also works fully standalone: drive it from any script over HTTP or the CLI.
+
+## What she does
+
+| Moment | Reaction |
+| --- | --- |
+| Agent starts thinking | Ponders, types at her tiny laptop |
+| Agent streams code | Typing pose with beat-synced head nod while music plays |
+| Work finishes | Cheers, waves, or dances |
+| Tests go green | Tells you in a speech bubble |
+| You go idle / lock the screen | Steps away — render loop stops, window hides |
+
+<div align="center">
+
+| Wave hello | Typing while you work |
+| --- | --- |
+| <img src="docs/media/wave.gif" alt="The pet waving hello" width="300"> | <img src="docs/media/working.gif" alt="The pet typing on a tiny laptop with a coffee mug beside her" width="300"> |
+
+<img src="docs/media/say.png" alt="The pet showing a speech bubble that says Tests are green!" width="420">
+
+<sub>Captures from a live pet. Swap in your own VRM model and she keeps every trick.</sub>
+
+</div>
 
 ## Quick start
 
+### Requirements
+
+- Linux (tested), Windows, or macOS
+- Python 3.11+ with Flask (`pip install -r requirements.txt`)
+- Node 20+ and Rust (for the Tauri window — see [Building](#building))
+- A `.vrm` model — author one free in [VRoid Studio](https://vroid.studio), or start with the bundled sample
+- Optional: Cuttle running locally, if you want her to react to agent chats
+
+### Run it
+
 ```bash
-# 1. control server
+# 1. control server (the only thing the pet window talks to)
 python3 server/server.py            # http://127.0.0.1:8790
 
 # 2. the pet window
 cd app && npm install && npm run tauri dev
 
-# 3. drive it
-python3 cli/cuttle_pet.py emote happy --intensity 0.8
-python3 cli/cuttle_pet.py event thinking
-python3 cli/cuttle_pet.py watch      # stream events
+# 3. say hi
+python3 ../cli/cuttle_pet.py say "Hello from the terminal!" --emotion happy
 ```
 
-## Model format
-
-Use **VRM** (`.vrm`), not VRChat's `.unity3d` — a Unity bundle cannot be read by
-any browser or Tauri runtime.
-
-- Free authoring: [VRoid Studio](https://vroid.studio) → export `.vrm`, no Unity needed.
-- From Unity: [UniVRM](https://github.com/vrm-c/UniVRM) (MIT) exports VRM 1.0 / 0.x.
-- Import: `cuttle-pet models --import ~/pets/reef.vrm`
-
-VRChat avatar *redistribution* is off-limits under VRChat's terms; author your
-own character. The bundled `app/public/model1.vrm` is upstream's sample and is
-covered by their asset terms, not the MIT code license — swap it before sharing.
-The laptop prop (`app/public/laptop.glb`) is Kenney's CC0 model via
-[Poly Pizza](https://poly.pizza/m/GnbwSUiVty) — public domain, no attribution
-required. It appears automatically while Cuttle is working, with a
-procedural typing pose (see `app/src/typing-pose.ts`).
-
-Bundled animation packs in `app/public/`:
-
-- `mixamo_*.fbx` — 10 Mixamo clips (waving, cheering, clapping, victory,
-  praying, defeated, joyful jump, looking, pointing, breakdance). Same bytes
-  as a [mixamo.com](https://www.mixamo.com) download (free Adobe account),
-  mirrored via GitHub. More Mixamo FBX work directly: download, drop the file
-  in `app/public/`, add a preset in `motion-controller.ts`.
-- `ual1.fbx` — [Quaternius Universal Animation Library](https://quaternius.com/packs/universalanimationlibrary.html)
-  (CC0, no attribution required). Multi-take pack; presets select takes by
-  name (`take: 'Armature|Sitting_Idle_Loop'`): sitting idle / sitting talking
-  / talking idle actions plus a `ualDance` dance. The loader
-  (`app/src/mixamo-loader.ts`) detects the Quaternius rig and retargets it
-  with the same math as Mixamo.
-- `ual2.fbx` — [Universal Animation Library 2](https://quaternius.com/packs/universalanimationlibrary2.html)
-  (CC0): provides the `phoneCall` action (`Armature|Idle_TalkingPhone_Loop`).
-  The pet holds up a cellphone prop while it plays.
-
-Try them: `cuttle-pet action waving`, `cuttle-pet action sittingIdle`,
-`cuttle-pet action phoneCall`, or pick the `ualDance` dance from the pet menu.
-
-Hand props (`app/public/phone.glb`, `app/public/cup.glb`) are CC0 via
-[Poly Pizza](https://poly.pizza) (phone by Quaternius, cup by Kenney) —
-public domain. The phone appears during the `phoneCall` action; the coffee
-cup appears in the right hand every 40–90s of sustained working for a ~4s
-sip (`applySipPose` in `app/src/typing-pose.ts`).
-
-Extra character models (`models/model2.vrm` … `model5.vrm`) are the remaining
-defaults from upstream [claw-sama](https://github.com/luckybugqqq/claw-sama)
-(MIT) — pick them in Settings → Model. Note: simple models without VRM
-expressions or detailed eyes degrade gracefully (unknown expression names
-are silently ignored), so animations, props, and lip-sync keep working.
-
-## Headphones and music motion
-
-Open **Settings → Music** to fit headphones to the current character. Position
-(offsets as a percentage of model height), overall scale, width/height/depth,
-and rotation save independently for each model. Enable **Preview** to adjust
-without playing music; the panel moves down so you can see the head. Changes
-apply immediately and keep your camera position.
-
-Music motion uses a forward/back pitch nod with a small side sway. Adjust both
-amounts, fallback tempo, and occasional idle dancing in the same tab. Headphones
-and a gentler nod stay active while typing; sipping briefly suppresses the nod.
-Full dances only run when the pet is idle. The mug remains beside the laptop
-while working and moves to the hand during sips. The keyboard follows the
-character's actual typing hands, with palms down and a slight downward gaze.
-
-On Linux with `pw-record` and `wpctl`, beat sync analyzes the default PipeWire
-**playback sink monitor**, not the microphone. It filters the bass band up to
-200 Hz, detects adaptive amplitude peaks, and locks tempo when recent intervals
-are consistent. The default detection range is **95–195 BPM**. Range, bass cutoff,
-and peak threshold are adjustable. The status shows whether capture is working
-and whether a tempo has been detected. Without a reliable lock, the fallback
-tempo keeps the nod moving; half/double-tempo ambiguity can still occur. Audio
-stays in memory and is neither saved nor sent anywhere. Turning off music
-reactions, or all three audio features (beat sync, amplitude response, and end
-reactions), stops capture. Playback device changes reconnect the monitor.
-MPRIS player status also enables music reactions when audio capture is unavailable.
-
-Nods use a continuous phase with gradual tempo/phase corrections, so noisy peaks
-and fallback changes do not restart the movement. Amplitude response (enabled
-by default) smoothly increases nod strength with playback loudness; adjust its
-gain or turn it off in Music settings. After at least ten seconds of playback,
-sustained silence triggers one short clap or cheer, then typing/idle resumes.
-Brief gaps, capture failures, and disabled music reactions do not trigger it.
-This is based on silence, so pausing for several seconds also qualifies.
-
-Viewport controls (toolbar, chat controls, mood bar, and resize hit areas) hide
-when the pointer leaves the pet window and return on hover. Text bubbles remain
-visible. Settings and history dialogs stay open until closed. Right-click the
-tray icon → **Animation** to play any bundled gesture once; a new selection
-replaces the previous animation, preserves the camera, then returns to typing
-if Cuttle is still working, or idle otherwise.
-
-The bridge sends a working-state heartbeat every poll, and reconnecting renderers
-receive the current state immediately. Heartbeats do not replay speech or gestures.
-Playback signals expire if monitoring stops; silence takes priority over stale
-player status when capture is available.
-
-## Control API
-
-| Verb | Body | Effect |
-|---|---|---|
-| `GET /events` | — | **SSE**. The only inbound channel to the pet. |
-| `POST /emote` | `emotion`, `emotionIntensity`, `emotionDuration`, `vrchat`, `value` | set expression |
-| `POST /action` | `action`, `hold` | play a named animation |
-| `POST /say` | `text`, `emotion`, `audioUrl`, `appendText`, `clearText` | text bubble + lip-sync |
-| `POST /pet/event` | `state`, `detail`, `emotion`, `action` | chat-activity → reaction |
-| `POST /clear` | — | clear the bubble |
-| `POST /click-through` | `enabled` | toggle mouse pass-through |
-| `GET/POST /settings` | — | renderer settings store |
-| `GET /model/list`, `POST /model/import`, `GET /model/serve/<name>` | | models |
-
-`state` is one of `thinking`, `streaming`, `done`, `error`, `idle`.
-
-Screensaver / lock: the server polls the OS (GNOME/Mutter ScreenSaver,
-freedesktop ScreenSaver, logind `LockedHint`, `xscreensaver-command`) and
-broadcasts `{"suspended": true/false}` on `/events`. The pet then stops its
-render loop and hides its window, so nothing fights the screensaver for the
-GPU; it reappears on unlock. `GET /screen` reports the current state
-(`CUTTLE_PET_NO_SCREEN_MONITOR=1` disables the poller). Note:
-`document.hidden` alone cannot detect a fullscreen saver over an always-on-top
-window, which is why this is server-driven.
-
-Presets — emotions: `happy sad angry surprised think awkward question curious
-neutral love flirty greeting relaxed`. Actions: `akimbo playFingers
-scratchHead stretch happy angry greeting excited shy point salute angryPump`.
-
-`vrchat` passes a raw VRChat expression name + value for models outside the
-preset vocabulary (upstream's presets are a hardcoded blend of `aa`/`ee`/`happy`
-etc., so an unusual rig may need this).
-
-## Launch on Linux
-
-Set up the pet's Python environment once:
+Or launch everything at once on Linux:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
 bash start_pet.sh
 ```
 
-The launcher starts the control server, Cuttle bridge, and Tauri development
-window. It reuses an existing control server and stops only the Python processes
-it started when you exit. Server logs are in `temp/pet-server.log`.
-`CUTTLE_PET_PYTHON` overrides the interpreter; otherwise it uses `.venv/bin/python`,
-then `python3`. The fallback must have Flask installed.
-
-## Window placement and desktop login
-
-Window position and size are saved on normal exit and restored on the next
-launch using Tauri's window-state plugin. Quit from the pet tray menu to save.
-On Wayland desktops the launcher uses Xwayland when available, since native
-Wayland restricts apps from restoring absolute window positions. Set
-`CUTTLE_PET_BACKEND=wayland` to use native Wayland instead (position restoration
-then depends on your compositor).
-
-Enable or disable automatic launch at Linux desktop login:
+### Try it
 
 ```bash
-.venv/bin/python scripts/autostart.py enable
-.venv/bin/python scripts/autostart.py status
-.venv/bin/python scripts/autostart.py disable
+python3 cli/cuttle_pet.py status
+python3 cli/cuttle_pet.py emote surprised --intensity 0.8
+python3 cli/cuttle_pet.py action greeting
+python3 cli/cuttle_pet.py event thinking --detail "Reading three files…"
+python3 cli/cuttle_pet.py event done --detail "Test complete!"
+python3 cli/cuttle_pet.py watch      # stream pet events to stdout
 ```
 
-Login startup runs `start_pet.sh` without opening a terminal. Logs are in
-`temp/autostart.log`. It uses the same development launch as your manual command;
-Node, Rust, and the project directory must remain installed. A launcher lock
-prevents duplicate launches. Your saved Cuttle connection is reused automatically
-and retries if Cuttle starts later. Passwords are never stored.
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph You
+    CLI[cuttle-pet CLI]
+    Bridge[Cuttle bridge]
+    Any[Any script / HTTP]
+  end
+  CLI & Bridge & Any --> Server[Flask control server :8790<br/>settings · models · SSE events]
+  Server --> Pet[Tauri pet window<br/>transparent · always-on-top<br/>three.js + three-vrm]
+  Pet -. window pos .-> Pet
+```
+
+| Path | Purpose |
+| --- | --- |
+| `app/` | Tauri + React + three.js renderer (vendored from [claw-sama](https://github.com/luckybugqqq/claw-sama), MIT — see `app/VENDORED.md`) |
+| `server/server.py` | Flask control server — the only thing the pet window talks to |
+| `cli/cuttle_pet.py` | `emote` / `action` / `say` / `event` / `click-through` / model import |
+| `bridge/` | Polls Cuttle live-status and drives pet reactions |
+| `models/` | Your `.vrm` files (gitignored — never shipped) |
+| `scripts/autostart.py` | Linux desktop-login autostart |
 
 ## Cuttle bridge
 
-The bridge watches **all chats belonging to your Cuttle account** by default,
-including newly created chats. It queries them in batches of 12 every three
-seconds. Busy chats take priority over idle or cancelled chats. When all observed
-work finishes, the pet reacts with `done`, then returns to idle on the next poll.
-Very short turns between polls may be missed. This is an activity indicator;
-it does not read or speak full assistant replies or distinguish successful
-completion from every error/cancellation outcome.
-
-Launch normally:
+The bridge watches **all chats on your Cuttle account** (batched, every 3 seconds) and turns activity into reactions: thinking → ponders, streaming → types, done → celebrates, then back to idle. It's an activity indicator — it never reads or speaks full replies.
 
 ```bash
-bash start_pet.sh
+bash start_pet.sh   # includes the bridge
 ```
 
-Open the pet's **Settings → Cuttle** tab and select **Connect to Cuttle**.
-Sign in with your normal Cuttle username and password once. The pet saves a
-separate login session locally and automatically reconnects after launches,
-Cuttle restarts, or machine reboots. No browser developer tools or pasted tokens
-are needed. Your password is never saved, and the saved session never reaches
-the renderer. **Disconnect** removes it and revokes that pet login in Cuttle
-when Cuttle is reachable.
-
-The equivalent terminal setup (also works before launching the pet):
+Then open the pet's **Settings → Cuttle → Connect to Cuttle** and sign in once with your normal Cuttle username and password. The pet keeps a separate login session (owner-only file, token not password) and reconnects itself after reboots. Restrict to specific chats when you want:
 
 ```bash
-.venv/bin/python cli/cuttle_pet.py connect
-bash start_pet.sh
+python3 bridge/bridge.py --session 868 --session 869 --verbose
+CUTTLE_PET_BRIDGE=0 bash start_pet.sh   # no bridge, direct CLI control only
 ```
 
-The CLI prompts for your username and password; password entry is hidden.
-Check or remove the saved connection with:
+## Control API
+
+The server is plain HTTP on `127.0.0.1:8790` — anything can drive her:
+
+| Verb | Effect |
+| --- | --- |
+| `GET /events` | **SSE** — the only inbound channel to the pet |
+| `POST /emote` | `emotion`, `emotionIntensity`, `emotionDuration` — set expression |
+| `POST /action` | `action`, `hold` — play a named animation |
+| `POST /say` | `text`, `emotion` — speech bubble + lip-sync |
+| `POST /pet/event` | `state` (`thinking`/`streaming`/`done`/`error`/`idle`) + `detail` — chat-activity reaction |
+| `POST /clear` | Clear the bubble |
+| `POST /click-through` | Toggle mouse pass-through |
+| `GET/POST /settings` | Renderer settings store |
+| `GET /model/list`, `POST /model/import` | Manage models |
+
+Emotions: `happy sad angry surprised think awkward question curious neutral love flirty greeting relaxed`.
+Actions: `akimbo playFingers scratchHead stretch happy angry greeting excited shy point salute angryPump`, plus Mixamo and Quaternius dance packs.
+
+## Models & animation
+
+Use **VRM** (`.vrm`) — export free from [VRoid Studio](https://vroid.studio), or from Unity via [UniVRM](https://github.com/vrm-c/UniVRM) (MIT). Import with `cuttle-pet models --import file.vrm`.
+
+Bundled motion: 10 Mixamo clips (Adobe free account terms), the CC0 [Quaternius](https://quaternius.com) animation libraries (sitting, talking, phone call, dance), and CC0 hand props (laptop, phone, coffee cup — the cup appears for a ~4s sip every minute or so of sustained work). Beat sync nods along to your music via PipeWire, with MPRIS fallback.
+
+Full provenance for every bundled binary lives in [`docs/ASSET_LICENSES.md`](docs/ASSET_LICENSES.md) — code is MIT, assets keep their own terms.
+
+## Window & desktop
+
+Transparent, always-on-top, no decorations, skipped taskbar — drag her anywhere, Tab folds the menu, F4 settings, F5 reload. Position restores on launch (Xwayland shim on Wayland). She pauses her render loop and hides on screensaver/lock. Enable login autostart with `python3 scripts/autostart.py enable`.
+
+## Development
 
 ```bash
-.venv/bin/python cli/cuttle_pet.py connection
-.venv/bin/python cli/cuttle_pet.py connection --disconnect
+python3 -m pytest tests/          # Python suite (server, bridge, beats)
+cd app && npx tsc --noEmit        # renderer typecheck
 ```
-
-Cuttle must be running (default `https://127.0.0.1:8080`). The panel supports
-other local HTTPS ports. Local Cuttle's self-signed certificate is accepted;
-remote destinations and credential redirects are rejected. Saved credentials
-live in `~/.cuttle-pet/cuttle-connection.json` (or `CUTTLE_PET_DATA`) with owner-only
-file permissions (0600), and are stored as a login token, not encrypted. Do not
-share that file. Cuttle currently expires login sessions after 30 days; the
-panel shows **Sign-in expired** when you need to reconnect. When Cuttle is merely
-offline, it preserves the connection and retries automatically.
-
-Run the bridge separately, or restrict it to selected chats:
-
-```bash
-.venv/bin/python bridge/bridge.py --all-chats --verbose
-.venv/bin/python bridge/bridge.py --session 868 --session 869 --verbose
-.venv/bin/python bridge/bridge.py --all-chats --once --verbose
-```
-
-`CUTTLE_PET_SESSIONS=868,869` also restricts the launcher bridge. Set
-`CUTTLE_PET_BRIDGE=0` to launch without the bridge, useful for direct CLI tests.
-
-## Terminal tests
-
-With the pet running, these commands drive it directly without Cuttle:
-
-```bash
-.venv/bin/python cli/cuttle_pet.py status
-.venv/bin/python cli/cuttle_pet.py say "Hello from the terminal!" --emotion happy
-.venv/bin/python cli/cuttle_pet.py emote surprised --intensity 0.8
-.venv/bin/python cli/cuttle_pet.py action greeting
-.venv/bin/python cli/cuttle_pet.py event thinking --detail "Testing the bridge reaction"
-.venv/bin/python cli/cuttle_pet.py event done --detail "Test complete!"
-.venv/bin/python cli/cuttle_pet.py clear
-```
-
-Use `.venv/bin/python cli/cuttle_pet.py watch` in another terminal to inspect the
-SSE events sent to the renderer. A running bridge may replace a manual reaction
-when chat activity changes; disable it for isolated tests.
-
-## Notes and gaps
-
-- **Window**: `transparent`, `alwaysOnTop`, `decorations: false`,
-  `skipTaskbar`. Drag inside the window, resize handles, pin toggle (Tab folds
-  the menu, F4 settings, F5 reload). **Click-through** and **clickable** are the
-  same toggle — clickable captures input on the pet so you can drag and poke it;
-  click-through lets clicks reach the desktop behind.
-- **Gaze tracking** works (mouse and camera modes); it queries native window
-  bounds, which on Windows may jitter.
-- **Not wired**: TTS/`audioUrl` (plumbing exists, no engine — plug one in at
-  `/preview`), persona generation, screen observation, Cuttle chat input
-  (upstream's `ChatInput` posts to `/chat`, which only displays text; Cuttle owns
-  the conversation). Those are deliberately Cuttle's job.
-- Upstream `mixamo-loader.ts` is a port of lobe-vidol's `loadMixamoAnimation` —
-  check provenance if that matters to you.
-- The pet is a **separate app**, not a Cuttle Electron window. It has no
-  dependency on the Cuttle daemon and keeps running if Cuttle restarts.
-
-## Building
-
-Needs Rust + Node 20+, plus Tauri system deps:
-
-```bash
-# Debian/Ubuntu
-sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-                 librsvg2-dev patchelf build-essential curl wget file libssl-dev
-```
-
-`npm run tauri build` in `app/`. Upstream CI targets win32-x64 and darwin;
-add a linux target via `[build] target` in `src-tauri/tauri.conf.json`.
 
 ## License
 
-Renderer and assets are upstream claw-sama's work under MIT — keep
-`app/`'s notices intact when redistributing. Your own models and animations are
-yours. Check each model's own terms before shipping it.
+MIT. See [`LICENSE.txt`](LICENSE.txt). The renderer in `app/` is upstream [claw-sama](https://github.com/luckybugqqq/claw-sama) work under MIT — `app/UPSTREAM-LICENSE.txt` stays intact. Bundled models, motions, and props keep their own terms ([asset licenses](docs/ASSET_LICENSES.md)).
