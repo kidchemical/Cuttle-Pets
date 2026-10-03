@@ -4,6 +4,7 @@ import { petUrl } from './config'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { VRMScene } from './components/VRMScene'
 import type { VRMSceneHandle, TouchRegion } from './components/VRMScene'
+import { normalizeQuality, normalizeQualitySettings, presetSettings, type QualitySettings } from './render-quality'
 import { TextBubble } from './components/TextBubble'
 import type { OnVrmMessage } from './components/TextBubble'
 import { ChatInput } from './components/ChatInput'
@@ -73,6 +74,8 @@ export default function App() {
   const workingRef = useRef(false)
   const [pinned, setPinned] = useState(true)
   const [tracking, setTracking] = useState<'mouse' | 'camera'>('mouse')
+  const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => presetSettings('high'))
+  const qualityPreset = qualitySettings.preset
   const [showText, setShowText] = useState(true)
   const [collapsed, setCollapsed] = useState(false)
 
@@ -119,6 +122,7 @@ export default function App() {
         if (s.showText !== undefined) setShowText(s.showText)
         if (s.hideUI !== undefined) setHideUI(s.hideUI)
         if (s.tracking) { setTracking(s.tracking); sceneRef.current?.setTrackingMode(s.tracking) }
+        if (s.quality !== undefined) setQualitySettings(normalizeQualitySettings(s.quality))
         if (s.volume !== undefined) { setVolume(s.volume); LipSync.getInstance().setVolume(s.volume); sceneRef.current?.setBgmVolume(s.volume) }
         if (s.uiAlign) setUiAlign(s.uiAlign)
         if (s.hideMood !== undefined) setHideMood(s.hideMood)
@@ -149,13 +153,13 @@ export default function App() {
         const response = await fetch(petUrl('/model/list'))
         const data = await response.json()
         const models = [{ name: 'Default character', url: DEFAULT_MODEL }, ...(data.models || []).map((m: { name: string; url: string }) => ({ name: m.name, url: petUrl(m.url) }))]
-        if (active) await invoke('update_tray_models', { models, selected: modelPath, musicEnabled, animations: Object.entries(actionPresets).map(([id, preset]) => ({ id, name: preset.label })) })
+        if (active) await invoke('update_tray_models', { models, selected: modelPath, musicEnabled, animations: Object.entries(actionPresets).map(([id, preset]) => ({ id, name: preset.label })), quality: qualityPreset })
       } catch (e) { console.warn('Tray model refresh failed', e) }
     }
     void refresh()
     const timer = window.setInterval(refresh, 30000)
     return () => { active = false; window.clearInterval(timer) }
-  }, [modelPath, musicEnabled])
+  }, [modelPath, musicEnabled, qualityPreset])
 
   useEffect(() => {
     const model = listen<string>('select-model', event => {
@@ -167,6 +171,11 @@ export default function App() {
     })
     const controls = listen<string>('tray-control', event => {
       if (event.payload === 'music') setMusicEnabled(value => { saveSettings({ musicEnabled: !value }); return !value })
+      if (event.payload.startsWith('quality:')) {
+        const qs = presetSettings(normalizeQuality(event.payload.slice('quality:'.length)))
+        setQualitySettings(qs)
+        saveSettings({ quality: qs })
+      }
       if (event.payload === 'text') setShowText(value => { saveSettings({ showText: !value }); return !value })
       if (event.payload === 'camera') sceneRef.current?.resetCamera()
       if (event.payload === 'pose') sceneRef.current?.resetPose()
@@ -192,6 +201,12 @@ export default function App() {
     sceneRef.current?.setTrackingMode(mode)
     setTracking(mode)
     saveSettings({ tracking: mode })
+  }, [])
+
+  const handleQualitySettingsChange = useCallback((qs: QualitySettings) => {
+    const safe = normalizeQualitySettings(qs)
+    setQualitySettings(safe)
+    saveSettings({ quality: safe })
   }, [])
 
   const handleVrmMessage: OnVrmMessage = useCallback((msg) => {
@@ -443,7 +458,7 @@ export default function App() {
       {modelError && <div role="alert" data-no-passthrough style={{ position: 'absolute', top: 20, left: 16, right: 16, zIndex: 1000, background: '#402020', color: 'white', padding: 12, borderRadius: 8 }}>
         {modelError}<button onClick={() => { setModelError(''); setModelPath(DEFAULT_MODEL); saveSettings({ modelPath: DEFAULT_MODEL }) }}>Use default model</button>
       </div>}
-      <VRMScene ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
+      <VRMScene ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
       <div style={hoverControlsStyle}>{!hideMood && <MoodIndicator uiAlign={uiAlign} />}</div>
       <TextBubble onMessage={handleVrmMessageWithActivity} enabled={showText} ttsEnabled={ttsEnabled} />
       <div style={hoverControlsStyle}>{!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}</div>
@@ -472,6 +487,8 @@ export default function App() {
         onTtsEnabledChange={(v) => { setTtsEnabled(v); saveSettings({ ttsEnabled: v }) }}
         tracking={tracking}
         onTrackingChange={handleTrackingChange}
+        qualitySettings={qualitySettings}
+        onQualitySettingsChange={handleQualitySettingsChange}
         volume={volume}
         onVolumeChange={handleVolumeChange}
         uiAlign={uiAlign}

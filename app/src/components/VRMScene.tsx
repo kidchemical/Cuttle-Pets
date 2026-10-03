@@ -12,7 +12,6 @@ import { LipSync } from '../lip-sync'
 import { MotionController } from '../motion-controller'
 import { buildTypingPoseCache, restoreTypingPose, applyTypingPose, applySipPose, applyMusicAngles } from '../typing-pose'
 import type { TypingPoseCache } from '../typing-pose'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 
 export type TouchRegion = 'head' | 'arm' | 'leg' | 'chest' | 'belly' | 'buttocks'
 
@@ -20,6 +19,7 @@ interface VRMSceneProps {
   musicSettings?: MusicSettings
   headphoneFit?: HeadphoneFit
   modelPath: string
+  qualitySettings?: QualitySettings
   idleAnimationPath?: string
   onTouch?: (region: TouchRegion) => void
   onModelError?: (message: string) => void
@@ -27,6 +27,14 @@ interface VRMSceneProps {
 }
 
 export type TrackingMode = 'mouse' | 'camera'
+
+import type { RenderQuality, QualitySettings } from '../render-quality'
+import { QUALITY_PRESETS, normalizeQualitySettings } from '../render-quality'
+import { defaultViewFromBounds, isValidView, type CameraView } from '../camera-framing'
+import { collectEarMorphSlots, dampenEarMorphs, type EarMorphSlot } from '../ear-morph-dampen'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+export type { RenderQuality, QualitySettings, QualityPresetOrCustom, QualityDetails } from '../render-quality'
+export { RENDER_QUALITIES, QUALITY_PRESETS as QUALITY_CONFIGS, normalizeQuality, presetSettings, resolvePreset, normalizeQualitySettings } from '../render-quality'
 
 export interface VRMSceneHandle {
   setEmotion: (emotion: string, intensity?: number) => void
@@ -178,6 +186,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   modelPath,
   musicSettings = DEFAULT_MUSIC,
   headphoneFit = DEFAULT_FIT,
+  qualitySettings,
   idleAnimationPath = '/idle_loop.vrma',
   onTouch,
   onModelLoaded,
@@ -197,7 +206,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   const resetCameraRef = useRef<(() => void) | null>(null)
   // Exact camera view, persisted across model reloads so switching
   // characters never moves the user's camera.
-  const cameraStateRef = useRef<{ pivot: [number, number, number]; radius: number; theta: number; phi: number } | null>(null)
+  const cameraStateRef = useRef<CameraView | null>(null)
   const trackingModeRef = useRef<TrackingMode>('mouse')
   const motionRef = useRef<MotionController | null>(null)
   const panCameraRef = useRef<((dx: number, dy: number) => void) | null>(null)
@@ -208,6 +217,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   const musicDanceActiveRef = useRef(false)
   const musicSettingsRef = useRef(musicSettings)
   musicSettingsRef.current = musicSettings
+  const qualityDetailsRef = useRef(normalizeQualitySettings(qualitySettings))
+  qualityDetailsRef.current = normalizeQualitySettings(qualitySettings)
   const headphoneFitRef = useRef(headphoneFit)
   headphoneFitRef.current = headphoneFit
   const musicMotionRef = useRef(new MusicMotion())
@@ -331,6 +342,11 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     let orbitRadius = 2.0
     let orbitTheta = 0       // horizontal angle (radians)
     let orbitPhi = Math.PI / 2 // vertical angle (radians), PI/2 = eye level
+    // Set once a model finishes loading and the camera is framed on it.
+    // The unmount snapshot below must only run when this is true: saving the
+    // pre-framing defaults (pivot at feet, radius 2m) poisons the next load,
+    // which would restore them and show legs-only with the head cut off.
+    let framingApplied = false
 
     function updateCameraOrbit() {
       camera.position.set(
@@ -359,6 +375,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     let vrm: VRM | null = null
     let motion: MotionController | null = null
     let emote: EmoteController | null = null
+    let earMorphSlots: EarMorphSlot[] = []
     let handPose: HandPoseCache | null = null
     let typingCache: TypingPoseCache | null = null
     let laptop: THREE.Object3D | null = null
@@ -412,23 +429,23 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         const modelCenter = new THREE.Vector3()
         box.getSize(modelSize)
         box.getCenter(modelCenter)
-        modelCenter.y += modelSize.y / 3.2 // pivot at neck height
 
-        const radians = (FOV / 2 * Math.PI) / 180
-        const offsetX = modelSize.x / 16
-        const offsetY = modelSize.y / 10
-        const offsetZ = (modelSize.y / 4.2) / Math.tan(radians)
-
-        pivot.copy(modelCenter)
-        orbitRadius = offsetZ
-        orbitTheta = Math.atan2(offsetX, offsetZ)
-        orbitPhi = Math.PI / 2 - Math.atan2(offsetY, offsetZ)
+        const framing = defaultViewFromBounds(modelSize, modelCenter, FOV)
+        pivot.set(framing.pivot[0], framing.pivot[1], framing.pivot[2])
+        orbitRadius = framing.radius
+        orbitTheta = framing.theta
+        orbitPhi = framing.phi
         updateCameraOrbit()
+        framingApplied = true
 
         // Restore the exact pre-switch view when changing characters.
         // First load (no saved view) keeps the model-fitted defaults above.
+        // The snapshot is validated: a view saved before any model finished
+        // loading (e.g. StrictMode double-mount) holds the pre-framing orbit
+        // defaults (pivot at feet, radius 2m) and must never be restored —
+        // that parks the camera at foot level (legs-only, head cut off).
         const savedView = cameraStateRef.current
-        if (savedView) {
+        if (savedView && isValidView(savedView)) {
           pivot.set(savedView.pivot[0], savedView.pivot[1], savedView.pivot[2])
           orbitRadius = savedView.radius
           orbitTheta = savedView.theta
@@ -549,6 +566,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         // Initialize emote controller
         emote = new EmoteController(loadedVrm)
         emoteRef.current = emote
+
+        // Collect ear-mesh morph slots (blink expressions yank ear verts).
+        earMorphSlots = collectEarMorphSlots(loadedVrm.expressionManager?.expressions)
 
         // ── Initialize MotionController ──────────────────────────────────────
         motion = new MotionController(loadedVrm)
@@ -831,12 +851,26 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     }
 
     // ── Animation loop ────────────────────────────────────────────────────────
+    // Pauses when the page is hidden (minimized / locked / screensaver) so the
+    // pet deactivates instead of burning CPU/GPU underneath the screensaver.
+    // Quality caps pixel ratio + frame rate; delta is clamped so capped frames
+    // and resume-from-pause never cause animation jumps.
     const clock = new THREE.Clock()
     let animFrameId: number
+    let renderingPaused = document.hidden
+    let lastFrameAt = 0
 
     function animate() {
       animFrameId = requestAnimationFrame(animate)
-      const delta = clock.getDelta()
+      const cfg = qualityDetailsRef.current
+      const targetRatio = Math.min(window.devicePixelRatio || 1, cfg.pixelRatioCap)
+      if (renderer.getPixelRatio() !== targetRatio) renderer.setPixelRatio(targetRatio)
+      if (cfg.maxFps > 0) {
+        const now = performance.now()
+        if (now - lastFrameAt < 1000 / cfg.maxFps) return
+        lastFrameAt = now
+      }
+      const delta = Math.min(clock.getDelta(), 0.05)
 
       if (vrm) {
         // Remove last frame’s procedural layer, including bones absent from the idle clip.
@@ -966,9 +1000,15 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
         // 8. Expression manager (apply blink etc.)
         vrm.expressionManager?.update()
+        // 8b. Soften blink-driven ear yanks; springs own ear motion.
+        if (earMorphSlots.length) dampenEarMorphs(earMorphSlots)
 
-        // 8. Spring bone physics
-        vrm.springBoneManager?.update(delta)
+        // 8. Spring bone physics (ears, hair, clothes). Always on unless the
+        // user explicitly disables it in Quality settings — secondary motion
+        // is what keeps fast twitches from looking like they snap.
+        if (qualityDetailsRef.current.springBones) {
+          vrm.springBoneManager?.update(delta)
+        }
       }
 
       renderer.render(scene, camera)
@@ -1005,16 +1045,39 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       }
     }
 
-    animate()
+    // Pause the loop while hidden; resume on visible. rAF stops firing on its
+    // own in background tabs, but explicit cancel guarantees no work (and no
+    // GPU presents) under a screensaver/lock screen that keeps the page alive.
+    function onVisibilityChange() {
+      if (document.hidden) {
+        renderingPaused = true
+        cancelAnimationFrame(animFrameId)
+      } else if (renderingPaused) {
+        renderingPaused = false
+        clock.getDelta()
+        lastFrameAt = 0
+        animFrameId = requestAnimationFrame(animate)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    if (!renderingPaused) {
+      animFrameId = requestAnimationFrame(animate)
+    }
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
     return () => {
-      // Snapshot the view so a model reload restores it verbatim.
-      cameraStateRef.current = {
-        pivot: [pivot.x, pivot.y, pivot.z],
-        radius: orbitRadius,
-        theta: orbitTheta,
-        phi: orbitPhi,
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      // Snapshot the view so a model reload restores it verbatim — but only
+      // when this run actually framed a model. An unmount before the load
+      // finishes (StrictMode double-mount, fast model switches) must not
+      // overwrite a good snapshot with the pre-framing defaults.
+      if (framingApplied) {
+        cameraStateRef.current = {
+          pivot: [pivot.x, pivot.y, pivot.z],
+          radius: orbitRadius,
+          theta: orbitTheta,
+          phi: orbitPhi,
+        }
       }
       cancelAnimationFrame(animFrameId)
       window.removeEventListener('mousemove', onMouseMove)

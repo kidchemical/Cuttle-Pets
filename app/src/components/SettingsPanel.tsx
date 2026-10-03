@@ -7,6 +7,7 @@ import { X, Play, Loader, Sparkles, Trash2, Upload, Music } from 'lucide-react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { dancePresets, type DancePreset } from '../motion-controller'
+import { RENDER_QUALITIES, presetSettings, resolvePreset, type QualityDetails, type QualitySettings } from '../render-quality'
 
 interface DanceItem {
   id: string
@@ -36,6 +37,8 @@ interface SettingsPanelProps {
   onTtsEnabledChange: (v: boolean) => void
   tracking: 'mouse' | 'camera'
   onTrackingChange: (v: 'mouse' | 'camera') => void
+  qualitySettings: QualitySettings
+  onQualitySettingsChange: (v: QualitySettings) => void
   volume: number
   onVolumeChange: (v: number) => void
   uiAlign: 'left' | 'right'
@@ -54,7 +57,7 @@ interface SettingsPanelProps {
   onDanceChange: (id: string, preset?: DancePreset) => void
 }
 
-type Tab = 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance'
+type Tab = 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance' | 'quality'
 
 const BUILTIN_MODELS = ['/model1.vrm', '/model2.vrm', '/model3.vrm', '/model4.vrm', '/model5.vrm']
 
@@ -109,6 +112,7 @@ export function SettingsPanel({
   showText, onShowTextChange,
   ttsEnabled, onTtsEnabledChange,
   tracking, onTrackingChange,
+  qualitySettings, onQualitySettingsChange,
   volume, onVolumeChange,
   uiAlign, onUiAlignChange,
   hideMood, onHideMoodChange,
@@ -123,6 +127,16 @@ export function SettingsPanel({
   const [tab, setTab] = useState<Tab>('general')
   const [musicPreview, setMusicPreview] = useState(false)
   const handlePreview = useCallback((v: boolean) => { setMusicPreview(v); onMusicPreview(v) }, [onMusicPreview])
+  const updateQualityDetails = useCallback((patch: Partial<QualityDetails>) => {
+    const details: QualityDetails = {
+      pixelRatioCap: qualitySettings.pixelRatioCap,
+      maxFps: qualitySettings.maxFps,
+      springBones: qualitySettings.springBones,
+      ...patch,
+    }
+    onQualitySettingsChange({ ...details, preset: resolvePreset(details) })
+  }, [qualitySettings, onQualitySettingsChange])
+  const presetLabel = (q: string) => q === 'mid' ? t('中', 'Mid') : q === 'low' ? t('低', 'Low') : q === 'high' ? t('高', 'High') : q === 'ultra' ? t('超高', 'Ultra') : t('自定义', 'Custom')
   const [modelImportError, setModelImportError] = useState('')
   const [models, setModels] = useState<{ name: string; url: string }[]>([])
   const [soulContent, setSoulContent] = useState('')
@@ -339,13 +353,13 @@ export function SettingsPanel({
 
         {/* Tabs */}
         <div style={tabBarStyle}>
-          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'dance'] as const).map((tb) => (
+          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'dance', 'quality'] as const).map((tb) => (
             <button
               key={tb}
               onClick={() => setTab(tb)}
               style={{ ...tabStyle, ...(tab === tb ? activeTabStyle : {}) }}
             >
-              {{ music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance') }[tb]}
+              {{ music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), quality: t('画质', 'Quality') }[tb]}
             </button>
           ))}
         </div>
@@ -825,6 +839,79 @@ export function SettingsPanel({
                 <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 4 }}>
                   {t('选择 .vmd 舞蹈文件后，可选择配套 .mp3 音乐文件', 'Select a .vmd dance file, then optionally pick a matching .mp3')}
                 </div>
+              </div>
+            </div>
+          )}
+          {tab === 'quality' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('预设', 'Preset')}</span>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {RENDER_QUALITIES.map((q) => (
+                    <button
+                      key={q}
+                      onClick={() => onQualitySettingsChange(presetSettings(q))}
+                      style={{
+                        ...smallBtnStyle,
+                        background: qualitySettings.preset === q ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                        borderColor: qualitySettings.preset === q ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                      }}
+                    >
+                      {presetLabel(q)}
+                    </button>
+                  ))}
+                  {qualitySettings.preset === 'custom' && (
+                    <span style={{ ...smallBtnStyle, background: 'rgba(100, 160, 255, 0.4)', borderColor: 'rgba(100, 160, 255, 0.6)', cursor: 'default' }}>
+                      {presetLabel('custom')}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('渲染精度', 'Render scale')}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={3}
+                    step={0.25}
+                    value={qualitySettings.pixelRatioCap}
+                    onChange={(e) => updateQualityDetails({ pixelRatioCap: Number(e.target.value) })}
+                    style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                  />
+                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 36, textAlign: 'right' }}>{parseFloat(qualitySettings.pixelRatioCap.toFixed(2))}x</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('帧率上限', 'Frame rate cap')}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="range"
+                    min={15}
+                    max={144}
+                    step={1}
+                    value={qualitySettings.maxFps === 0 ? 144 : qualitySettings.maxFps}
+                    disabled={qualitySettings.maxFps === 0}
+                    onChange={(e) => updateQualityDetails({ maxFps: Number(e.target.value) })}
+                    style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)', opacity: qualitySettings.maxFps === 0 ? 0.4 : 1 }}
+                  />
+                  <button
+                    onClick={() => updateQualityDetails({ maxFps: qualitySettings.maxFps === 0 ? 60 : 0 })}
+                    title={t('不设上限', 'Uncapped')}
+                    style={{
+                      ...smallBtnStyle,
+                      minWidth: 44,
+                      background: qualitySettings.maxFps === 0 ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                      borderColor: qualitySettings.maxFps === 0 ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                    }}
+                  >
+                    {qualitySettings.maxFps === 0 ? '∞' : `${qualitySettings.maxFps}`}
+                  </button>
+                </div>
+              </div>
+              <ToggleRow label={t('弹簧骨骼（耳朵/头发）', 'Spring bones (ears/hair)')} value={qualitySettings.springBones} onChange={(v) => updateQualityDetails({ springBones: v })} />
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>
+                {t('快速动作（如耳朵抽动）需要较高的帧率才会顺滑；低帧率下看起来会像突然抽一下。', 'Fast motion such as ear twitches needs a higher frame rate to stay smooth; at low caps it reads as a snap.')}
               </div>
             </div>
           )}

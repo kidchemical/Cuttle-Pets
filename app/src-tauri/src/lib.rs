@@ -173,9 +173,15 @@ struct TrayModel { name: String, url: String }
 #[derive(serde::Deserialize)]
 struct TrayAnimation { name: String, id: String }
 
-fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music_enabled: bool, animations: &[TrayAnimation]) -> tauri::Result<Menu<tauri::Wry>> {
+fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music_enabled: bool, animations: &[TrayAnimation], quality: &str) -> tauri::Result<Menu<tauri::Wry>> {
     let show = MenuItem::with_id(app, "show", "Show / Hide", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+    let quality_labels = [("low", "Low"), ("mid", "Mid"), ("high", "High"), ("ultra", "Ultra")];
+    let quality_items: Vec<CheckMenuItem<tauri::Wry>> = quality_labels.iter().map(|(id, label)|
+        CheckMenuItem::with_id(app, format!("quality:{}", id), *label, true, *id == quality, None::<&str>)
+    ).collect::<tauri::Result<_>>()?;
+    let quality_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = quality_items.iter().map(|item| item as &dyn IsMenuItem<tauri::Wry>).collect();
+    let quality_menu = Submenu::with_items(app, "Quality", true, &quality_refs)?;
     let models_items: Vec<CheckMenuItem<tauri::Wry>> = models.iter().map(|model|
         CheckMenuItem::with_id(app, format!("model:{}", model.url), &model.name, true, model.url == selected, None::<&str>)
     ).collect::<tauri::Result<_>>()?;
@@ -192,18 +198,18 @@ fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music
     let pose = MenuItem::with_id(app, "pose", "Stop animation", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    Menu::with_items(app, &[&show, &models_menu, &animation_menu, &music, &text, &camera, &pose, &settings, &sep, &quit])
+    Menu::with_items(app, &[&show, &models_menu, &animation_menu, &quality_menu, &music, &text, &camera, &pose, &settings, &sep, &quit])
 }
 
 #[tauri::command]
-fn update_tray_models(app: tauri::AppHandle, models: Vec<TrayModel>, selected: String, music_enabled: bool, animations: Vec<TrayAnimation>) -> Result<(), String> {
-    let menu = tray_menu(&app, &models, &selected, music_enabled, &animations).map_err(|e| e.to_string())?;
+fn update_tray_models(app: tauri::AppHandle, models: Vec<TrayModel>, selected: String, music_enabled: bool, animations: Vec<TrayAnimation>, quality: String) -> Result<(), String> {
+    let menu = tray_menu(&app, &models, &selected, music_enabled, &animations, &quality).map_err(|e| e.to_string())?;
     if let Some(tray) = app.tray_by_id("cuttle-pet") { tray.set_menu(Some(menu)).map_err(|e| e.to_string())?; }
     Ok(())
 }
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let menu = tray_menu(app.handle(), &[TrayModel { name: "Default character".into(), url: "/model1.vrm".into() }], "/model1.vrm", true, &[])?;
+    let menu = tray_menu(app.handle(), &[TrayModel { name: "Default character".into(), url: "/model1.vrm".into() }], "/model1.vrm", true, &[], "high")?;
 
     TrayIconBuilder::with_id("cuttle-pet")
         .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))?)
