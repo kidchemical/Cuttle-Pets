@@ -117,6 +117,27 @@ def pet_event(state: str, detail: str = "") -> None:
     _post(f"{PET}/pet/event", {"state": state, "detail": detail})
 
 
+# Consecutive Cuttle poll failures before the pet is told Cuttle went quiet.
+# Without this the pet freezes in its last state (e.g. typing forever)
+# when Cuttle is closed.
+IDLE_AFTER_FAILURES = 2
+# While busy, re-assert the state this often so text bubbles and the working
+# pose refresh instead of appearing once and going stale.
+HEARTBEAT_SEC = 60.0
+# A busy status with byte-identical detail this long means the Cuttle-side
+# flag is jammed (zombie session): stand the pet down to idle. Any change
+# (new detail, done, real idle) revives normal reporting immediately.
+STALE_BUSY_SEC = 900.0
+
+
+def state_after_poll_failure(last: str | None, failures: int) -> tuple[str, str] | None:
+    """Fallback (state, detail) once Cuttle has been unreachable for a while,
+    else None to keep waiting silently."""
+    if failures >= IDLE_AFTER_FAILURES and last in ("thinking", "streaming"):
+        return "idle", ""
+    return None
+
+
 def pet_sync(state: str) -> None:
     _post(f"{PET}/pet/sync", {"state": state})
 
@@ -152,7 +173,11 @@ def main(argv: list[str] | None = None) -> int:
 
     global CUTTLE
     last = None
+    announced: tuple[str, str] | None = None
+    last_emit = 0.0
+    stood_down_from: tuple[str, str] | None = None
     failed = False
+    failures = 0
     connection_notice = None
     while True:
         if a.parent_pid:
@@ -177,18 +202,30 @@ def main(argv: list[str] | None = None) -> int:
                 sessions = discover_sessions()
             state, detail = fetch_state_for(sessions)
             failed = False
+            failures = 0
             if state == "idle" and last in ("thinking", "streaming"):
                 state, detail = "done", ""
         except RuntimeError as exc:
             if not failed:
                 print(f"cuttle poll failed: {exc}\nOpen pet Settings → Cuttle, or run: .venv/bin/python cli/cuttle_pet.py connect", file=sys.stderr)
             failed = True
-            if a.once:
-                return 1
-            time.sleep(a.interval)
-            continue
+            failures += 1
+            fallback = state_after_poll_failure(last, failures)
+            if fallback is None:
+                if a.once:
+                    return 1
+                time.sleep(a.interval)
+                continue
+            # Cuttle has been unreachable for a while: report idle so the
+            # pet stops working instead of freezing mid-typing.
+            state, detail = fallback
 
-        if state != last:
+        current = (state, detail)
+        now = time.monotonic()
+        if stood_down_from is not None and current == stood_down_from:
+            # Frozen zombie status; stay quiet until something actually changes.
+            pass
+        elif current != announced:
             if a.verbose:
                 print(f"activity: {last} -> {state} ({detail})", file=sys.stderr)
             try:
@@ -199,12 +236,44 @@ def main(argv: list[str] | None = None) -> int:
                     return 1
                 time.sleep(a.interval)
                 continue
+            announced = current
             last = state
+            last_emit = now
+            stood_down_from = None
+        elif state in ("thinking", "streaming"):
+            if now - last_emit >= STALE_BUSY_SEC:
+                # Same busy detail for 15 minutes: Cuttle-side flag is jammed.
+                if a.verbose:
+                    print(f"activity: {state} stale, standing down to idle", file=sys.stderr)
+                try:
+                    pet_event("idle", "")
+                except RuntimeError as exc:
+                    print(f"pet emit failed: {exc}", file=sys.stderr)
+                    if a.once:
+                        return 1
+                    time.sleep(a.interval)
+                    continue
+                announced = ("idle", "")
+                last_emit = now
+                stood_down_from = current
+                # Keep `last` as the busy state so a real finish still maps
+                # to the done celebration instead of a bare idle.
+            elif now - last_emit >= HEARTBEAT_SEC:
+                try:
+                    pet_event(state, detail)
+                except RuntimeError as exc:
+                    print(f"pet emit failed: {exc}", file=sys.stderr)
+                    if a.once:
+                        return 1
+                    time.sleep(a.interval)
+                    continue
+                last_emit = now
 
         # Reassert the working flag after renderer/server reconnects, without
-        # replaying text or one-shot actions on every poll.
+        # replaying text or one-shot actions on every poll. Uses the last
+        # announced state so a zombie stand-down is not overridden.
         try:
-            pet_sync(state)
+            pet_sync(announced[0] if announced else state)
         except RuntimeError as exc:
             print(f"pet sync failed: {exc}", file=sys.stderr)
         if a.once:

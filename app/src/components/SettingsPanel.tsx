@@ -130,7 +130,6 @@ export function SettingsPanel({
   const updateQualityDetails = useCallback((patch: Partial<QualityDetails>) => {
     const details: QualityDetails = {
       pixelRatioCap: qualitySettings.pixelRatioCap,
-      maxFps: qualitySettings.maxFps,
       springBones: qualitySettings.springBones,
       ...patch,
     }
@@ -882,37 +881,7 @@ export function SettingsPanel({
                   <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 36, textAlign: 'right' }}>{parseFloat(qualitySettings.pixelRatioCap.toFixed(2))}x</span>
                 </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 14 }}>{t('帧率上限', 'Frame rate cap')}</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <input
-                    type="range"
-                    min={15}
-                    max={144}
-                    step={1}
-                    value={qualitySettings.maxFps === 0 ? 144 : qualitySettings.maxFps}
-                    disabled={qualitySettings.maxFps === 0}
-                    onChange={(e) => updateQualityDetails({ maxFps: Number(e.target.value) })}
-                    style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)', opacity: qualitySettings.maxFps === 0 ? 0.4 : 1 }}
-                  />
-                  <button
-                    onClick={() => updateQualityDetails({ maxFps: qualitySettings.maxFps === 0 ? 60 : 0 })}
-                    title={t('不设上限', 'Uncapped')}
-                    style={{
-                      ...smallBtnStyle,
-                      minWidth: 44,
-                      background: qualitySettings.maxFps === 0 ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
-                      borderColor: qualitySettings.maxFps === 0 ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
-                    }}
-                  >
-                    {qualitySettings.maxFps === 0 ? '∞' : `${qualitySettings.maxFps}`}
-                  </button>
-                </div>
-              </div>
               <ToggleRow label={t('弹簧骨骼（耳朵/头发）', 'Spring bones (ears/hair)')} value={qualitySettings.springBones} onChange={(v) => updateQualityDetails({ springBones: v })} />
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>
-                {t('快速动作（如耳朵抽动）需要较高的帧率才会顺滑；低帧率下看起来会像突然抽一下。', 'Fast motion such as ear twitches needs a higher frame rate to stay smooth; at low caps it reads as a snap.')}
-              </div>
             </div>
           )}
         </div>

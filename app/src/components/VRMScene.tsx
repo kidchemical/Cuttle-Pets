@@ -29,8 +29,8 @@ interface VRMSceneProps {
 export type TrackingMode = 'mouse' | 'camera'
 
 import type { RenderQuality, QualitySettings } from '../render-quality'
-import { QUALITY_PRESETS, normalizeQualitySettings } from '../render-quality'
-import { defaultViewFromBounds, isValidView, type CameraView } from '../camera-framing'
+import { DEFAULT_MAX_FPS, QUALITY_PRESETS, normalizeQualitySettings } from '../render-quality'
+import { defaultViewFromBounds, isValidView, loadSavedCameraView, saveCameraView, type CameraView } from '../camera-framing'
 import { collectEarMorphSlots, dampenEarMorphs, type EarMorphSlot } from '../ear-morph-dampen'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 export type { RenderQuality, QualitySettings, QualityPresetOrCustom, QualityDetails } from '../render-quality'
@@ -356,6 +356,19 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       )
       camera.lookAt(pivot)
     }
+
+    // Snapshot the view to the session ref + localStorage (survives restarts).
+    // Called on user-driven moves only — never on model-fit framing.
+    function saveCameraViewNow() {
+      const view = {
+        pivot: [pivot.x, pivot.y, pivot.z] as [number, number, number],
+        radius: orbitRadius,
+        theta: orbitTheta,
+        phi: orbitPhi,
+      }
+      cameraStateRef.current = view
+      saveCameraView(view)
+    }
     updateCameraOrbit()
 
     // ── Lights ────────────────────────────────────────────────────────────────
@@ -444,7 +457,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         // loading (e.g. StrictMode double-mount) holds the pre-framing orbit
         // defaults (pivot at feet, radius 2m) and must never be restored —
         // that parks the camera at foot level (legs-only, head cut off).
-        const savedView = cameraStateRef.current
+        const savedView = cameraStateRef.current ?? loadSavedCameraView()
         if (savedView && isValidView(savedView)) {
           pivot.set(savedView.pivot[0], savedView.pivot[1], savedView.pivot[2])
           orbitRadius = savedView.radius
@@ -464,6 +477,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           orbitTheta = initTheta
           orbitPhi = initPhi
           updateCameraOrbit()
+          saveCameraViewNow()
         }
 
         panCameraRef.current = (dx: number, dy: number) => {
@@ -475,6 +489,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           pivot.addScaledVector(right, -dx * 0.003)
           pivot.addScaledVector(up, dy * 0.003)
           updateCameraOrbit()
+          saveCameraViewNow()
         }
 
         rotateCameraRef.current = (dx: number, dy: number) => {
@@ -485,6 +500,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
             Math.PI - 0.1,
           )
           updateCameraOrbit()
+          saveCameraViewNow()
         }
 
         // Build hand pose cache (applied every frame in animate loop)
@@ -649,6 +665,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         MAX_RADIUS,
       )
       updateCameraOrbit()
+      saveCameraViewNow()
     }
     canvas.addEventListener('wheel', onWheel, { passive: false })
 
@@ -785,6 +802,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         panCameraRef.current?.(dx, dy)
       }
       updateCameraOrbit()
+      saveCameraViewNow()
     }
 
     function onPointerUp(e: PointerEvent) {
@@ -853,8 +871,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     // ── Animation loop ────────────────────────────────────────────────────────
     // Pauses when the page is hidden (minimized / locked / screensaver) so the
     // pet deactivates instead of burning CPU/GPU underneath the screensaver.
-    // Quality caps pixel ratio + frame rate; delta is clamped so capped frames
-    // and resume-from-pause never cause animation jumps.
+    // Quality caps pixel ratio; frame rate is a fixed cap (DEFAULT_MAX_FPS).
+    // Delta is clamped so capped frames and resume-from-pause never cause
+    // animation jumps.
     const clock = new THREE.Clock()
     let animFrameId: number
     let renderingPaused = document.hidden
@@ -865,9 +884,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       const cfg = qualityDetailsRef.current
       const targetRatio = Math.min(window.devicePixelRatio || 1, cfg.pixelRatioCap)
       if (renderer.getPixelRatio() !== targetRatio) renderer.setPixelRatio(targetRatio)
-      if (cfg.maxFps > 0) {
+      {
         const now = performance.now()
-        if (now - lastFrameAt < 1000 / cfg.maxFps) return
+        if (now - lastFrameAt < 1000 / DEFAULT_MAX_FPS) return
         lastFrameAt = now
       }
       const delta = Math.min(clock.getDelta(), 0.05)
@@ -1078,6 +1097,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           theta: orbitTheta,
           phi: orbitPhi,
         }
+        saveCameraView(cameraStateRef.current)
       }
       cancelAnimationFrame(animFrameId)
       window.removeEventListener('mousemove', onMouseMove)

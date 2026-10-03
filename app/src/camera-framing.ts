@@ -38,6 +38,46 @@ export function defaultViewFromBounds(
   }
 }
 
+/** localStorage key carrying the view across pet restarts. */
+export const CAMERA_STORAGE_KEY = 'cuttle-pet:camera-v1'
+
+type Getter = Pick<Storage, 'getItem'>
+type Setter = Pick<Storage, 'setItem'>
+
+function defaultStorage(): (Getter & Setter) | null {
+  try {
+    if (typeof localStorage !== 'undefined') return localStorage
+  } catch {
+    // ignore — private mode etc.
+  }
+  return null
+}
+
+/** Last saved view, or null on first launch / corrupt payload / no storage. */
+export function loadSavedCameraView(storage?: Getter | null): CameraView | null {
+  const store = storage ?? defaultStorage()
+  if (!store) return null
+  try {
+    const raw = store.getItem(CAMERA_STORAGE_KEY)
+    if (!raw) return null
+    const view: unknown = JSON.parse(raw)
+    return isValidView(view) ? view : null
+  } catch {
+    return null
+  }
+}
+
+/** Persist a view; never throws (quota etc. — the session ref still covers). */
+export function saveCameraView(view: CameraView, storage?: Setter | null): void {
+  const store = storage ?? defaultStorage()
+  if (!store) return
+  try {
+    store.setItem(CAMERA_STORAGE_KEY, JSON.stringify(view))
+  } catch {
+    // ignore
+  }
+}
+
 /** Whether a stored snapshot is safe to restore (finite numbers, sane orbit). */
 export function isValidView(value: unknown): value is CameraView {
   if (!value || typeof value !== 'object') return false

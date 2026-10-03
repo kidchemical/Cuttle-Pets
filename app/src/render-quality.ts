@@ -5,6 +5,10 @@
  * values happen to match a preset exactly, in which case that preset shows as
  * active again.
  *
+ * Quality never touches frame rate: the renderer always caps at
+ * DEFAULT_MAX_FPS. Older saved settings may still carry a `maxFps` value;
+ * it is accepted and ignored for backwards compatibility.
+ *
  * Pure module (no three.js / Tauri imports) so it can be unit-tested with plain node.
  */
 
@@ -16,18 +20,20 @@ export type QualityPresetOrCustom = RenderQuality | 'custom'
 
 export const RENDER_QUALITIES: RenderQuality[] = ['low', 'mid', 'high', 'ultra']
 
-/** Granular controls. `maxFps: 0` = uncapped (render every animation frame). */
+/** Fixed frame-rate cap applied by the renderer regardless of quality. */
+export const DEFAULT_MAX_FPS = 30
+
+/** Granular controls. */
 export interface QualityDetails {
   pixelRatioCap: number
-  maxFps: number
   springBones: boolean
 }
 
 export const QUALITY_PRESETS: Record<RenderQuality, QualityDetails> = {
-  low: { pixelRatioCap: 1, maxFps: 24, springBones: true },
-  mid: { pixelRatioCap: 1.5, maxFps: 30, springBones: true },
-  high: { pixelRatioCap: 2, maxFps: 60, springBones: true },
-  ultra: { pixelRatioCap: 4, maxFps: 0, springBones: true },
+  low: { pixelRatioCap: 1, springBones: true },
+  mid: { pixelRatioCap: 1.5, springBones: true },
+  high: { pixelRatioCap: 2, springBones: true },
+  ultra: { pixelRatioCap: 4, springBones: true },
 }
 
 /** Backwards-compatible alias (v1 stored only the preset name). */
@@ -50,22 +56,22 @@ export function normalizeQuality(value: unknown): RenderQuality {
 export function resolvePreset(details: QualityDetails): QualityPresetOrCustom {
   for (const name of RENDER_QUALITIES) {
     const p = QUALITY_PRESETS[name]
-    if (p.pixelRatioCap === details.pixelRatioCap && p.maxFps === details.maxFps && p.springBones === details.springBones) {
+    if (p.pixelRatioCap === details.pixelRatioCap && p.springBones === details.springBones) {
       return name
     }
   }
   return 'custom'
 }
 
-/** Accept a stored v1 preset string or a full settings object; always heal to valid settings. */
+/** Accept a stored v1 preset string or a full settings object; always heal to valid settings.
+ * A legacy `maxFps` field is ignored (quality never changes FPS). */
 export function normalizeQualitySettings(value: unknown): QualitySettings {
   if (typeof value === 'string') return presetSettings(normalizeQuality(value))
   if (value && typeof value === 'object') {
     const v = value as Partial<QualityDetails>
     const pixelRatioCap = typeof v.pixelRatioCap === 'number' && v.pixelRatioCap > 0 ? v.pixelRatioCap : QUALITY_PRESETS.high.pixelRatioCap
-    const maxFps = typeof v.maxFps === 'number' && v.maxFps >= 0 ? v.maxFps : QUALITY_PRESETS.high.maxFps
     const springBones = typeof v.springBones === 'boolean' ? v.springBones : true
-    return { pixelRatioCap, maxFps, springBones, preset: resolvePreset({ pixelRatioCap, maxFps, springBones }) }
+    return { pixelRatioCap, springBones, preset: resolvePreset({ pixelRatioCap, springBones }) }
   }
   return presetSettings('high')
 }
