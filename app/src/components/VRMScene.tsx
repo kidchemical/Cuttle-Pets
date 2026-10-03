@@ -10,7 +10,7 @@ import type { VRM } from '@pixiv/three-vrm'
 import { EmoteController } from '../emote'
 import { LipSync } from '../lip-sync'
 import { MotionController } from '../motion-controller'
-import { buildTypingPoseCache, restoreTypingPose, applyTypingPose, applySipPose, applyMusicAngles } from '../typing-pose'
+import { buildTypingPoseCache, restoreTypingPose, applyTypingPose, applySipPose, applyMusicAngles, faceDirection } from '../typing-pose'
 import type { TypingPoseCache } from '../typing-pose'
 
 export type TouchRegion = 'head' | 'arm' | 'leg' | 'chest' | 'belly' | 'buttocks'
@@ -415,6 +415,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     let sipBlend = 0
     let sipT0 = 0
     let nextSipAt = Infinity
+    // Head-center → face-surface distance, raycast once per model so the
+    // sip target sits outside the skull on any head shape. Null = unmeasured.
+    let faceOffset: number | null = null
     const blinkState = createBlinkState()
     const saccades = new EyeSaccadeController()
     const lookAtTarget = { x: 0, y: 0, z: -100 }
@@ -710,6 +713,27 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     // ── Touch interaction: detect body region from raycast hit ────────────
     const touchRaycaster = new THREE.Raycaster()
     const touchMouseVec = new THREE.Vector2()
+    const faceRaycaster = new THREE.Raycaster()
+
+    // Cast from outside the face back toward the head: first hit is the face
+    // surface (an inside-out ray would hit culled backfaces and miss).
+    // Result is the head-bone → face distance, used to park the sip target
+    // outside the skull. Falls back to 12cm on any degenerate measurement.
+    function measureFaceOffset(): number {
+      const head = typingCache?.head
+      if (!head || !vrm || !typingCache) return 0.12
+      // Eye-located forward (world space) — see faceDirection: root- and
+      // head-axis-derived signs both lie on some imports.
+      const fwd = faceDirection(typingCache)
+      const c = head.getWorldPosition(new THREE.Vector3())
+      const origin = c.clone().addScaledVector(fwd, 0.5)
+      origin.y -= 0.02
+      faceRaycaster.set(origin, fwd.negate())
+      const hits = faceRaycaster.intersectObject(vrm.scene, true)
+      if (!hits.length) return 0.12
+      const surf = 0.5 - origin.distanceTo(hits[0].point)
+      return surf >= 0.06 && surf <= 0.30 ? surf : 0.12
+    }
     let lastTapTime = 0
     let lastTapRegion: TouchRegion | null = null
     let lastTouchFireTime = 0
@@ -979,8 +1003,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           sipBlend = 0
           nextSipAt = Infinity
         }
+        if (faceOffset == null && typingCache?.head) faceOffset = measureFaceOffset()
         if (typingCache && sipBlend > 0) {
-          applySipPose(typingCache, now, sipBlend * workingBlend)
+          applySipPose(typingCache, now, sipBlend * workingBlend, faceOffset ?? 0.12)
         }
         if (cup) {
           cup.visible = workingBlend > .02

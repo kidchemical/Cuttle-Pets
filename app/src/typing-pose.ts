@@ -20,6 +20,8 @@ export interface TypingPoseCache {
   lowerL: THREE.Object3D | null
   lowerR: THREE.Object3D | null
   head: THREE.Object3D | null
+  eyeL: THREE.Object3D | null
+  eyeR: THREE.Object3D | null
   spine: THREE.Object3D | null
   keyboardL: THREE.Object3D | null
   keyboardR: THREE.Object3D | null
@@ -66,6 +68,8 @@ export function buildTypingPoseCache(vrm: VRM): TypingPoseCache {
     lowerL: getBone(vrm, 'leftLowerArm'),
     lowerR: getBone(vrm, 'rightLowerArm'),
     head: getBone(vrm, 'head'),
+    eyeL: getBone(vrm, 'leftEye'),
+    eyeR: getBone(vrm, 'rightEye'),
     spine: getBone(vrm, 'spine'),
     keyboardL: getBone(vrm, 'leftMiddleProximal') ?? getBone(vrm, 'leftHand'),
     keyboardR: getBone(vrm, 'rightMiddleProximal') ?? getBone(vrm, 'rightHand'),
@@ -149,27 +153,94 @@ export function applyTypingPose(cache: TypingPoseCache, time: number, amount: nu
 }
 
 /**
+ * World-space out-of-the-face direction. Located from the eye bones, which
+ * sit on the face by construction on every rig — never from the model root
+ * (VRM0 imports carry a π scene rotation that flips root-derived signs)
+ * and never from the head bone's +Z (not face-forward on every rig).
+ * Falls back to root-derived forward when a model lacks eye bones.
+ */
+export function faceDirection(cache: TypingPoseCache): THREE.Vector3 {
+  const head = cache.head
+  if (head && cache.eyeL && cache.eyeR) {
+    const c = head.getWorldPosition(new THREE.Vector3())
+    const eyes = cache.eyeL.getWorldPosition(new THREE.Vector3())
+      .add(cache.eyeR.getWorldPosition(new THREE.Vector3())).multiplyScalar(.5)
+    const f = eyes.sub(c)
+    f.y = 0
+    if (f.lengthSq() > 1e-8) return f.normalize()
+  }
+  return new THREE.Vector3(0, 0, Math.sign(cache.headForward.z || 1))
+}
+
+/**
  * Coffee-sip overlay, layered on top of the typing pose: right hand rises
  * to the mouth, head tips back slightly. Same additive pattern as above.
  */
-export function applySipPose(cache: TypingPoseCache, time: number, amount: number) {
+export function applySipPose(cache: TypingPoseCache, time: number, amount: number, faceOffset = .12) {
   if (amount <= 0) return
-  // Flare the elbow out to the side so the forearm approaches the mouth
-  // from front-side, never straight through the face.
-  pointBone(cache, cache.upperR, cache.lowerR, new THREE.Vector3(-.38, -.55, .60), amount)
-  if (cache.head && cache.lowerR) {
-    // Aim at a standoff point in FRONT of the mouth, not the head center.
-    // pointBone only sets the forearm direction — a long forearm overshoots
-    // past the target into the skull — so the target sits well clear of the
-    // lips and the forearm deliberately undershoots (0.85) with the elbow
-    // flared, leaving the hand parked at the lips instead of inside the face.
-    const facing = Math.sign(cache.headForward.z || 1)
-    const mouth = cache.head.getWorldPosition(new THREE.Vector3())
-    const elbow = cache.lowerR.getWorldPosition(new THREE.Vector3())
-    mouth.y -= .05
-    mouth.z += .24 * facing
-    mouth.x += Math.sign(elbow.x - mouth.x || 1) * .03
-    pointBone(cache, cache.lowerR, cache.handR, mouth.sub(elbow), amount * .85)
+  const upperR = cache.upperR
+  const lowerR = cache.lowerR
+  const handR = cache.handR
+  const head = cache.head
+  if (!upperR || !lowerR || !handR || !head) return
+
+  // Face-forward from the eye bones (see faceDirection): correct in world
+  // space on every rig and convention, and tracks the mouth as the head
+  // tilts. Root- and head-axis-derived signs both lie on some imports.
+  const faceDir = faceDirection(cache)
+
+  // Lips, guaranteed outside the skull: the face distance is measured off
+  // the real head mesh (VRMScene raycasts it once per model), so big-head
+  // and chibi proportions can't bury the target inside the cranium.
+  const mouth = head.getWorldPosition(new THREE.Vector3())
+    .addScaledVector(faceDir, faceOffset + .04)
+  mouth.y -= .02
+
+  // Bone lengths are rotation-invariant: measure in world space before
+  // re-aiming anything, so model scale never matters.
+  upperR.updateWorldMatrix(true, false)
+  const S = upperR.getWorldPosition(new THREE.Vector3())
+  const L1 = lowerR.getWorldPosition(new THREE.Vector3()).distanceTo(S)
+  const L2 = handR.getWorldPosition(new THREE.Vector3()).distanceTo(
+    lowerR.getWorldPosition(new THREE.Vector3()))
+  if (L1 < 1e-6 || L2 < 1e-6) return
+
+  // Two-bone analytic IK. Direction-only aiming lands the wrist at
+  // elbow + aim × forearm-length, which overshoots into the skull whenever
+  // the forearm out-reaches the elbow→mouth gap — unsolvable with any fixed
+  // direction vector. Instead the elbow angle is solved exactly (law of
+  // cosines) so the wrist lands ON the lips on every model's proportions.
+  const toT = mouth.clone().sub(S)
+  const d = toT.length()
+  const dir = d > 1e-8 ? toT.divideScalar(d) : faceDir.clone()
+  const maxReach = (L1 + L2) * .999
+  const reachable = d <= maxReach
+  const dc = Math.min(d, maxReach)
+  // Elbow pole: down and anatomically outward (shoulder away from spine),
+  // slightly back — keeps the elbow out of the torso.
+  const spinePos = cache.spine?.getWorldPosition(new THREE.Vector3())
+  const out = spinePos ? S.clone().sub(spinePos) : new THREE.Vector3(-1, 0, 0)
+  out.y = 0
+  if (out.lengthSq() < 1e-8) out.set(-1, 0, 0)
+  out.normalize()
+  const back = faceDir.clone()
+  back.y = 0
+  if (back.lengthSq() < 1e-8) back.set(0, 0, -1)
+  else back.normalize()
+  const pole = out.multiplyScalar(.5).add(new THREE.Vector3(0, -.8, 0)).addScaledVector(back, -.2).normalize()
+  const cosA = THREE.MathUtils.clamp((L1 * L1 + dc * dc - L2 * L2) / (2 * L1 * dc), -1, 1)
+  let axis = new THREE.Vector3().crossVectors(dir, pole)
+  if (axis.lengthSq() < 1e-8) axis.set(1, 0, 0)
+  axis.normalize()
+  pointBone(cache, upperR, lowerR, dir.applyAxisAngle(axis, Math.acos(cosA)), amount)
+
+  const elbow = lowerR.getWorldPosition(new THREE.Vector3())
+  const toMouth = mouth.clone().sub(elbow)
+  if (toMouth.lengthSq() > 1e-10) {
+    // Unreachable (arms shorter than shoulder→mouth): stretch toward the
+    // mouth but undershoot instead of spearing past it.
+    const undershoot = reachable ? 1 : Math.max(.35, dc / Math.max(d, 1e-6))
+    pointBone(cache, lowerR, handR, toMouth, amount * undershoot)
   }
   offset(cache, cache.head, -0.14 * Math.sign(cache.headForward.z || 1), 0, 0, amount)
 }
