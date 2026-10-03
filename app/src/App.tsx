@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { VRMScene } from './components/VRMScene'
 import type { VRMSceneHandle, TouchRegion } from './components/VRMScene'
 import { normalizeQuality, normalizeQualitySettings, presetSettings, type QualitySettings } from './render-quality'
+import { DEFAULT_BUBBLE_SETTINGS, normalizeBubbleSettings, type BubbleSettings } from './bubble-settings'
 import { TextBubble } from './components/TextBubble'
 import type { OnVrmMessage } from './components/TextBubble'
 import { ChatInput } from './components/ChatInput'
@@ -94,6 +95,7 @@ export default function App() {
   const [screenObserve, setScreenObserve] = useState(false)
   const [screenObserveInterval, setScreenObserveInterval] = useState(60)
   const [language, setLanguage] = useState<'zh' | 'en'>(() => navigator.language.startsWith('zh') ? 'zh' : 'en')
+  const [bubbleSettings, setBubbleSettings] = useState<BubbleSettings>({ ...DEFAULT_BUBBLE_SETTINGS })
   const t = (zh: string, en: string) => language === 'en' ? en : zh
   const [viewportHovered, setViewportHovered] = useState(false)
   // Hover is true only when the cursor is over the model or a button
@@ -128,6 +130,7 @@ export default function App() {
         if (s.hideMood !== undefined) setHideMood(s.hideMood)
         if (s.screenObserve !== undefined) setScreenObserve(s.screenObserve)
         if (s.screenObserveInterval !== undefined) setScreenObserveInterval(s.screenObserveInterval)
+        if (s.bubbleSettings) setBubbleSettings(normalizeBubbleSettings(s.bubbleSettings))
         if (s.currentDance) setCurrentDance(s.currentDance)
         if (s.customDancePreset) setCustomDancePreset(s.customDancePreset)
         if (s.language) {
@@ -207,6 +210,12 @@ export default function App() {
     const safe = normalizeQualitySettings(qs)
     setQualitySettings(safe)
     saveSettings({ quality: safe })
+  }, [])
+
+  const handleBubbleSettingsChange = useCallback((bs: BubbleSettings) => {
+    const safe = normalizeBubbleSettings(bs)
+    setBubbleSettings(safe)
+    saveSettings({ bubbleSettings: safe })
   }, [])
 
   const handleVrmMessage: OnVrmMessage = useCallback((msg) => {
@@ -464,7 +473,7 @@ export default function App() {
       </div>}
       <VRMScene ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
       <div style={hoverControlsStyle}>{!hideMood && <MoodIndicator uiAlign={uiAlign} />}</div>
-      <TextBubble onMessage={handleVrmMessageWithActivity} enabled={showText} ttsEnabled={ttsEnabled} />
+      <TextBubble onMessage={handleVrmMessageWithActivity} enabled={showText} ttsEnabled={ttsEnabled} bubble={bubbleSettings} />
       <div style={hoverControlsStyle}>{!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}</div>
       <HistoryPanel
         visible={historyOpen}

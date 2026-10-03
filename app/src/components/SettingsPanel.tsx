@@ -8,6 +8,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { dancePresets, type DancePreset } from '../motion-controller'
 import { RENDER_QUALITIES, presetSettings, resolvePreset, type QualityDetails, type QualitySettings } from '../render-quality'
+import { BUBBLE_PREVIEW_TEXT, DEFAULT_BUBBLE_SETTINGS, FONT_CHOICES, type BubbleSettings } from '../bubble-settings'
 
 interface DanceItem {
   id: string
@@ -55,9 +56,11 @@ interface SettingsPanelProps {
   onLanguageChange: (v: 'zh' | 'en') => void
   currentDance: string
   onDanceChange: (id: string, preset?: DancePreset) => void
+  bubbleSettings: BubbleSettings
+  onBubbleSettingsChange: (v: BubbleSettings) => void
 }
 
-type Tab = 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance' | 'quality'
+type Tab = 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance' | 'quality' | 'display'
 
 const BUILTIN_MODELS = ['/model1.vrm', '/model2.vrm', '/model3.vrm', '/model4.vrm', '/model5.vrm']
 
@@ -121,6 +124,7 @@ export function SettingsPanel({
   captureVrmScreenshot,
   language, onLanguageChange,
   currentDance, onDanceChange,
+  bubbleSettings, onBubbleSettingsChange,
 }: SettingsPanelProps) {
   const t = (zh: string, en: string) => language === 'en' ? en : zh
 
@@ -336,6 +340,21 @@ export function SettingsPanel({
       .catch(() => stopPreview())
   }
 
+  const setBubble = useCallback((patch: Partial<BubbleSettings>) => {
+    onBubbleSettingsChange({ ...bubbleSettings, ...patch })
+  }, [bubbleSettings, onBubbleSettingsChange])
+
+  const previewBubble = useCallback(() => {
+    (window as any).__clawPreviewBubble?.(BUBBLE_PREVIEW_TEXT)
+  }, [])
+
+  // Live preview: show sample text shortly after any display change (or tab open)
+  useEffect(() => {
+    if (!visible || tab !== 'display') return
+    const id = setTimeout(previewBubble, 400)
+    return () => clearTimeout(id)
+  }, [visible, tab, bubbleSettings, previewBubble])
+
   if (!visible) return null
 
   const voices = currentProvider === 'qwen' ? QWEN_VOICES : EDGE_VOICES
@@ -352,13 +371,13 @@ export function SettingsPanel({
 
         {/* Tabs */}
         <div style={tabBarStyle}>
-          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'dance', 'quality'] as const).map((tb) => (
+          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'dance', 'quality', 'display'] as const).map((tb) => (
             <button
               key={tb}
               onClick={() => setTab(tb)}
               style={{ ...tabStyle, ...(tab === tb ? activeTabStyle : {}) }}
             >
-              {{ music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), quality: t('画质', 'Quality') }[tb]}
+              {{ music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tb]}
             </button>
           ))}
         </div>
@@ -882,6 +901,151 @@ export function SettingsPanel({
                 </div>
               </div>
               <ToggleRow label={t('弹簧骨骼（耳朵/头发）', 'Spring bones (ears/hair)')} value={qualitySettings.springBones} onChange={(v) => updateQualityDetails({ springBones: v })} />
+            </div>
+          )}
+          {tab === 'display' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button onClick={previewBubble} style={{ ...applyBtnStyle, flex: 1 }}>
+                  {t('预览字幕', 'Preview Subtitle')}
+                </button>
+                <button onClick={() => setBubble({ ...DEFAULT_BUBBLE_SETTINGS })} style={{ ...applyBtnStyle, background: 'rgba(255, 255, 255, 0.12)' }}>
+                  {t('重置', 'Reset')}
+                </button>
+              </div>
+              {!showText && (
+                <div style={{ fontSize: 11, color: 'rgba(255,200,100,0.8)' }}>
+                  {t('字幕已关闭（常规选项卡），预览不可见', 'Subtitles are off (General tab), so the preview is hidden')}
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('缩放', 'Scale')}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={2}
+                    step={0.05}
+                    value={bubbleSettings.scale}
+                    onChange={(e) => setBubble({ scale: Number(e.target.value) })}
+                    style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                  />
+                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{Math.round(bubbleSettings.scale * 100)}%</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('水平位置', 'Position')}</span>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {(['left', 'center', 'right'] as const).map((a) => (
+                    <button
+                      key={a}
+                      onClick={() => setBubble({ align: a })}
+                      style={{
+                        ...smallBtnStyle,
+                        background: bubbleSettings.align === a ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                        borderColor: bubbleSettings.align === a ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                      }}
+                    >
+                      {a === 'left' ? t('靠左', 'Left') : a === 'right' ? t('靠右', 'Right') : t('居中', 'Center')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('底部距离', 'Bottom offset')}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="range"
+                    min={0}
+                    max={400}
+                    step={4}
+                    value={bubbleSettings.bottom}
+                    onChange={(e) => setBubble({ bottom: Number(e.target.value) })}
+                    style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                  />
+                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{bubbleSettings.bottom}px</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('字体', 'Font')}</span>
+                <select
+                  value={FONT_CHOICES.some((f) => f.id === bubbleSettings.fontFamily) ? bubbleSettings.fontFamily : FONT_CHOICES[0].id}
+                  onChange={(e) => setBubble({ fontFamily: e.target.value })}
+                  style={{ ...selectStyle, width: 160 }}
+                >
+                  {FONT_CHOICES.map((f) => (
+                    <option key={f.id} value={f.id}>{f.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('字号', 'Font size')}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="range"
+                    min={8}
+                    max={28}
+                    step={1}
+                    value={bubbleSettings.fontSize}
+                    onChange={(e) => setBubble({ fontSize: Number(e.target.value) })}
+                    style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                  />
+                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{bubbleSettings.fontSize}px</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('文字颜色', 'Text color')}</span>
+                <input
+                  type="color"
+                  value={bubbleSettings.textColor}
+                  onChange={(e) => setBubble({ textColor: e.target.value })}
+                  style={{ width: 44, height: 26, padding: 0, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
+                />
+              </div>
+              <ToggleRow label={t('气泡背景', 'Bubble background')} value={bubbleSettings.bubbleEnabled} onChange={(v) => setBubble({ bubbleEnabled: v })} />
+              {bubbleSettings.bubbleEnabled && (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14 }}>{t('背景颜色', 'Bubble color')}</span>
+                    <input
+                      type="color"
+                      value={bubbleSettings.bubbleColor}
+                      onChange={(e) => setBubble({ bubbleColor: e.target.value })}
+                      style={{ width: 44, height: 26, padding: 0, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14 }}>{t('不透明度', 'Opacity')}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={bubbleSettings.bubbleAlpha}
+                        onChange={(e) => setBubble({ bubbleAlpha: Number(e.target.value) })}
+                        style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                      />
+                      <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{Math.round(bubbleSettings.bubbleAlpha * 100)}%</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14 }}>{t('圆角', 'Corner radius')}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        type="range"
+                        min={0}
+                        max={24}
+                        step={1}
+                        value={bubbleSettings.borderRadius}
+                        onChange={(e) => setBubble({ borderRadius: Number(e.target.value) })}
+                        style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                      />
+                      <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{bubbleSettings.borderRadius}px</span>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>

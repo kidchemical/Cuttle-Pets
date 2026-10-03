@@ -1,6 +1,7 @@
 import { petUrl } from '../config'
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { LipSync } from '../lip-sync'
+import { DEFAULT_BUBBLE_SETTINGS, hexToRgba, type BubbleSettings } from '../bubble-settings'
 
 interface VrmMessage {
   playAction?: string
@@ -51,7 +52,46 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
 // Keyframes (claw-pop-in) are in index.html <style>
 
-export function TextBubble({ onMessage, enabled = true, ttsEnabled = true }: { onMessage?: OnVrmMessage; enabled?: boolean; ttsEnabled?: boolean }) {
+export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubble }: { onMessage?: OnVrmMessage; enabled?: boolean; ttsEnabled?: boolean; bubble?: BubbleSettings }) {
+  const bs: BubbleSettings = { ...DEFAULT_BUBBLE_SETTINGS, ...bubble }
+
+  const containerStyle: React.CSSProperties = useMemo(() => {
+    const widthPct = Math.min(100, 50 * bs.scale)
+    const left = bs.align === 'left' ? 0 : bs.align === 'right' ? `${100 - widthPct}%` : `${(100 - widthPct) / 2}%`
+    return {
+      position: 'absolute',
+      bottom: bs.bottom,
+      left,
+      width: `${widthPct}%`,
+      zIndex: 200,
+      pointerEvents: 'none',
+      padding: 4,
+      boxSizing: 'border-box',
+    }
+  }, [bs.scale, bs.align, bs.bottom])
+
+  const boxStyle: React.CSSProperties = useMemo(() => ({
+    background: bs.bubbleEnabled ? hexToRgba(bs.bubbleColor, bs.bubbleAlpha) : 'transparent',
+    backdropFilter: 'blur(6px)',
+    borderRadius: bs.borderRadius,
+    border: bs.bubbleEnabled ? '1px solid rgba(255, 255, 255, 0.15)' : '1px solid transparent',
+    boxShadow: bs.bubbleEnabled ? '0 0 12px rgba(100, 160, 255, 0.25), 0 0 24px rgba(100, 160, 255, 0.1)' : 'none',
+    padding: '4px 6px',
+    height: Math.round(70 * bs.scale),
+    overflowY: 'auto' as const,
+    pointerEvents: 'auto',
+    userSelect: 'text',
+    cursor: 'text',
+  }), [bs.bubbleEnabled, bs.bubbleColor, bs.bubbleAlpha, bs.borderRadius, bs.scale])
+
+  const textStyle: React.CSSProperties = useMemo(() => ({
+    color: bs.textColor,
+    fontSize: bs.fontSize,
+    lineHeight: 1.4,
+    wordBreak: 'break-word',
+    fontFamily: bs.fontFamily,
+    textShadow: '0 0 6px rgba(255,255,255,0.5)',
+  }), [bs.textColor, bs.fontSize, bs.fontFamily])
   const [text, setText] = useState('')
   const [visible, setVisible] = useState(false)
   const [charCount, setCharCount] = useState(0)
@@ -401,6 +441,13 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true }: { o
   // Keep handleMessageRef in sync so tryScheduleHide can drain the queue
   handleMessageRef.current = handleMessage
 
+  // Live preview hook for the settings panel: inject sample text locally
+  // (no server round-trip, no TTS) so style changes have a frame of reference.
+  useEffect(() => {
+    (window as any).__clawPreviewBubble = (text: string) => handleMessageRef.current({ text })
+    return () => { delete (window as any).__clawPreviewBubble }
+  }, [])
+
   useEffect(() => {
     const es = new EventSource(petUrl('/events'))
     es.onmessage = (e) => {
@@ -504,7 +551,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true }: { o
 
 const imageThumbStyle: React.CSSProperties = {
   maxWidth: '80%',
-  maxHeight: 120,
+  maxHeight: 60,
   borderRadius: 6,
   border: '1px solid rgba(255, 255, 255, 0.3)',
   objectFit: 'contain' as const,
@@ -563,36 +610,4 @@ const popCharStyle: React.CSSProperties = {
   whiteSpace: 'pre',
 }
 
-const containerStyle: React.CSSProperties = {
-  position: 'absolute',
-  bottom: 80,
-  left: 0,
-  width: '100%',
-  zIndex: 200,
-  pointerEvents: 'none',
-  padding: 8,
-  boxSizing: 'border-box',
-}
 
-const boxStyle: React.CSSProperties = {
-  background: 'rgba(0, 0, 0, 0.35)',
-  backdropFilter: 'blur(6px)',
-  borderRadius: 12,
-  border: '1px solid rgba(255, 255, 255, 0.15)',
-  boxShadow: '0 0 12px rgba(100, 160, 255, 0.25), 0 0 24px rgba(100, 160, 255, 0.1)',
-  padding: '8px 12px',
-  height: 140,
-  overflowY: 'auto' as const,
-  pointerEvents: 'auto',
-  userSelect: 'text',
-  cursor: 'text',
-}
-
-const textStyle: React.CSSProperties = {
-  color: '#fff',
-  fontSize: 14,
-  lineHeight: 1.6,
-  wordBreak: 'break-word',
-  fontFamily: '"Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif',
-  textShadow: '0 0 6px rgba(255,255,255,0.5)',
-}
