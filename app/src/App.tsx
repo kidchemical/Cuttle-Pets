@@ -210,6 +210,10 @@ export default function App() {
   }, [])
 
   const handleVrmMessage: OnVrmMessage = useCallback((msg) => {
+    // Screensaver/lock suspend: full render suspend + window hide (see
+    // VRMScene.setSuspended). document.hidden never fires under a fullscreen
+    // saver, so this server-driven frame is the only reliable trigger.
+    if (msg.suspended !== undefined) { sceneRef.current?.setSuspended(msg.suspended); return }
     if (msg.musicAudio) { sceneRef.current?.receiveMusicAudio(msg.musicAudio); return }
     if (msg.musicEnded) { if (musicEnabledRef.current) sceneRef.current?.celebrateMusicEnd(); return }
     if (msg.musicBeat) sceneRef.current?.receiveMusicBeat(msg.musicBeat)
@@ -240,7 +244,7 @@ export default function App() {
   // Reset idle timer whenever a VRM message arrives
   const originalHandleVrmMessage = handleVrmMessage
   const handleVrmMessageWithActivity: OnVrmMessage = useCallback((msg) => {
-    if (!msg.activitySync && !msg.musicBeat && !msg.musicAudio && !msg.musicEnded && msg.musicPlaying === undefined) lastActivityRef.current = Date.now()
+    if (!msg.activitySync && !msg.musicBeat && !msg.musicAudio && !msg.musicEnded && msg.musicPlaying === undefined && msg.suspended === undefined) lastActivityRef.current = Date.now()
     originalHandleVrmMessage(msg)
   }, [originalHandleVrmMessage])
 

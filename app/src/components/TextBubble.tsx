@@ -25,6 +25,8 @@ interface VrmMessage {
   musicBeat?: { bpm: number | null; confidence: number; timestamp: number }
   musicPlaying?: boolean
   working?: boolean
+  /** Screensaver/lock suspend: stop presenting and hide until false. */
+  suspended?: boolean
 }
 
 export type OnVrmMessage = (msg: VrmMessage) => void
@@ -431,6 +433,12 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true }: { o
             replyDoneRef.current = true
             tryScheduleHideRef.current()
           }
+          return
+        }
+        // Screensaver/lock suspend frames carry no text/emotion, so the
+        // message pipeline below would swallow them — forward directly.
+        if (data.suspended !== undefined) {
+          onMessageRef.current?.(data)
           return
         }
         const msg: VrmMessage = data

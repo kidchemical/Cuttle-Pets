@@ -144,6 +144,15 @@ player status when capture is available.
 
 `state` is one of `thinking`, `streaming`, `done`, `error`, `idle`.
 
+Screensaver / lock: the server polls the OS (GNOME/Mutter ScreenSaver,
+freedesktop ScreenSaver, logind `LockedHint`, `xscreensaver-command`) and
+broadcasts `{"suspended": true/false}` on `/events`. The pet then stops its
+render loop and hides its window, so nothing fights the screensaver for the
+GPU; it reappears on unlock. `GET /screen` reports the current state
+(`CUTTLE_PET_NO_SCREEN_MONITOR=1` disables the poller). Note:
+`document.hidden` alone cannot detect a fullscreen saver over an always-on-top
+window, which is why this is server-driven.
+
 Presets — emotions: `happy sad angry surprised think awkward question curious
 neutral love flirty greeting relaxed`. Actions: `akimbo playFingers
 scratchHead stretch happy angry greeting excited shy point salute angryPump`.

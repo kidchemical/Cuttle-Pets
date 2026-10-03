@@ -10,6 +10,9 @@ Responsibilities:
   * ``POST /say``               — show text (optionally with TTS audio).
   * ``POST /pet/event``         — high-level chat-activity hook: thinking,
                                   streaming, done, error.
+  * ``GET /screen``              — screensaver/lock suspend state; changes are
+                                  also broadcast as ``{"suspended": …}`` so the
+                                  renderer stops presenting and hides.
   * ``GET/PATCH /settings``     — renderer settings store.
   * ``POST /click-through``     — toggle mouse pass-through.
   * model / dance asset serving + import.
@@ -35,7 +38,9 @@ from typing import Any, Iterable
 from flask import Flask, Response, jsonify, request, send_file
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bridge import connection, music, beats
+import screen as screen_monitor
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 APP_PUBLIC = REPO_ROOT / "app" / "public"
@@ -233,6 +238,28 @@ def activity_snapshot():
         return {'activitySync': True, 'working': _activity_working and time.monotonic() - _activity_seen < 15}
 
 
+# ── screensaver / lock suspend ──────────────────────────────────────────
+# The renderer cannot see the screensaver (document.hidden never fires under
+# a fullscreen saver over an always-on-top window), so the server polls the
+# OS and tells the pet to fully suspend (stop presenting + hide) instead.
+_screen_lock = threading.RLock()
+_screen_suspended = False
+
+
+def screen_snapshot() -> dict[str, Any]:
+    with _screen_lock:
+        return {'suspended': _screen_suspended}
+
+
+def _on_screen_change(suspended: bool) -> None:
+    global _screen_suspended
+    with _screen_lock:
+        if suspended == _screen_suspended:
+            return
+        _screen_suspended = suspended
+    broadcast({'suspended': suspended})
+
+
 def watch_liveness():
     global _activity_working
     while True:
@@ -259,6 +286,13 @@ def music_status():
     return jsonify({"ok": True, "playing": _music_playing, "analysis": _music_analysis})
 
 
+@app.get("/screen")
+def screen_status():
+    """Screensaver/lock suspend state (also broadcast as {"suspended": …})."""
+    snap = screen_snapshot()
+    return jsonify({"ok": True, **snap})
+
+
 @app.get("/events")
 def events():
     q: queue.Queue = queue.Queue(maxsize=64)
@@ -272,6 +306,7 @@ def events():
             _sync_music()
             yield "data: " + json.dumps({"musicPlaying": _music_playing}) + "\n\n"
             yield "data: " + json.dumps(activity_snapshot()) + "\n\n"
+            yield "data: " + json.dumps(screen_snapshot()) + "\n\n"
             yield "data: " + json.dumps({'musicAudio': {'amplitude': _music_analysis.get('amplitude', 0), 'available': _music_analysis.get('status') == 'listening', 'timestamp': time.time()}}) + "\n\n"
             while True:
                 try:
@@ -688,6 +723,8 @@ def _clamp(v: Any, lo: float = 0.0, hi: float = 1.0) -> float:
 if __name__ == "__main__":
     _ensure_dirs()
     threading.Thread(target=watch_liveness, daemon=True).start()
+    if os.environ.get("CUTTLE_PET_NO_SCREEN_MONITOR") != "1":
+        threading.Thread(target=screen_monitor.watch, args=(_on_screen_change,), daemon=True).start()
     threading.Thread(target=music.watch, args=(publish_music,), daemon=True).start()
     threading.Thread(target=beats.watch, args=(publish_analysis, _load_settings), daemon=True).start()
     print(f"cuttle-pet control server on http://{HOST}:{PORT}  (data: {DATA_DIR})")

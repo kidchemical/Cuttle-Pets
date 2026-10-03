@@ -61,6 +61,14 @@ export interface VRMSceneHandle {
   celebrateMusicEnd: () => void
   requestCoffeeSip: () => void
   setWorking: (active: boolean) => void
+  /**
+   * Screensaver/lock suspend. Stops the render loop AND hides the window so
+   * the compositor drops our surface: no WebGL presents fight the saver for
+   * the GPU, and the always-on-top pet can't paint over the lock screen.
+   * Resume restores the loop and re-shows only if we hid it (a manual
+   * tray-hide during suspend stays hidden).
+   */
+  setSuspended: (suspended: boolean) => void
 }
 
 // ── Blink state ───────────────────────────────────────────────────────────────
@@ -225,6 +233,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   const musicEndUntilRef = useRef(0)
   const sipRequestedRef = useRef(false)
   const workingTargetRef = useRef(false)
+  // Set inside the render effect (it owns the rAF id); called via setSuspended.
+  const suspendFnRef = useRef<(suspended: boolean) => void>(() => {})
   const onTouchRef = useRef(onTouch)
   onTouchRef.current = onTouch
   const onModelErrorRef = useRef(onModelError)
@@ -307,6 +317,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       if (active) musicDanceActiveRef.current = false
       if (active && !workingTargetRef.current) motionRef.current?.resetToIdle()
       workingTargetRef.current = active
+    },
+    setSuspended(suspended: boolean) {
+      suspendFnRef.current(suspended)
     },
   }))
 
@@ -1066,16 +1079,63 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
     // Pause the loop while hidden; resume on visible. rAF stops firing on its
     // own in background tabs, but explicit cancel guarantees no work (and no
-    // GPU presents) under a screensaver/lock screen that keeps the page alive.
+    // GPU presents) while hidden.
+    //
+    // NOTE: this alone does NOT cover the screensaver: a fullscreen saver
+    // over an always-on-top window never hides the page, so rAF keeps
+    // presenting WebGL frames and fights the saver for the GPU (~0.5fps).
+    // The server therefore polls the OS saver/lock state and drives
+    // setSuspended below, which pauses via the same helpers AND hides the
+    // window so the compositor drops our surface entirely.
+    function pauseRendering() {
+      if (renderingPaused) return
+      renderingPaused = true
+      cancelAnimationFrame(animFrameId)
+    }
+    function resumeRendering() {
+      if (!renderingPaused) return
+      renderingPaused = false
+      clock.getDelta()
+      lastFrameAt = 0
+      animFrameId = requestAnimationFrame(animate)
+    }
+    // Set while a screensaver/lock suspend is in force; only setSuspended
+    // clears it. Tracks whether *we* hid the window so resume doesn't undo
+    // a manual tray-hide made mid-suspend.
+    let suspendActive = false
+    let windowHiddenBySuspend = false
+    suspendFnRef.current = (suspended: boolean) => {
+      if (suspended) {
+        if (suspendActive) return
+        suspendActive = true
+        pauseRendering()
+        getCurrentWindow().isVisible()
+          .then((visible) => {
+            // Resumed while the check was in flight — leave the window alone.
+            if (!suspendActive) return
+            if (visible) {
+              windowHiddenBySuspend = true
+              return getCurrentWindow().hide()
+            }
+            windowHiddenBySuspend = false
+          })
+          .catch(() => { /* not running under Tauri (browser dev) */ })
+      } else {
+        if (!suspendActive) return
+        suspendActive = false
+        if (windowHiddenBySuspend) {
+          windowHiddenBySuspend = false
+          getCurrentWindow().show().catch(() => {})
+        }
+        // Stay paused if the page itself is hidden (e.g. minimized).
+        if (!document.hidden) resumeRendering()
+      }
+    }
     function onVisibilityChange() {
       if (document.hidden) {
-        renderingPaused = true
-        cancelAnimationFrame(animFrameId)
-      } else if (renderingPaused) {
-        renderingPaused = false
-        clock.getDelta()
-        lastFrameAt = 0
-        animFrameId = requestAnimationFrame(animate)
+        pauseRendering()
+      } else if (!suspendActive) {
+        resumeRendering()
       }
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
@@ -1085,6 +1145,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
     return () => {
+      suspendFnRef.current = () => {}
       document.removeEventListener('visibilitychange', onVisibilityChange)
       // Snapshot the view so a model reload restores it verbatim — but only
       // when this run actually framed a model. An unmount before the load
