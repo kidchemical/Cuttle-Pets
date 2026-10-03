@@ -670,7 +670,21 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     const MAX_RADIUS = 5.0
     const ZOOM_SPEED = 0.002
 
+    // True when the cursor is over an actual mesh (not transparent space).
+    // All viewport interactions (zoom, drag, window-move) are gated on this
+    // so empty pixels never steal clicks/scrolls from windows behind the pet.
+    function pointerOverModel(clientX: number, clientY: number): boolean {
+      if (!vrm) return false
+      touchMouseVec.set(
+        (clientX / window.innerWidth) * 2 - 1,
+        -(clientY / window.innerHeight) * 2 + 1,
+      )
+      touchRaycaster.setFromCamera(touchMouseVec, camera)
+      return touchRaycaster.intersectObject(vrm.scene, true).length > 0
+    }
+
     function onWheel(e: WheelEvent) {
+      if (!pointerOverModel(e.clientX, e.clientY)) return
       e.preventDefault()
       orbitRadius = THREE.MathUtils.clamp(
         orbitRadius + e.deltaY * ZOOM_SPEED,
@@ -758,6 +772,11 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     const CLICK_TIME_THRESHOLD = 300 // ms
 
     function onPointerDown(e: PointerEvent) {
+      // Transparent space is click-through: ignore presses that don't start
+      // on a mesh so the pet never steals clicks from windows behind it.
+      // (When pass-through is engaged the OS won't deliver these at all;
+      // this gate covers the transition and pass-through-off states.)
+      if (!pointerOverModel(e.clientX, e.clientY)) return
       if (e.button === 0) {
         const region = detectTouchRegion(e)
         if (region) {
@@ -765,7 +784,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           leftDownPos = { x: e.clientX, y: e.clientY, time: Date.now(), region }
           return
         }
-        // Not on model — move window immediately
+        // On model but no region (shouldn't happen) — move window
         getCurrentWindow().startDragging()
         return
       } else if (e.button === 1) {

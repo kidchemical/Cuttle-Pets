@@ -84,14 +84,20 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
     cursor: 'text',
   }), [bs.bubbleEnabled, bs.bubbleColor, bs.bubbleAlpha, bs.borderRadius, bs.scale])
 
-  const textStyle: React.CSSProperties = useMemo(() => ({
-    color: bs.textColor,
-    fontSize: bs.fontSize,
-    lineHeight: 1.4,
-    wordBreak: 'break-word',
-    fontFamily: bs.fontFamily,
-    textShadow: '0 0 6px rgba(255,255,255,0.5)',
-  }), [bs.textColor, bs.fontSize, bs.fontFamily])
+  const textStyle: React.CSSProperties = useMemo(() => {
+    // 5x stacked shadow: 4 hard 1px outline layers + 1 wide glow, all at full slider alpha.
+    const c = hexToRgba(bs.textShadowColor, bs.textShadowIntensity)
+    return {
+      color: bs.textColor,
+      fontSize: bs.fontSize,
+      lineHeight: 1.4,
+      wordBreak: 'break-word',
+      fontFamily: bs.fontFamily,
+      textShadow: bs.textShadow
+        ? `-1px -1px 0 ${c}, 1px -1px 0 ${c}, -1px 1px 0 ${c}, 1px 1px 0 ${c}, 0 0 ${bs.textShadowBlur}px ${c}`
+        : 'none',
+    }
+  }, [bs.textColor, bs.fontSize, bs.fontFamily, bs.textShadow, bs.textShadowColor, bs.textShadowIntensity, bs.textShadowBlur])
   const [text, setText] = useState('')
   const [visible, setVisible] = useState(false)
   const [charCount, setCharCount] = useState(0)

@@ -154,16 +154,22 @@ export function applyTypingPose(cache: TypingPoseCache, time: number, amount: nu
  */
 export function applySipPose(cache: TypingPoseCache, time: number, amount: number) {
   if (amount <= 0) return
-  pointBone(cache, cache.upperR, cache.lowerR, new THREE.Vector3(0, -.65, .65), amount)
+  // Flare the elbow out to the side so the forearm approaches the mouth
+  // from front-side, never straight through the face.
+  pointBone(cache, cache.upperR, cache.lowerR, new THREE.Vector3(-.38, -.55, .60), amount)
   if (cache.head && cache.lowerR) {
-    // Aim at a point in FRONT of the mouth, not the head center, so the
-    // hand stops at the lips instead of pushing into the face.
+    // Aim at a standoff point in FRONT of the mouth, not the head center.
+    // pointBone only sets the forearm direction — a long forearm overshoots
+    // past the target into the skull — so the target sits well clear of the
+    // lips and the forearm deliberately undershoots (0.85) with the elbow
+    // flared, leaving the hand parked at the lips instead of inside the face.
     const facing = Math.sign(cache.headForward.z || 1)
     const mouth = cache.head.getWorldPosition(new THREE.Vector3())
-    mouth.y -= .02
-    mouth.z += .16 * facing
     const elbow = cache.lowerR.getWorldPosition(new THREE.Vector3())
-    pointBone(cache, cache.lowerR, cache.handR, mouth.sub(elbow), amount)
+    mouth.y -= .05
+    mouth.z += .24 * facing
+    mouth.x += Math.sign(elbow.x - mouth.x || 1) * .03
+    pointBone(cache, cache.lowerR, cache.handR, mouth.sub(elbow), amount * .85)
   }
   offset(cache, cache.head, -0.14 * Math.sign(cache.headForward.z || 1), 0, 0, amount)
 }

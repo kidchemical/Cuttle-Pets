@@ -21,6 +21,14 @@ export interface BubbleSettings {
   borderRadius: number
   /** When false, the bubble chrome (background/border/shadow) is hidden. */
   bubbleEnabled: boolean
+  /** When false, no text shadow is rendered (useful with bubble disabled). */
+  textShadow: boolean
+  /** Text shadow/glow color as #rrggbb. */
+  textShadowColor: string
+  /** Text shadow strength, 0–1 (alpha of the glow). */
+  textShadowIntensity: number
+  /** Blur radius of the glow layer in px. */
+  textShadowBlur: number
 }
 
 export const DEFAULT_FONT_FAMILY = '"Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif'
@@ -44,6 +52,10 @@ export const DEFAULT_BUBBLE_SETTINGS: BubbleSettings = {
   bubbleAlpha: 0.35,
   borderRadius: 12,
   bubbleEnabled: true,
+  textShadow: true,
+  textShadowColor: '#ffffff',
+  textShadowIntensity: 0.5,
+  textShadowBlur: 12,
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
@@ -66,6 +78,10 @@ export function normalizeBubbleSettings(raw: unknown): BubbleSettings {
     bubbleAlpha: num(r.bubbleAlpha, d.bubbleAlpha, 0, 1),
     borderRadius: num(r.borderRadius, d.borderRadius, 0, 24),
     bubbleEnabled: typeof r.bubbleEnabled === 'boolean' ? r.bubbleEnabled : d.bubbleEnabled,
+    textShadow: typeof r.textShadow === 'boolean' ? r.textShadow : d.textShadow,
+    textShadowColor: isHexColor(r.textShadowColor) ? r.textShadowColor : d.textShadowColor,
+    textShadowIntensity: num(r.textShadowIntensity, d.textShadowIntensity, 0, 1),
+    textShadowBlur: num(r.textShadowBlur, d.textShadowBlur, 0, 30),
   }
 }
 

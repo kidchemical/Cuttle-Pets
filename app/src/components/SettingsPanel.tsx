@@ -58,6 +58,8 @@ interface SettingsPanelProps {
   onDanceChange: (id: string, preset?: DancePreset) => void
   bubbleSettings: BubbleSettings
   onBubbleSettingsChange: (v: BubbleSettings) => void
+  panelWidth: number
+  onPanelWidthChange: (v: number) => void
 }
 
 type Tab = 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance' | 'quality' | 'display'
@@ -125,6 +127,7 @@ export function SettingsPanel({
   language, onLanguageChange,
   currentDance, onDanceChange,
   bubbleSettings, onBubbleSettingsChange,
+  panelWidth, onPanelWidthChange,
 }: SettingsPanelProps) {
   const t = (zh: string, en: string) => language === 'en' ? en : zh
 
@@ -361,7 +364,7 @@ export function SettingsPanel({
 
   return (
     <div style={{ ...overlayStyle, ...(tab === 'music' && musicPreview ? { background: 'transparent', alignItems: 'flex-end' } : {}) }} data-no-passthrough onClick={onClose}>
-      <div style={{ ...panelStyle, transform: `translate(${panelPos.x}px, ${panelPos.y}px)` }} data-no-passthrough onClick={(e) => e.stopPropagation()}>
+      <div style={{ ...panelStyle, width: panelWidth, maxWidth: '90vw', transform: `translate(${panelPos.x}px, ${panelPos.y}px)` }} data-no-passthrough onClick={(e) => e.stopPropagation()}>
         <div style={headerStyle} onMouseDown={onDragStart}>
           <span style={{ fontSize: 16, fontWeight: 600, cursor: 'grab' }}>{t('设置', 'Settings')}</span>
           <button onClick={onClose} style={closeBtnStyle}>
@@ -456,6 +459,21 @@ export function SettingsPanel({
                       {a === 'left' ? t('靠左', 'Left') : t('靠右', 'Right')}
                     </button>
                   ))}
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('设置面板宽度', 'Panel width')}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="range"
+                    min={300}
+                    max={640}
+                    step={10}
+                    value={panelWidth}
+                    onChange={(e) => onPanelWidthChange(Number(e.target.value))}
+                    style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                  />
+                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 44, textAlign: 'right' }}>{panelWidth}px</span>
                 </div>
               </div>
               <ToggleRow label={t('隐藏UI', 'Hide UI')} value={hideUI} onChange={onHideUIChange} />
@@ -1002,6 +1020,50 @@ export function SettingsPanel({
                   style={{ width: 44, height: 26, padding: 0, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
                 />
               </div>
+              <ToggleRow label={t('文字阴影', 'Text shadow')} value={bubbleSettings.textShadow} onChange={(v) => setBubble({ textShadow: v })} />
+              {bubbleSettings.textShadow && (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14 }}>{t('阴影颜色', 'Shadow color')}</span>
+                    <input
+                      type="color"
+                      value={bubbleSettings.textShadowColor}
+                      onChange={(e) => setBubble({ textShadowColor: e.target.value })}
+                      style={{ width: 44, height: 26, padding: 0, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14 }}>{t('阴影强度', 'Shadow intensity')}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={bubbleSettings.textShadowIntensity}
+                        onChange={(e) => setBubble({ textShadowIntensity: Number(e.target.value) })}
+                        style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                      />
+                      <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{Math.round(bubbleSettings.textShadowIntensity * 100)}%</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14 }}>{t('阴影模糊', 'Shadow blur')}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        type="range"
+                        min={0}
+                        max={30}
+                        step={1}
+                        value={bubbleSettings.textShadowBlur}
+                        onChange={(e) => setBubble({ textShadowBlur: Number(e.target.value) })}
+                        style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                      />
+                      <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 40, textAlign: 'right' }}>{bubbleSettings.textShadowBlur}px</span>
+                    </div>
+                  </div>
+                </>
+              )}
               <ToggleRow label={t('气泡背景', 'Bubble background')} value={bubbleSettings.bubbleEnabled} onChange={(v) => setBubble({ bubbleEnabled: v })} />
               {bubbleSettings.bubbleEnabled && (
                 <>
@@ -1089,7 +1151,7 @@ const overlayStyle: React.CSSProperties = {
 }
 
 const panelStyle: React.CSSProperties = {
-  width: 320,
+  width: 400,
   background: 'rgba(30, 30, 40, 0.95)',
   backdropFilter: 'blur(12px)',
   borderRadius: 12,

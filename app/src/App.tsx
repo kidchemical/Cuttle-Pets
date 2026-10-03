@@ -96,6 +96,7 @@ export default function App() {
   const [screenObserveInterval, setScreenObserveInterval] = useState(60)
   const [language, setLanguage] = useState<'zh' | 'en'>(() => navigator.language.startsWith('zh') ? 'zh' : 'en')
   const [bubbleSettings, setBubbleSettings] = useState<BubbleSettings>({ ...DEFAULT_BUBBLE_SETTINGS })
+  const [panelWidth, setPanelWidth] = useState(400)
   const t = (zh: string, en: string) => language === 'en' ? en : zh
   const [viewportHovered, setViewportHovered] = useState(false)
   // Hover is true only when the cursor is over the model or a button
@@ -131,6 +132,7 @@ export default function App() {
         if (s.screenObserve !== undefined) setScreenObserve(s.screenObserve)
         if (s.screenObserveInterval !== undefined) setScreenObserveInterval(s.screenObserveInterval)
         if (s.bubbleSettings) setBubbleSettings(normalizeBubbleSettings(s.bubbleSettings))
+        if (typeof s.panelWidth === 'number' && Number.isFinite(s.panelWidth)) setPanelWidth(Math.min(640, Math.max(300, s.panelWidth)))
         if (s.currentDance) setCurrentDance(s.currentDance)
         if (s.customDancePreset) setCustomDancePreset(s.customDancePreset)
         if (s.language) {
@@ -523,6 +525,8 @@ export default function App() {
         }}
         bubbleSettings={bubbleSettings}
         onBubbleSettingsChange={handleBubbleSettingsChange}
+        panelWidth={panelWidth}
+        onPanelWidthChange={(v) => { setPanelWidth(v); saveSettings({ panelWidth: v }) }}
       />
       {!hideUI && <div
         style={{
