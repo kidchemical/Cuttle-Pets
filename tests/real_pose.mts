@@ -44,11 +44,13 @@ for (const file of ['models/CosmicPerson.vrm', 'app/public/model1.vrm']) {
  const heldCup=cupPositions(target,handPosition,.4,cupHeight,laptop.userData.keyboardToBase,1)
  assert.ok(Math.abs(restingCup.x-target.x)>.2,`${file}: mug rests beside the laptop, outside the palms`)
  assert.ok(heldCup.distanceTo(handPosition)<cupHeight,`${file}: mug reaches the grip during a sip`)
- const mouth=cache.head!.getWorldPosition(new THREE.Vector3());mouth.z+=.06
+ const mouth=cache.head!.getWorldPosition(new THREE.Vector3());mouth.y-=.02;mouth.z+=.16*Math.sign(cache.headForward.z||1)
  const distanceBefore=cache.handR!.getWorldPosition(new THREE.Vector3()).distanceTo(mouth)
  applySipPose(cache,0,1);vrm.scene.updateMatrixWorld(true)
  const distanceAfter=cache.handR!.getWorldPosition(new THREE.Vector3()).distanceTo(mouth)
  assert.ok(distanceAfter<distanceBefore*.6,`${file}: coffee sip must bring hand closer to mouth`)
+ const headCenter=cache.head!.getWorldPosition(new THREE.Vector3())
+ assert.ok(cache.handR!.getWorldPosition(new THREE.Vector3()).distanceTo(headCenter)>.08,`${file}: sipping hand must stop at the lips, not inside the face`)
  for(let frame=0;frame<1800;frame++) {
   restoreTypingPose(cache);applyTypingPose(cache,frame/60,1);applyMusicPose(cache,frame/30,.65)
   assert.ok(cache.head!.quaternion.angleTo(new THREE.Quaternion())<.7, 'Working nod remains bounded')

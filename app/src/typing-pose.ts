@@ -156,8 +156,12 @@ export function applySipPose(cache: TypingPoseCache, time: number, amount: numbe
   if (amount <= 0) return
   pointBone(cache, cache.upperR, cache.lowerR, new THREE.Vector3(0, -.65, .65), amount)
   if (cache.head && cache.lowerR) {
+    // Aim at a point in FRONT of the mouth, not the head center, so the
+    // hand stops at the lips instead of pushing into the face.
+    const facing = Math.sign(cache.headForward.z || 1)
     const mouth = cache.head.getWorldPosition(new THREE.Vector3())
-    mouth.z += .06
+    mouth.y -= .02
+    mouth.z += .16 * facing
     const elbow = cache.lowerR.getWorldPosition(new THREE.Vector3())
     pointBone(cache, cache.lowerR, cache.handR, mouth.sub(elbow), amount)
   }

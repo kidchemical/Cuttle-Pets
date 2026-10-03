@@ -52,7 +52,9 @@ export function usePassThrough(enabled: boolean, onHover?: (inside: boolean) => 
         y >= window_y &&
         y < window_y + window_h
 
-      hoverCallback.current?.(inside)
+      // NOTE: hover state uses model/UI hit below, not this window-rect flag —
+      // the window is fullscreen, so `inside` is nearly always true.
+      if (!inside) hoverCallback.current?.(false)
       if (pending.current) return
       if (!inside) {
         if (!passingThrough.current) {
@@ -90,6 +92,7 @@ export function usePassThrough(enabled: boolean, onHover?: (inside: boolean) => 
           passingThrough.current = false
           win.setIgnoreCursorEvents(false).catch(() => {})
         }
+        hoverCallback.current?.(true)
         return
       }
 
@@ -111,6 +114,7 @@ export function usePassThrough(enabled: boolean, onHover?: (inside: boolean) => 
           passingThrough.current = true
           win.setIgnoreCursorEvents(true).catch(() => {})
         }
+        hoverCallback.current?.(overModel)
       } finally {
         pending.current = false
       }

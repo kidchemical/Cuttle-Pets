@@ -195,6 +195,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
   const emoteRef = useRef<EmoteController | null>(null)
   const resetCameraRef = useRef<(() => void) | null>(null)
+  // Exact camera view, persisted across model reloads so switching
+  // characters never moves the user's camera.
+  const cameraStateRef = useRef<{ pivot: [number, number, number]; radius: number; theta: number; phi: number } | null>(null)
   const trackingModeRef = useRef<TrackingMode>('mouse')
   const motionRef = useRef<MotionController | null>(null)
   const panCameraRef = useRef<((dx: number, dy: number) => void) | null>(null)
@@ -264,9 +267,11 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       emoteRef.current?.resetAll()
     },
     reset() {
+      // Deliberately no camera reset: state transitions (dance stop, work
+      // done, etc.) must preserve the user's position/zoom. Explicit
+      // reframe stays available via resetCamera (tray → camera).
       workingTargetRef.current = false
       sipRequestedRef.current = false
-      resetCameraRef.current?.()
       motionRef.current?.resetToIdle()
       emoteRef.current?.resetAll()
     },
@@ -420,6 +425,17 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         orbitPhi = Math.PI / 2 - Math.atan2(offsetY, offsetZ)
         updateCameraOrbit()
 
+        // Restore the exact pre-switch view when changing characters.
+        // First load (no saved view) keeps the model-fitted defaults above.
+        const savedView = cameraStateRef.current
+        if (savedView) {
+          pivot.set(savedView.pivot[0], savedView.pivot[1], savedView.pivot[2])
+          orbitRadius = savedView.radius
+          orbitTheta = savedView.theta
+          orbitPhi = savedView.phi
+          updateCameraOrbit()
+        }
+
         // Store initial state for reset
         const initPivot = pivot.clone()
         const initRadius = orbitRadius
@@ -487,8 +503,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
             const left = typingCache?.upperL?.getWorldPosition(new THREE.Vector3())
             const right = typingCache?.upperR?.getWorldPosition(new THREE.Vector3())
             const shoulderSpan = left && right ? Math.abs(left.x - right.x) : 0
-            laptop = prepareLaptop(laptopGltf.scene, Math.max(modelSize.y * .28, shoulderSpan * 1.3))
-            laptop.position.set(modelCenter.x, box.min.y + modelSize.y * .42, modelCenter.z + .15)
+            laptop = prepareLaptop(laptopGltf.scene, Math.max(modelSize.y * .28, shoulderSpan * 1.3) * .6)
+            laptop.position.set(modelCenter.x, box.min.y + modelSize.y * .38, modelCenter.z + .15)
             laptop.visible = false
             scene.add(laptop)
           },
@@ -528,7 +544,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           )
         }
         attachHandProp('/phone.glb', 0.16, [0.02, 0.05, 0.04], (o) => { phone = o })
-        attachHandProp('/cup.glb', modelSize.y * .065, [0, 0, 0], (o) => { cup = o; scene.attach(cup); cup.userData.height = modelSize.y * .065; cup.rotation.set(0, Math.PI / 2, 0) })
+        attachHandProp('/cup.glb', modelSize.y * .065, [0, 0, 0], (o) => { cup = o; scene.attach(cup); cup.userData.height = modelSize.y * .065; cup.rotation.set(0, Math.PI / 2 + Math.PI, 0) })
 
         // Initialize emote controller
         emote = new EmoteController(loadedVrm)
@@ -842,8 +858,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           laptop.visible = workingBlend > .02
           if (typingCache?.keyboardL && typingCache.keyboardR && workingBlend > .02) {
             const keyboard = typingCache.keyboardL.getWorldPosition(new THREE.Vector3()).add(typingCache.keyboardR.getWorldPosition(new THREE.Vector3())).multiplyScalar(.5)
-            keyboard.y -= laptop.userData.width * .025
-            keyboard.z += laptop.userData.width * .025
+            keyboard.y -= laptop.userData.width * .14
+            keyboard.z += laptop.userData.width * .02
             laptop.position.lerp(keyboard, 1 - Math.exp(-delta * 10))
           }
         }
@@ -993,6 +1009,13 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
     return () => {
+      // Snapshot the view so a model reload restores it verbatim.
+      cameraStateRef.current = {
+        pivot: [pivot.x, pivot.y, pivot.z],
+        radius: orbitRadius,
+        theta: orbitTheta,
+        phi: orbitPhi,
+      }
       cancelAnimationFrame(animFrameId)
       window.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mousemove', onMouseMove)

@@ -93,7 +93,14 @@ export default function App() {
   const [language, setLanguage] = useState<'zh' | 'en'>(() => navigator.language.startsWith('zh') ? 'zh' : 'en')
   const t = (zh: string, en: string) => language === 'en' ? en : zh
   const [viewportHovered, setViewportHovered] = useState(false)
+  // Hover is true only when the cursor is over the model or a button
+  // (see usePassThrough), plus pointer enter/leave and window focus below.
   usePassThrough(!settingsOpen && !historyOpen, setViewportHovered)
+  useEffect(() => {
+    const onBlur = () => setViewportHovered(false)
+    window.addEventListener('blur', onBlur)
+    return () => window.removeEventListener('blur', onBlur)
+  }, [])
   const hoverControlsStyle = { visibility: viewportHovered ? 'visible' as const : 'hidden' as const }
 
   const handleMusicPreview = useCallback((active: boolean) => sceneRef.current?.setMusicPreview(active), [])
@@ -422,7 +429,7 @@ export default function App() {
 
   return (
     <div
-      onPointerEnter={() => setViewportHovered(true)}
+      onPointerEnter={() => { if (document.hasFocus()) setViewportHovered(true) }}
       onPointerLeave={() => setViewportHovered(false)}
       style={{
         width: '100vw',
