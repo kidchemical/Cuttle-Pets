@@ -1,3 +1,6 @@
+import { MusicMotion } from '../music-motion'
+import { prepareLaptop, cupPositions } from '../work-props'
+import { DEFAULT_MUSIC, DEFAULT_FIT, type MusicSettings, type HeadphoneFit } from '../music-settings'
 import { useEffect, useRef, useImperativeHandle, forwardRef, useState, useCallback } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
@@ -7,13 +10,15 @@ import type { VRM } from '@pixiv/three-vrm'
 import { EmoteController } from '../emote'
 import { LipSync } from '../lip-sync'
 import { MotionController } from '../motion-controller'
-import { buildTypingPoseCache, restoreTypingPose, applyTypingPose, applySipPose, applyMusicPose } from '../typing-pose'
+import { buildTypingPoseCache, restoreTypingPose, applyTypingPose, applySipPose, applyMusicAngles } from '../typing-pose'
 import type { TypingPoseCache } from '../typing-pose'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
 export type TouchRegion = 'head' | 'arm' | 'leg' | 'chest' | 'belly' | 'buttocks'
 
 interface VRMSceneProps {
+  musicSettings?: MusicSettings
+  headphoneFit?: HeadphoneFit
   modelPath: string
   idleAnimationPath?: string
   onTouch?: (region: TouchRegion) => void
@@ -29,6 +34,7 @@ export interface VRMSceneHandle {
   resetCamera: () => void
   setTrackingMode: (mode: TrackingMode) => void
   playAction: (name: string, hold?: boolean) => void
+  playAnimationOnce: (name: string) => void
   captureScreenshot: () => string | null
   panCamera: (dx: number, dy: number) => void
   rotateCamera: (dx: number, dy: number) => void
@@ -41,6 +47,10 @@ export interface VRMSceneHandle {
   reset: () => void
   /** Working mode: typing pose + laptop prop (eases in/out) */
   setMusicMode: (active: boolean) => void
+  setMusicPreview: (active: boolean) => void
+  receiveMusicBeat: (beat: { bpm: number | null; confidence: number; timestamp: number }) => void
+  receiveMusicAudio: (audio: { amplitude: number; available: boolean; timestamp: number }) => void
+  celebrateMusicEnd: () => void
   requestCoffeeSip: () => void
   setWorking: (active: boolean) => void
 }
@@ -166,6 +176,8 @@ function applyRelaxedHandPose(cache: HandPoseCache, time: number) {
 
 export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMScene({
   modelPath,
+  musicSettings = DEFAULT_MUSIC,
+  headphoneFit = DEFAULT_FIT,
   idleAnimationPath = '/idle_loop.vrma',
   onTouch,
   onModelLoaded,
@@ -189,6 +201,14 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   const rotateCameraRef = useRef<((dx: number, dy: number) => void) | null>(null)
   const lipSyncRef = useRef<LipSync>(LipSync.getInstance())
   const musicModeRef = useRef(false)
+  const musicPreviewRef = useRef(false)
+  const musicDanceActiveRef = useRef(false)
+  const musicSettingsRef = useRef(musicSettings)
+  musicSettingsRef.current = musicSettings
+  const headphoneFitRef = useRef(headphoneFit)
+  headphoneFitRef.current = headphoneFit
+  const musicMotionRef = useRef(new MusicMotion())
+  const musicEndUntilRef = useRef(0)
   const sipRequestedRef = useRef(false)
   const workingTargetRef = useRef(false)
   const onTouchRef = useRef(onTouch)
@@ -212,6 +232,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       trackingModeRef.current = mode
     },
     playAction(name: string, hold?: boolean) {
+      musicDanceActiveRef.current = false
       motionRef.current?.playAction(name, hold)
     },
     captureScreenshot() {
@@ -224,6 +245,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       rotateCameraRef.current?.(dx, dy)
     },
     playDance(nameOrPreset: string | import('../motion-controller').DancePreset) {
+      musicDanceActiveRef.current = false
       motionRef.current?.playDance(nameOrPreset)
     },
     stopDance() {
@@ -248,9 +270,25 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       motionRef.current?.resetToIdle()
       emoteRef.current?.resetAll()
     },
+    playAnimationOnce(name: string) {
+      musicDanceActiveRef.current = false
+      motionRef.current?.resetToIdle()
+      void motionRef.current?.playAction(name, false)
+    },
     setMusicMode(active: boolean) { musicModeRef.current = active },
+    setMusicPreview(active: boolean) { musicPreviewRef.current = active },
+    receiveMusicBeat(beat) {
+      const age = Math.max(0, Date.now() / 1000 - beat.timestamp)
+      musicMotionRef.current.receiveBeat(beat, performance.now() / 1000, age)
+    },
+    receiveMusicAudio(audio) {
+      if (Math.abs(Date.now() / 1000 - audio.timestamp) > 2) return
+      musicMotionRef.current.receiveAudio(audio.amplitude, audio.available, performance.now() / 1000)
+    },
+    celebrateMusicEnd() { if (musicSettingsRef.current.reactOnEnd) musicEndUntilRef.current = performance.now() / 1000 + 15 },
     requestCoffeeSip() { sipRequestedRef.current = true },
     setWorking(active: boolean) {
+      if (active) musicDanceActiveRef.current = false
       if (active && !workingTargetRef.current) motionRef.current?.resetToIdle()
       workingTargetRef.current = active
     },
@@ -435,7 +473,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
             pad.position.x = side * radius
             headphones.add(pad)
           }
-          headphones.position.y = modelSize.y * 0.04
+          headphones.userData.modelHeight = modelSize.y
           headphones.visible = false
           headBone.add(headphones)
         }
@@ -446,13 +484,11 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         new GLTFLoader().load(
           '/laptop.glb',
           (laptopGltf) => {
-            laptop = laptopGltf.scene
-            laptop.rotation.y = 0
-            laptop.position.set(
-              modelCenter.x,
-              box.min.y + modelSize.y * 0.42,
-              modelCenter.z + 0.30,
-            )
+            const left = typingCache?.upperL?.getWorldPosition(new THREE.Vector3())
+            const right = typingCache?.upperR?.getWorldPosition(new THREE.Vector3())
+            const shoulderSpan = left && right ? Math.abs(left.x - right.x) : 0
+            laptop = prepareLaptop(laptopGltf.scene, Math.max(modelSize.y * .28, shoulderSpan * 1.3))
+            laptop.position.set(modelCenter.x, box.min.y + modelSize.y * .42, modelCenter.z + .15)
             laptop.visible = false
             scene.add(laptop)
           },
@@ -468,10 +504,15 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           propLoader.load(
             url,
             (gltf) => {
-              const obj = gltf.scene
+              const asset = gltf.scene
+              const obj = new THREE.Group()
+              obj.add(asset)
               const bbox = new THREE.Box3().setFromObject(obj)
               const size = new THREE.Vector3()
               bbox.getSize(size)
+              const center = bbox.getCenter(new THREE.Vector3())
+              if (url === '/cup.glb') asset.position.sub(center)
+              else asset.position.set(0, 0, 0)
               if (size.y > 0) obj.scale.multiplyScalar(targetHeight / size.y)
               obj.position.set(...offset)
               obj.visible = false
@@ -487,7 +528,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           )
         }
         attachHandProp('/phone.glb', 0.16, [0.02, 0.05, 0.04], (o) => { phone = o })
-        attachHandProp('/cup.glb', 0.11, [0, 0.10, 0.02], (o) => { cup = o })
+        attachHandProp('/cup.glb', modelSize.y * .065, [0, 0, 0], (o) => { cup = o; scene.attach(cup); cup.userData.height = modelSize.y * .065; cup.rotation.set(0, Math.PI / 2, 0) })
 
         // Initialize emote controller
         emote = new EmoteController(loadedVrm)
@@ -498,6 +539,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         motionRef.current = motion
         // Show the cellphone prop while the phoneCall action is playing
         motion.onActionChange = (actionName) => {
+          if (!actionName) musicDanceActiveRef.current = false
           if (phone) phone.visible = actionName === 'phoneCall'
         }
 
@@ -796,7 +838,15 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         if (typingCache && workingBlend > 0) {
           applyTypingPose(typingCache, clock.elapsedTime, workingBlend)
         }
-        if (laptop) laptop.visible = workingBlend > 0.02
+        if (laptop) {
+          laptop.visible = workingBlend > .02
+          if (typingCache?.keyboardL && typingCache.keyboardR && workingBlend > .02) {
+            const keyboard = typingCache.keyboardL.getWorldPosition(new THREE.Vector3()).add(typingCache.keyboardR.getWorldPosition(new THREE.Vector3())).multiplyScalar(.5)
+            keyboard.y -= laptop.userData.width * .025
+            keyboard.z += laptop.userData.width * .025
+            laptop.position.lerp(keyboard, 1 - Math.exp(-delta * 10))
+          }
+        }
 
         // 1.7. Coffee sip: every 40–90s of sustained working, raise the cup
         // for ~4.5s (blend ramps up/down over the first/last quarter)
@@ -831,20 +881,45 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         if (typingCache && sipBlend > 0) {
           applySipPose(typingCache, now, sipBlend * workingBlend)
         }
-        if (cup) cup.visible = sipBlend > 0.3
+        if (cup) {
+          cup.visible = workingBlend > .02
+          if (laptop && typingCache?.handR) {
+            cup.position.copy(cupPositions(laptop.position, typingCache.handR.getWorldPosition(new THREE.Vector3()), laptop.userData.width, cup.userData.height, laptop.userData.keyboardToBase, sipBlend))
+          }
+        }
 
-        const listening = musicModeRef.current && !workingTargetRef.current
-        if (headphones) headphones.visible = listening
-        if (listening && !motion?.actionPlaying && !motion?.isDancing && workingBlend < 0.02) {
-          if (typingCache) applyMusicPose(typingCache, now, 1)
+        const listening = musicModeRef.current || musicPreviewRef.current
+        const musicOptions = musicSettingsRef.current
+        if (headphones) {
+          const fit = headphoneFitRef.current
+          const unit = headphones.userData.modelHeight / 100
+          headphones.position.set(fit.x * unit, fit.y * unit, fit.z * unit)
+          headphones.scale.set(fit.scale * fit.width, fit.scale * fit.height, fit.scale * fit.depth)
+          headphones.rotation.set(THREE.MathUtils.degToRad(fit.rx), THREE.MathUtils.degToRad(fit.ry), THREE.MathUtils.degToRad(fit.rz))
+          headphones.visible = listening
+        }
+        const musicPose = musicMotionRef.current.step(delta, performance.now() / 1000, musicOptions, listening, musicPreviewRef.current, workingTargetRef.current, sipBlend)
+        if (typingCache && !motion?.actionPlaying && !motion?.isDancing) applyMusicAngles(typingCache, musicPose.pitch, musicPose.roll)
+        if (listening && !motion?.actionPlaying && !motion?.isDancing) {
           if (!nextMusicDance) nextMusicDance = now + 20 + Math.random() * 25
-          if (now >= nextMusicDance) {
+          if (musicOptions.randomDance && !musicPreviewRef.current && !workingTargetRef.current && workingBlend < .02 && now >= nextMusicDance) {
             const choices = ['breakdance', 'cheering', 'joyfulJump']
+            musicDanceActiveRef.current = true
             void motion?.playAction(choices[Math.floor(Math.random() * choices.length)])
             nextMusicDance = now + 45 + Math.random() * 45
           }
         } else if (!listening) {
+          if (musicDanceActiveRef.current) {
+            musicDanceActiveRef.current = false
+            motion?.resetToIdle()
+          }
           nextMusicDance = 0
+        }
+
+        if (musicEndUntilRef.current && (!musicOptions.reactOnEnd || performance.now() / 1000 > musicEndUntilRef.current || listening)) musicEndUntilRef.current = 0
+        if (musicEndUntilRef.current && sipBlend < .05 && !motion?.actionPlaying && !motion?.isDancing) {
+          musicEndUntilRef.current = 0
+          void motion?.playAction(Math.random() < .65 ? 'clapping' : 'cheering')
         }
 
         // 2. Humanoid update

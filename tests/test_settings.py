@@ -22,7 +22,9 @@ class SettingsTests(unittest.TestCase):
                  'pinned': False, 'collapsed': True, 'musicEnabled': False, 'volume': 0.2,
                  'tracking': 'camera', 'language': 'en', 'uiAlign': 'left',
                  'modelPath': '/model/project/test.vrm', 'currentDance': 'ualDance',
-                 'screenObserve': False, 'screenObserveInterval': 90}
+                 'screenObserve': False, 'screenObserveInterval': 90,
+                 'headphoneFits': {'/cosmic.vrm': {'scale': 1.4, 'y': 8}},
+                 'musicSettings': {'minBpm': 95, 'maxBpm': 195, 'nod': 24}}
         for key, value in prefs.items():
             self.assertEqual(self.client.post('/settings', json={key: value}).status_code, 200)
         self.assertEqual(json.loads(self.path.read_text()), prefs)

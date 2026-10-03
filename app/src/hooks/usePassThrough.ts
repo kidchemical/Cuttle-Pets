@@ -16,7 +16,9 @@ interface CursorPosition {
  * Enables window click-through when cursor is NOT over the rendered 3D model.
  * Uses Rust-side global cursor monitoring + render-target alpha hit-test.
  */
-export function usePassThrough(enabled: boolean) {
+export function usePassThrough(enabled: boolean, onHover?: (inside: boolean) => void) {
+  const hoverCallback = useRef(onHover)
+  hoverCallback.current = onHover
   const passingThrough = useRef(false)
   const pending = useRef(false)
   const active = useRef(false)
@@ -42,8 +44,6 @@ export function usePassThrough(enabled: boolean) {
 
     const unlisten = listen<CursorPosition>('cursor-position', async (event) => {
       if (!active.current) return
-      // Skip if a previous hit-test is still in-flight
-      if (pending.current) return
       const { x, y, window_x, window_y, window_w, window_h } = event.payload
 
       const inside =
@@ -52,6 +52,8 @@ export function usePassThrough(enabled: boolean) {
         y >= window_y &&
         y < window_y + window_h
 
+      hoverCallback.current?.(inside)
+      if (pending.current) return
       if (!inside) {
         if (!passingThrough.current) {
           passingThrough.current = true

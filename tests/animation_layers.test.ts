@@ -70,16 +70,27 @@ for (let i = 0; i < root.values.length; i += 3) {
 }
 console.log('Real phone clip passed: converted Z-up rig and anchored root displacement stays within 0.5m.')
 
-const leftElbow = nodes.get('leftLowerArm')!
-const rightElbow = nodes.get('rightLowerArm')!
-leftElbow.position.x = 0.3; rightElbow.position.x = -0.3
-nodes.get('leftUpperArm')!.add(leftElbow)
-nodes.get('rightUpperArm')!.add(rightElbow)
-applyTypingPose(cache, 0, 1)
-for (const arm of [nodes.get('leftUpperArm')!, nodes.get('rightUpperArm')!]) arm.updateMatrixWorld(true)
-const leftHand = new THREE.Object3D(); leftHand.position.x = 0.25; leftElbow.add(leftHand)
-const rightHand = new THREE.Object3D(); rightHand.position.x = -0.25; rightElbow.add(rightHand)
-for (const elbow of [leftElbow, rightElbow]) assert.ok(elbow.getWorldPosition(new THREE.Vector3()).y < -0.2, 'Upper arms hang down')
-for (const hand of [leftHand, rightHand]) assert.ok(hand.getWorldPosition(new THREE.Vector3()).z > 0.2, 'Forearms reach forward')
-restoreTypingPose(cache)
-console.log('Working pose direction passed: upper arms hang down and forearms reach toward the laptop (+Z).')
+// Exercise both bind-axis signs and both scene orientations. Previous tests
+// assumed one sign and missed the real VRM0 models with reversed arm offsets.
+for (const sign of [-1, 1]) for (const yaw of [0, Math.PI]) {
+  const rig = new THREE.Group(); rig.rotation.y = yaw
+  const armNodes = new Map<string, any>()
+  for (const [side, x] of [['left', sign], ['right', -sign]] as const) {
+    const upper = new THREE.Object3D(); upper.position.set(x * .15, 1, 0)
+    const lower = new THREE.Object3D(); lower.position.x = x * .3
+    const hand = new THREE.Object3D(); hand.position.x = x * .25
+    rig.add(upper); upper.add(lower); lower.add(hand)
+    armNodes.set(side + 'UpperArm', upper); armNodes.set(side + 'LowerArm', lower); armNodes.set(side + 'Hand', hand)
+  }
+  const armCache = buildTypingPoseCache({ humanoid: { getNormalizedBoneNode: (name: string) => armNodes.get(name) ?? null } } as any)
+  applyTypingPose(armCache, 0, 1); rig.updateMatrixWorld(true)
+  for (const side of ['left', 'right']) {
+    const upper = armNodes.get(side + 'UpperArm').getWorldPosition(new THREE.Vector3())
+    const elbow = armNodes.get(side + 'LowerArm').getWorldPosition(new THREE.Vector3())
+    const hand = armNodes.get(side + 'Hand').getWorldPosition(new THREE.Vector3())
+    assert.ok(elbow.y < upper.y - .25, 'Upper arms hang down regardless of bind-axis sign')
+    assert.ok(hand.z > elbow.z + .24, 'Forearms reach forward regardless of VRM scene rotation')
+  }
+  restoreTypingPose(armCache)
+}
+console.log('Working pose directions passed for both bind-axis signs and VRM scene rotations.')

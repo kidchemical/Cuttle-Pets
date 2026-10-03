@@ -19,6 +19,10 @@ interface VrmMessage {
   replyDone?: boolean
   demoReset?: boolean
   sipCoffee?: boolean
+  activitySync?: boolean
+  musicAudio?: { amplitude: number; available: boolean; timestamp: number }
+  musicEnded?: boolean
+  musicBeat?: { bpm: number | null; confidence: number; timestamp: number }
   musicPlaying?: boolean
   working?: boolean
 }
@@ -246,7 +250,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true }: { o
 
   // Stable handleMessage — never causes SSE reconnect
   const handleMessage = useCallback((msg: VrmMessage) => {
-    if (msg.musicPlaying !== undefined) {
+    if (msg.activitySync || msg.musicPlaying !== undefined || msg.musicBeat || msg.musicAudio || msg.musicEnded) {
       onMessageRef.current?.(msg)
       return
     }

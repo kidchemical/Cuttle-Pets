@@ -35,7 +35,7 @@ from typing import Any, Iterable
 from flask import Flask, Response, jsonify, request, send_file
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from bridge import connection, music
+from bridge import connection, music, beats
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 APP_PUBLIC = REPO_ROOT / "app" / "public"
@@ -158,6 +158,15 @@ def cuttle_disconnect():
 _subscribers: list[queue.Queue] = []
 _sub_lock = threading.Lock()
 _music_playing = False
+_music_player_playing = False
+_music_audio_playing = False
+_music_player_seen = _music_audio_seen = -float('inf')
+_music_lock = threading.RLock()
+_song_end_detector = beats.SongEndDetector()
+_activity_lock = threading.RLock()
+_activity_working = False
+_activity_seen = -float('inf')
+_music_analysis = {'status': 'starting', 'message': 'Starting playback analysis…', 'bpm': None}
 
 
 def broadcast(payload: dict[str, Any]) -> int:
@@ -175,15 +184,79 @@ def broadcast(payload: dict[str, Any]) -> int:
     return delivered
 
 
-def publish_music(active: bool):
+def _sync_music():
     global _music_playing
-    _music_playing = active
-    broadcast({"musicPlaying": active})
+    with _music_lock:
+        now = time.monotonic()
+        # When monitoring works, actual sound takes priority over stale MPRIS
+        # "Playing" flags. Otherwise a fresh player status provides fallback.
+        if _music_analysis.get('status') == 'listening':
+            active = _music_audio_playing and now - _music_audio_seen < 3
+        else:
+            active = _music_player_playing and now - _music_player_seen < 6
+        if active != _music_playing:
+            _music_playing = active
+            broadcast({"musicPlaying": active})
+
+
+def publish_music(active: bool):
+    global _music_player_playing, _music_player_seen
+    with _music_lock:
+        _music_player_playing = active
+        _music_player_seen = time.monotonic()
+        _sync_music()
+
+
+def publish_analysis(result: dict):
+    global _music_analysis, _music_audio_playing, _music_audio_seen
+    with _music_lock:
+        _music_analysis = {k: v for k, v in result.items() if k != 'beat'}
+        _music_audio_playing = result.get('playing', False)
+        _music_audio_seen = time.monotonic()
+        _sync_music()
+    broadcast({'musicAudio': {'amplitude': result.get('amplitude', 0), 'available': result.get('status') == 'listening', 'timestamp': result.get('timestamp', time.time())}})
+    if result.get('beat') and _music_playing:
+        broadcast({'musicBeat': {k: result.get(k) for k in ('bpm', 'confidence', 'timestamp')}})
+
+
+def sync_activity(state: str):
+    global _activity_working, _activity_seen
+    with _activity_lock:
+        _activity_working = bool(ACTIVITY_MAP[state].get('working', False))
+        _activity_seen = time.monotonic()
+        if time.monotonic() >= _demo_until:
+            broadcast({'activitySync': True, 'working': _activity_working})
+
+
+def activity_snapshot():
+    with _activity_lock:
+        return {'activitySync': True, 'working': _activity_working and time.monotonic() - _activity_seen < 15}
+
+
+def watch_liveness():
+    global _activity_working
+    while True:
+        _sync_music()
+        settings = _load_settings()
+        options = settings.get('musicSettings') or {}
+        if not isinstance(options, dict):
+            options = {}
+        enabled = settings.get('musicEnabled', True) is not False and options.get('reactOnEnd', True) is not False
+        available = _music_analysis.get('status') == 'listening' and time.monotonic() - _music_audio_seen < 3
+        if _song_end_detector.update(_music_playing, available, enabled, time.monotonic()):
+            broadcast({'musicEnded': True})
+        # Clear a lost bridge's working pose without replaying gestures or text.
+        with _activity_lock:
+            if _activity_working and time.monotonic() - _activity_seen >= 15 and time.monotonic() >= _demo_until:
+                _activity_working = False
+                broadcast({'activitySync': True, 'working': False})
+        time.sleep(.5)
 
 
 @app.get("/music")
 def music_status():
-    return jsonify({"ok": True, "playing": _music_playing})
+    _sync_music()
+    return jsonify({"ok": True, "playing": _music_playing, "analysis": _music_analysis})
 
 
 @app.get("/events")
@@ -196,7 +269,10 @@ def events():
         try:
             # Tell the client we're live before the first real frame.
             yield f": connected {int(time.time())}\n\n"
+            _sync_music()
             yield "data: " + json.dumps({"musicPlaying": _music_playing}) + "\n\n"
+            yield "data: " + json.dumps(activity_snapshot()) + "\n\n"
+            yield "data: " + json.dumps({'musicAudio': {'amplitude': _music_analysis.get('amplitude', 0), 'available': _music_analysis.get('status') == 'listening', 'timestamp': time.time()}}) + "\n\n"
             while True:
                 try:
                     frame = q.get(timeout=15)
@@ -366,16 +442,26 @@ def demo():
     return jsonify({"ok": True, "delivered": delivered, "sequence": kind})
 
 
+@app.post("/pet/sync")
+def pet_sync():
+    state = (request.get_json(silent=True) or {}).get('state')
+    if state not in ACTIVITY_MAP:
+        return jsonify({'ok': False, 'error': 'Unknown activity state'}), 400
+    sync_activity(state)
+    return jsonify({'ok': True})
+
+
 @app.post("/pet/event")
 def pet_event():
-    if time.monotonic() < _demo_until:
-        return jsonify({"ok": True, "suppressed": "manual demo"})
     """Map a Cuttle chat activity to an emote + action + text."""
     body = request.get_json(force=True, silent=True) or {}
     key = body.get("state")
     if key not in ACTIVITY_MAP:
         return jsonify({"ok": False, "error": f"unknown state {key!r}",
                         "known": list(ACTIVITY_MAP)}), 400
+    sync_activity(key)
+    if time.monotonic() < _demo_until:
+        return jsonify({"ok": True, "suppressed": "manual demo"})
     spec = ACTIVITY_MAP[key]
     detail = body.get("detail")
     payload: dict[str, Any] = {
@@ -601,6 +687,8 @@ def _clamp(v: Any, lo: float = 0.0, hi: float = 1.0) -> float:
 
 if __name__ == "__main__":
     _ensure_dirs()
+    threading.Thread(target=watch_liveness, daemon=True).start()
     threading.Thread(target=music.watch, args=(publish_music,), daemon=True).start()
+    threading.Thread(target=beats.watch, args=(publish_analysis, _load_settings), daemon=True).start()
     print(f"cuttle-pet control server on http://{HOST}:{PORT}  (data: {DATA_DIR})")
     app.run(host=HOST, port=PORT, threaded=True, debug=False)

@@ -1,3 +1,4 @@
+import { DEFAULT_MUSIC, DEFAULT_FIT, normalizeMusic, normalizeFit, modelFitKey, type MusicSettings, type HeadphoneFit } from './music-settings'
 import { loadSettings, saveSettings } from './settings'
 import { petUrl } from './config'
 import { useEffect, useRef, useState, useCallback } from 'react'
@@ -9,7 +10,7 @@ import { ChatInput } from './components/ChatInput'
 import { ResizeHandles } from './components/ResizeHandles'
 import { SettingsPanel } from './components/SettingsPanel'
 import { usePassThrough } from './hooks/usePassThrough'
-import { dancePresets } from './motion-controller'
+import { dancePresets, actionPresets } from './motion-controller'
 import { LipSync } from './lip-sync'
 import { bindScene } from './api'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -63,8 +64,13 @@ const btnStyle: React.CSSProperties = {
 export default function App() {
   const sceneRef = useRef<VRMSceneHandle>(null)
   const [musicEnabled, setMusicEnabled] = useState(true)
+  const [musicSettings, setMusicSettings] = useState<MusicSettings>(DEFAULT_MUSIC)
+  const [headphoneFits, setHeadphoneFits] = useState<Record<string, HeadphoneFit>>({})
+  const musicEnabledRef = useRef(musicEnabled)
+  musicEnabledRef.current = musicEnabled
   const [musicPlaying, setMusicPlaying] = useState(false)
   const musicPlayingRef = useRef(false)
+  const workingRef = useRef(false)
   const [pinned, setPinned] = useState(true)
   const [tracking, setTracking] = useState<'mouse' | 'camera'>('mouse')
   const [showText, setShowText] = useState(true)
@@ -86,7 +92,11 @@ export default function App() {
   const [screenObserveInterval, setScreenObserveInterval] = useState(60)
   const [language, setLanguage] = useState<'zh' | 'en'>(() => navigator.language.startsWith('zh') ? 'zh' : 'en')
   const t = (zh: string, en: string) => language === 'en' ? en : zh
-  usePassThrough(!settingsOpen && !historyOpen)
+  const [viewportHovered, setViewportHovered] = useState(false)
+  usePassThrough(!settingsOpen && !historyOpen, setViewportHovered)
+  const hoverControlsStyle = { visibility: viewportHovered ? 'visible' as const : 'hidden' as const }
+
+  const handleMusicPreview = useCallback((active: boolean) => sceneRef.current?.setMusicPreview(active), [])
 
   // Load persisted settings on mount
   useEffect(() => {
@@ -97,6 +107,8 @@ export default function App() {
         if (s.modelPath) setModelPath(s.modelPath.startsWith('/model/') ? petUrl(s.modelPath) : s.modelPath)
         if (s.ttsEnabled !== undefined) setTtsEnabled(s.ttsEnabled)
         if (s.musicEnabled !== undefined) setMusicEnabled(s.musicEnabled)
+        if (s.musicSettings) setMusicSettings(normalizeMusic(s.musicSettings))
+        if (s.headphoneFits) setHeadphoneFits(s.headphoneFits)
         if (s.showText !== undefined) setShowText(s.showText)
         if (s.hideUI !== undefined) setHideUI(s.hideUI)
         if (s.tracking) { setTracking(s.tracking); sceneRef.current?.setTrackingMode(s.tracking) }
@@ -130,7 +142,7 @@ export default function App() {
         const response = await fetch(petUrl('/model/list'))
         const data = await response.json()
         const models = [{ name: 'Default character', url: DEFAULT_MODEL }, ...(data.models || []).map((m: { name: string; url: string }) => ({ name: m.name, url: petUrl(m.url) }))]
-        if (active) await invoke('update_tray_models', { models, selected: modelPath, musicEnabled })
+        if (active) await invoke('update_tray_models', { models, selected: modelPath, musicEnabled, animations: Object.entries(actionPresets).map(([id, preset]) => ({ id, name: preset.label })) })
       } catch (e) { console.warn('Tray model refresh failed', e) }
     }
     void refresh()
@@ -143,13 +155,16 @@ export default function App() {
       setModelError(''); setModelPath(event.payload); setDancing(false)
       saveSettings({ modelPath: event.payload })
     })
+    const animation = listen<string>('play-animation', event => {
+      if (actionPresets[event.payload]) { setDancing(false); sceneRef.current?.playAnimationOnce(event.payload) }
+    })
     const controls = listen<string>('tray-control', event => {
       if (event.payload === 'music') setMusicEnabled(value => { saveSettings({ musicEnabled: !value }); return !value })
       if (event.payload === 'text') setShowText(value => { saveSettings({ showText: !value }); return !value })
       if (event.payload === 'camera') sceneRef.current?.resetCamera()
       if (event.payload === 'pose') sceneRef.current?.resetPose()
     })
-    return () => { model.then(f => f()); controls.then(f => f()) }
+    return () => { model.then(f => f()); animation.then(f => f()); controls.then(f => f()) }
   }, [])
 
   useEffect(() => { musicPlayingRef.current = musicEnabled && musicPlaying; sceneRef.current?.setMusicMode(musicEnabled && musicPlaying) }, [musicEnabled, musicPlaying, modelPath])
@@ -173,13 +188,16 @@ export default function App() {
   }, [])
 
   const handleVrmMessage: OnVrmMessage = useCallback((msg) => {
+    if (msg.musicAudio) { sceneRef.current?.receiveMusicAudio(msg.musicAudio); return }
+    if (msg.musicEnded) { if (musicEnabledRef.current) sceneRef.current?.celebrateMusicEnd(); return }
+    if (msg.musicBeat) sceneRef.current?.receiveMusicBeat(msg.musicBeat)
     if (msg.musicPlaying !== undefined) {
       setMusicPlaying(msg.musicPlaying)
       return
     }
     if (msg.demoReset) sceneRef.current?.resetPose()
     if (msg.sipCoffee) sceneRef.current?.requestCoffeeSip()
-    if (msg.working !== undefined) sceneRef.current?.setWorking(msg.working)
+    if (msg.working !== undefined) { workingRef.current = msg.working; sceneRef.current?.setWorking(msg.working) }
     if (msg.playAction) sceneRef.current?.playAction(msg.playAction, msg.hold ?? false)
     if (msg.emotion && sceneRef.current) {
       const action = emotionActionMap[msg.emotion]
@@ -200,7 +218,7 @@ export default function App() {
   // Reset idle timer whenever a VRM message arrives
   const originalHandleVrmMessage = handleVrmMessage
   const handleVrmMessageWithActivity: OnVrmMessage = useCallback((msg) => {
-    lastActivityRef.current = Date.now()
+    if (!msg.activitySync && !msg.musicBeat && !msg.musicAudio && !msg.musicEnded && msg.musicPlaying === undefined) lastActivityRef.current = Date.now()
     originalHandleVrmMessage(msg)
   }, [originalHandleVrmMessage])
 
@@ -221,7 +239,7 @@ export default function App() {
     const FIDGET_CHECK_MS = 15_000 // check every 15s, randomness inside
 
     const timer = setInterval(() => {
-      if (musicPlayingRef.current) return
+      if (workingRef.current || musicPlayingRef.current) return
       const idleMs = Date.now() - lastActivityRef.current
       if (idleMs < IDLE_THRESHOLD_MS) return
       // 50% chance each check to avoid being too predictable
@@ -404,6 +422,8 @@ export default function App() {
 
   return (
     <div
+      onPointerEnter={() => setViewportHovered(true)}
+      onPointerLeave={() => setViewportHovered(false)}
       style={{
         width: '100vw',
         height: '100vh',
@@ -412,20 +432,27 @@ export default function App() {
         position: 'relative',
       }}
     >
-      <ResizeHandles />
+      <div style={hoverControlsStyle}><ResizeHandles /></div>
       {modelError && <div role="alert" data-no-passthrough style={{ position: 'absolute', top: 20, left: 16, right: 16, zIndex: 1000, background: '#402020', color: 'white', padding: 12, borderRadius: 8 }}>
         {modelError}<button onClick={() => { setModelError(''); setModelPath(DEFAULT_MODEL); saveSettings({ modelPath: DEFAULT_MODEL }) }}>Use default model</button>
       </div>}
-      <VRMScene ref={sceneRef} modelPath={modelPath} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
-      {!hideMood && <MoodIndicator uiAlign={uiAlign} />}
+      <VRMScene ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
+      <div style={hoverControlsStyle}>{!hideMood && <MoodIndicator uiAlign={uiAlign} />}</div>
       <TextBubble onMessage={handleVrmMessageWithActivity} enabled={showText} ttsEnabled={ttsEnabled} />
-      {!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}
+      <div style={hoverControlsStyle}>{!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}</div>
       <HistoryPanel
         visible={historyOpen}
         onClose={() => setHistoryOpen(false)}
         language={language}
       />
       <SettingsPanel
+        musicSettings={musicSettings}
+        headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)}
+        musicEnabled={musicEnabled}
+        onMusicEnabledChange={v => { setMusicEnabled(v); saveSettings({ musicEnabled: v }) }}
+        onMusicSettingsChange={v => { const musicSettings = normalizeMusic(v); setMusicSettings(musicSettings); saveSettings({ musicSettings }) }}
+        onHeadphoneFitChange={v => setHeadphoneFits(previous => { const headphoneFits = { ...previous, [modelFitKey(modelPath)]: normalizeFit(v) }; saveSettings({ headphoneFits }); return headphoneFits })}
+        onMusicPreview={handleMusicPreview}
         visible={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         currentModel={modelPath}
@@ -460,6 +487,7 @@ export default function App() {
       />
       {!hideUI && <div
         style={{
+          ...hoverControlsStyle,
           position: 'absolute',
           top: 8,
           ...(uiAlign === 'left' ? { left: 8 } : { right: 8 }),

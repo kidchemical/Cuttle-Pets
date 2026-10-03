@@ -1,3 +1,5 @@
+import { MusicSettingsPanel } from './MusicSettingsPanel'
+import type { MusicSettings, HeadphoneFit } from '../music-settings'
 import { CuttleConnection } from './CuttleConnection'
 import { petUrl } from '../config'
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -15,6 +17,13 @@ interface DanceItem {
 }
 
 interface SettingsPanelProps {
+  musicSettings: MusicSettings
+  headphoneFit: HeadphoneFit
+  musicEnabled: boolean
+  onMusicEnabledChange: (v: boolean) => void
+  onMusicSettingsChange: (v: MusicSettings) => void
+  onHeadphoneFitChange: (v: HeadphoneFit) => void
+  onMusicPreview: (v: boolean) => void
   visible: boolean
   onClose: () => void
   currentModel: string
@@ -45,7 +54,7 @@ interface SettingsPanelProps {
   onDanceChange: (id: string, preset?: DancePreset) => void
 }
 
-type Tab = 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance'
+type Tab = 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance'
 
 const BUILTIN_MODELS = ['/model1.vrm', '/model2.vrm', '/model3.vrm', '/model4.vrm', '/model5.vrm']
 
@@ -94,6 +103,7 @@ const QWEN_MODELS = [
 ]
 
 export function SettingsPanel({
+  musicSettings, headphoneFit, musicEnabled, onMusicEnabledChange, onMusicSettingsChange, onHeadphoneFitChange, onMusicPreview,
   visible, onClose, currentModel, onModelChange,
   hideUI, onHideUIChange,
   showText, onShowTextChange,
@@ -111,6 +121,8 @@ export function SettingsPanel({
   const t = (zh: string, en: string) => language === 'en' ? en : zh
 
   const [tab, setTab] = useState<Tab>('general')
+  const [musicPreview, setMusicPreview] = useState(false)
+  const handlePreview = useCallback((v: boolean) => { setMusicPreview(v); onMusicPreview(v) }, [onMusicPreview])
   const [modelImportError, setModelImportError] = useState('')
   const [models, setModels] = useState<{ name: string; url: string }[]>([])
   const [soulContent, setSoulContent] = useState('')
@@ -316,7 +328,7 @@ export function SettingsPanel({
   const voices = currentProvider === 'qwen' ? QWEN_VOICES : EDGE_VOICES
 
   return (
-    <div style={overlayStyle} data-no-passthrough onClick={onClose}>
+    <div style={{ ...overlayStyle, ...(tab === 'music' && musicPreview ? { background: 'transparent', alignItems: 'flex-end' } : {}) }} data-no-passthrough onClick={onClose}>
       <div style={{ ...panelStyle, transform: `translate(${panelPos.x}px, ${panelPos.y}px)` }} data-no-passthrough onClick={(e) => e.stopPropagation()}>
         <div style={headerStyle} onMouseDown={onDragStart}>
           <span style={{ fontSize: 16, fontWeight: 600, cursor: 'grab' }}>{t('设置', 'Settings')}</span>
@@ -327,19 +339,20 @@ export function SettingsPanel({
 
         {/* Tabs */}
         <div style={tabBarStyle}>
-          {(['general', 'cuttle', 'voice', 'model', 'persona', 'dance'] as const).map((tb) => (
+          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'dance'] as const).map((tb) => (
             <button
               key={tb}
               onClick={() => setTab(tb)}
               style={{ ...tabStyle, ...(tab === tb ? activeTabStyle : {}) }}
             >
-              {{ cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance') }[tb]}
+              {{ music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance') }[tb]}
             </button>
           ))}
         </div>
 
         {/* Tab content */}
-        <div style={contentStyle}>
+        <div style={{ ...contentStyle, maxHeight: tab === 'music' && musicPreview ? '32vh' : '60vh', overflowY: 'auto', paddingRight: 4 }}>
+          {tab === 'music' && <MusicSettingsPanel fit={headphoneFit} music={musicSettings} enabled={musicEnabled} onFitChange={onHeadphoneFitChange} onMusicChange={onMusicSettingsChange} onEnabledChange={onMusicEnabledChange} onPreview={handlePreview} />}
           {tab === 'cuttle' && <CuttleConnection />}
           {tab === 'general' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -891,6 +904,7 @@ const closeBtnStyle: React.CSSProperties = {
 
 const tabBarStyle: React.CSSProperties = {
   display: 'flex',
+  flexWrap: 'wrap',
   gap: 2,
   marginBottom: 16,
   background: 'rgba(255, 255, 255, 0.06)',
@@ -899,7 +913,7 @@ const tabBarStyle: React.CSSProperties = {
 }
 
 const tabStyle: React.CSSProperties = {
-  flex: 1,
+  flex: '1 0 22%',
   height: 32,
   border: 'none',
   borderRadius: 6,

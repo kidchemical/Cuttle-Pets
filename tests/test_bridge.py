@@ -11,6 +11,9 @@ class BridgeTests(unittest.TestCase):
         self.saved.start()
         self.addCleanup(self.token.stop)
         self.addCleanup(self.saved.stop)
+        sync = patch.object(bridge, 'pet_sync')
+        self.sync = sync.start()
+        self.addCleanup(sync.stop)
 
     def test_discovers_owned_chats(self):
         with patch.object(bridge, '_get', return_value={

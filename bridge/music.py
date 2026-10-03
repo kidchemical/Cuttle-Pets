@@ -26,15 +26,13 @@ def is_playing() -> bool:
 
 
 def watch(publish, stop=None):
-    last = None
     while stop is None or not stop.is_set():
         try:
             active = is_playing()
         except (OSError, subprocess.SubprocessError):
             active = False
-        if active != last:
-            publish(active)
-            last = active
+        # Refresh the liveness timestamp even when playback state is unchanged.
+        publish(active)
         if stop is None:
             time.sleep(3)
         else:

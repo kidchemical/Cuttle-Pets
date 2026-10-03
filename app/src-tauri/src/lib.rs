@@ -170,7 +170,10 @@ async fn stop_speech_recognition() -> Result<(), String> {
 #[derive(serde::Deserialize)]
 struct TrayModel { name: String, url: String }
 
-fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music_enabled: bool) -> tauri::Result<Menu<tauri::Wry>> {
+#[derive(serde::Deserialize)]
+struct TrayAnimation { name: String, id: String }
+
+fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music_enabled: bool, animations: &[TrayAnimation]) -> tauri::Result<Menu<tauri::Wry>> {
     let show = MenuItem::with_id(app, "show", "Show / Hide", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let models_items: Vec<CheckMenuItem<tauri::Wry>> = models.iter().map(|model|
@@ -178,27 +181,32 @@ fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music
     ).collect::<tauri::Result<_>>()?;
     let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = models_items.iter().map(|item| item as &dyn IsMenuItem<tauri::Wry>).collect();
     let models_menu = Submenu::with_items(app, "Character model", true, &refs)?;
+    let animation_items: Vec<MenuItem<tauri::Wry>> = animations.iter().map(|animation|
+        MenuItem::with_id(app, format!("animation:{}", animation.id), &animation.name, true, None::<&str>)
+    ).collect::<tauri::Result<_>>()?;
+    let animation_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = animation_items.iter().map(|item| item as &dyn IsMenuItem<tauri::Wry>).collect();
+    let animation_menu = Submenu::with_items(app, "Animation", !animations.is_empty(), &animation_refs)?;
     let music = CheckMenuItem::with_id(app, "music", "React to music", true, music_enabled, None::<&str>)?;
     let text = MenuItem::with_id(app, "text", "Toggle text bubbles", true, None::<&str>)?;
     let camera = MenuItem::with_id(app, "camera", "Reset camera", true, None::<&str>)?;
     let pose = MenuItem::with_id(app, "pose", "Stop animation", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    Menu::with_items(app, &[&show, &models_menu, &music, &text, &camera, &pose, &settings, &sep, &quit])
+    Menu::with_items(app, &[&show, &models_menu, &animation_menu, &music, &text, &camera, &pose, &settings, &sep, &quit])
 }
 
 #[tauri::command]
-fn update_tray_models(app: tauri::AppHandle, models: Vec<TrayModel>, selected: String, music_enabled: bool) -> Result<(), String> {
-    let menu = tray_menu(&app, &models, &selected, music_enabled).map_err(|e| e.to_string())?;
+fn update_tray_models(app: tauri::AppHandle, models: Vec<TrayModel>, selected: String, music_enabled: bool, animations: Vec<TrayAnimation>) -> Result<(), String> {
+    let menu = tray_menu(&app, &models, &selected, music_enabled, &animations).map_err(|e| e.to_string())?;
     if let Some(tray) = app.tray_by_id("cuttle-pet") { tray.set_menu(Some(menu)).map_err(|e| e.to_string())?; }
     Ok(())
 }
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let menu = tray_menu(app.handle(), &[TrayModel { name: "Default character".into(), url: "/model1.vrm".into() }], "/model1.vrm", true)?;
+    let menu = tray_menu(app.handle(), &[TrayModel { name: "Default character".into(), url: "/model1.vrm".into() }], "/model1.vrm", true, &[])?;
 
     TrayIconBuilder::with_id("cuttle-pet")
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))?)
         .tooltip("Cuttle Pets")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -235,6 +243,10 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 }
                 "quit" => {
                     app.exit(0);
+                }
+                id if id.starts_with("animation:") => {
+                    let _ = window.show();
+                    let _ = window.emit("play-animation", &id[10..]);
                 }
                 id if id.starts_with("model:") => { let _ = window.emit("select-model", &id[6..]); }
                 id => { let _ = window.emit("tray-control", id); }

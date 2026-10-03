@@ -32,39 +32,39 @@ export interface MotionPreset {
 // Actions: short one-shot gestures triggered by emotions / interactions
 export const actionPresets: Record<string, MotionPreset> = {
   // Local VRMA actions (bundled)
-  akimbo:       { label: '叉腰',   type: 'vrma', url: '/akimbo.vrma' },
-  playFingers:  { label: '搓手',   type: 'vrma', url: '/playFingers.vrma' },
-  scratchHead:  { label: '挠头',   type: 'vrma', url: '/scratchHead.vrma' },
-  stretch:      { label: '伸展',   type: 'vrma', url: '/stretch.vrma' },
+  akimbo:       { label: 'Hands on hips',   type: 'vrma', url: '/akimbo.vrma' },
+  playFingers:  { label: 'Fidget fingers',   type: 'vrma', url: '/playFingers.vrma' },
+  scratchHead:  { label: 'Scratch head',   type: 'vrma', url: '/scratchHead.vrma' },
+  stretch:      { label: 'Stretch',   type: 'vrma', url: '/stretch.vrma' },
 
   // Local FBX actions (bundled)
-  happy:        { label: '开心',     type: 'fbx', url: '/happy.fbx' },
-  angry:        { label: '生气',     type: 'fbx', url: '/angry.fbx' },
-  greeting:     { label: '招呼',     type: 'fbx', url: '/greeting.fbx' },
-  excited:      { label: '兴奋',     type: 'fbx', url: '/excited.fbx' },
-  shy:          { label: '害羞',     type: 'fbx', url: '/shy.fbx' },
-  point:        { label: '指点',     type: 'fbx', url: '/point.fbx' },
-  salute:       { label: '敬礼',     type: 'fbx', url: '/salute.fbx' },
-  angryPump:    { label: '暴怒',     type: 'fbx', url: '/angryPump.fbx' },
+  happy:        { label: 'Happy',     type: 'fbx', url: '/happy.fbx' },
+  angry:        { label: 'Angry',     type: 'fbx', url: '/angry.fbx' },
+  greeting:     { label: 'Greeting',     type: 'fbx', url: '/greeting.fbx' },
+  excited:      { label: 'Excited',     type: 'fbx', url: '/excited.fbx' },
+  shy:          { label: 'Shy',     type: 'fbx', url: '/shy.fbx' },
+  point:        { label: 'Point',     type: 'fbx', url: '/point.fbx' },
+  salute:       { label: 'Salute',     type: 'fbx', url: '/salute.fbx' },
+  angryPump:    { label: 'Angry fist pump',     type: 'fbx', url: '/angryPump.fbx' },
 
   // Free Mixamo clips (same bytes as a mixamo.com download with a free
   // Adobe account, mirrored via GitHub)
-  waving:       { label: '挥手',     type: 'fbx', url: '/mixamo_waving.fbx' },
-  cheering:     { label: '欢呼',     type: 'fbx', url: '/mixamo_cheering.fbx' },
-  clapping:     { label: '鼓掌',     type: 'fbx', url: '/mixamo_clapping.fbx' },
-  victory:      { label: '胜利',     type: 'fbx', url: '/mixamo_victory.fbx' },
-  praying:      { label: '祈祷',     type: 'fbx', url: '/mixamo_praying.fbx' },
-  defeated:     { label: '沮丧',     type: 'fbx', url: '/mixamo_defeated.fbx' },
-  joyfulJump:   { label: '欢跳',     type: 'fbx', url: '/mixamo_joyfuljump.fbx' },
-  looking:      { label: '张望',     type: 'fbx', url: '/mixamo_looking.fbx' },
-  pointing:     { label: '指向',     type: 'fbx', url: '/mixamo_pointing.fbx' },
-  breakdance:   { label: '霹雳舞',   type: 'fbx', url: '/mixamo_breakdance.fbx' },
+  waving:       { label: 'Wave',     type: 'fbx', url: '/mixamo_waving.fbx' },
+  cheering:     { label: 'Cheer',     type: 'fbx', url: '/mixamo_cheering.fbx' },
+  clapping:     { label: 'Clap',     type: 'fbx', url: '/mixamo_clapping.fbx' },
+  victory:      { label: 'Victory',     type: 'fbx', url: '/mixamo_victory.fbx' },
+  praying:      { label: 'Pray',     type: 'fbx', url: '/mixamo_praying.fbx' },
+  defeated:     { label: 'Defeated',     type: 'fbx', url: '/mixamo_defeated.fbx' },
+  joyfulJump:   { label: 'Joyful jump',     type: 'fbx', url: '/mixamo_joyfuljump.fbx' },
+  looking:      { label: 'Look around',     type: 'fbx', url: '/mixamo_looking.fbx' },
+  pointing:     { label: 'Point forward',     type: 'fbx', url: '/mixamo_pointing.fbx' },
+  breakdance:   { label: 'Breakdance',   type: 'fbx', url: '/mixamo_breakdance.fbx' },
 
   // CC0 Quaternius UAL takes (multi-take pack, selected by take name)
-  sittingIdle:  { label: '坐下',     type: 'fbx', url: '/ual1.fbx', take: 'Armature|Sitting_Idle_Loop' },
-  sittingTalk:  { label: '坐聊',     type: 'fbx', url: '/ual1.fbx', take: 'Armature|Sitting_Talking_Loop' },
-  talkingIdle:  { label: '交谈',     type: 'fbx', url: '/ual1.fbx', take: 'Armature|Idle_Talking_Loop' },
-  phoneCall:    { label: '打电话',   type: 'fbx', url: '/ual2.fbx', take: 'Armature|Idle_TalkingPhone_Loop' },
+  sittingIdle:  { label: 'Sitting idle',     type: 'fbx', url: '/ual1.fbx', take: 'Armature|Sitting_Idle_Loop' },
+  sittingTalk:  { label: 'Sitting talk',     type: 'fbx', url: '/ual1.fbx', take: 'Armature|Sitting_Talking_Loop' },
+  talkingIdle:  { label: 'Talking idle',     type: 'fbx', url: '/ual1.fbx', take: 'Armature|Idle_Talking_Loop' },
+  phoneCall:    { label: 'Phone call',   type: 'fbx', url: '/ual2.fbx', take: 'Armature|Idle_TalkingPhone_Loop' },
 }
 
 // Dances: looping full-body animations with optional BGM

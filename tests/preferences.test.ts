@@ -23,6 +23,10 @@ async function main() {
   await new Promise(resolve => setTimeout(resolve, 20))
   assert.deepEqual(saved, { hideMood: true, pinned: false })
   assert.ok(!memory.get('cuttle-pet-preferences-v1')!.includes('secret'))
+  saveSettings({ headphoneFits: { '/cosmic.vrm': { scale: 1.4, y: 8 } }, musicSettings: { minBpm: 95, maxBpm: 195, nod: 24 } })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal((await loadSettings()).headphoneFits['/cosmic.vrm'].scale, 1.4)
+  assert.equal((await loadSettings()).musicSettings.maxBpm, 195)
   offline = true
   saveSettings({ volume: 0.3 })
   await new Promise(resolve => setTimeout(resolve, 20))

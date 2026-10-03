@@ -50,7 +50,7 @@ if ! "$PYTHON" cli/cuttle_pet.py status >/dev/null 2>&1; then
     fi
 fi
 if [[ "${CUTTLE_PET_BRIDGE:-1}" != 0 ]]; then
-    "$PYTHON" bridge/bridge.py --verbose &
+    "$PYTHON" bridge/bridge.py --verbose --parent-pid "$$" &
     children+=("$!")
 fi
 # Populate the accessibility bus address when available (Wayland/GTK).

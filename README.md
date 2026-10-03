@@ -81,6 +81,53 @@ defaults from upstream [claw-sama](https://github.com/luckybugqqq/claw-sama)
 expressions or detailed eyes degrade gracefully (unknown expression names
 are silently ignored), so animations, props, and lip-sync keep working.
 
+## Headphones and music motion
+
+Open **Settings → Music** to fit headphones to the current character. Position
+(offsets as a percentage of model height), overall scale, width/height/depth,
+and rotation save independently for each model. Enable **Preview** to adjust
+without playing music; the panel moves down so you can see the head. Changes
+apply immediately and keep your camera position.
+
+Music motion uses a forward/back pitch nod with a small side sway. Adjust both
+amounts, fallback tempo, and occasional idle dancing in the same tab. Headphones
+and a gentler nod stay active while typing; sipping briefly suppresses the nod.
+Full dances only run when the pet is idle. The mug remains beside the laptop
+while working and moves to the hand during sips. The keyboard follows the
+character's actual typing hands, with palms down and a slight downward gaze.
+
+On Linux with `pw-record` and `wpctl`, beat sync analyzes the default PipeWire
+**playback sink monitor**, not the microphone. It filters the bass band up to
+200 Hz, detects adaptive amplitude peaks, and locks tempo when recent intervals
+are consistent. The default detection range is **95–195 BPM**. Range, bass cutoff,
+and peak threshold are adjustable. The status shows whether capture is working
+and whether a tempo has been detected. Without a reliable lock, the fallback
+tempo keeps the nod moving; half/double-tempo ambiguity can still occur. Audio
+stays in memory and is neither saved nor sent anywhere. Turning off music
+reactions, or all three audio features (beat sync, amplitude response, and end
+reactions), stops capture. Playback device changes reconnect the monitor.
+MPRIS player status also enables music reactions when audio capture is unavailable.
+
+Nods use a continuous phase with gradual tempo/phase corrections, so noisy peaks
+and fallback changes do not restart the movement. Amplitude response (enabled
+by default) smoothly increases nod strength with playback loudness; adjust its
+gain or turn it off in Music settings. After at least ten seconds of playback,
+sustained silence triggers one short clap or cheer, then typing/idle resumes.
+Brief gaps, capture failures, and disabled music reactions do not trigger it.
+This is based on silence, so pausing for several seconds also qualifies.
+
+Viewport controls (toolbar, chat controls, mood bar, and resize hit areas) hide
+when the pointer leaves the pet window and return on hover. Text bubbles remain
+visible. Settings and history dialogs stay open until closed. Right-click the
+tray icon → **Animation** to play any bundled gesture once; a new selection
+replaces the previous animation, preserves the camera, then returns to typing
+if Cuttle is still working, or idle otherwise.
+
+The bridge sends a working-state heartbeat every poll, and reconnecting renderers
+receive the current state immediately. Heartbeats do not replay speech or gestures.
+Playback signals expire if monitoring stops; silence takes priority over stale
+player status when capture is available.
+
 ## Control API
 
 | Verb | Body | Effect |

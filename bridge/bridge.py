@@ -117,6 +117,10 @@ def pet_event(state: str, detail: str = "") -> None:
     _post(f"{PET}/pet/event", {"state": state, "detail": detail})
 
 
+def pet_sync(state: str) -> None:
+    _post(f"{PET}/pet/sync", {"state": state})
+
+
 def fetch_state_for(sessions):
     return fetch_state(sessions)
 
@@ -129,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="Cuttle session id to watch (repeatable); "
                          "also $CUTTLE_PET_SESSIONS; default: all chats")
     ap.add_argument("--all-chats", action="store_true", help="watch all your chats (default without --session)")
+    ap.add_argument("--parent-pid", type=int, default=0, help="Exit when the owning launcher exits")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args(argv)
@@ -150,6 +155,11 @@ def main(argv: list[str] | None = None) -> int:
     failed = False
     connection_notice = None
     while True:
+        if a.parent_pid:
+            try:
+                os.kill(a.parent_pid, 0)
+            except ProcessLookupError:
+                return 0
         try:
             saved = load_connection()
             if not TOKEN and not saved:
@@ -191,6 +201,12 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             last = state
 
+        # Reassert the working flag after renderer/server reconnects, without
+        # replaying text or one-shot actions on every poll.
+        try:
+            pet_sync(state)
+        except RuntimeError as exc:
+            print(f"pet sync failed: {exc}", file=sys.stderr)
         if a.once:
             return 0
         time.sleep(a.interval)
