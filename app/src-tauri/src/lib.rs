@@ -9,6 +9,22 @@ use tauri::{
 mod speech_macos;
 
 static MONITORING: AtomicBool = AtomicBool::new(false);
+static PINNED: AtomicBool = AtomicBool::new(true);
+
+#[tauri::command]
+fn set_pinned(pinned: bool) {
+    PINNED.store(pinned, Ordering::Relaxed);
+}
+
+/// Show the main window, re-asserting always-on-top when pinned: some
+/// window managers drop the topmost hint across hide/show cycles
+/// (tray toggle, suspend resume).
+fn show_main(window: &tauri::WebviewWindow) {
+    let _ = window.show();
+    if PINNED.load(Ordering::Relaxed) {
+        let _ = window.set_always_on_top(true);
+    }
+}
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 #[derive(Clone, serde::Serialize)]
@@ -223,7 +239,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
                     } else {
-                        let _ = window.show();
+                        show_main(&window);
                         let _ = window.set_focus();
                     }
                 }
@@ -238,12 +254,12 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
                     } else {
-                        let _ = window.show();
+                        show_main(&window);
                         let _ = window.set_focus();
                     }
                 }
                 "settings" => {
-                    let _ = window.show();
+                    show_main(&window);
                     let _ = window.set_focus();
                     let _ = window.emit("open-settings", ());
                 }
@@ -251,7 +267,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                     app.exit(0);
                 }
                 id if id.starts_with("animation:") => {
-                    let _ = window.show();
+                    show_main(&window);
                     let _ = window.emit("play-animation", &id[10..]);
                 }
                 id if id.starts_with("model:") => { let _ = window.emit("select-model", &id[6..]); }
@@ -269,7 +285,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // When a second instance is launched, show and focus the existing window
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
+                show_main(&window);
                 let _ = window.set_focus();
             }
         }))
@@ -278,6 +294,7 @@ pub fn run() {
             .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION | tauri_plugin_window_state::StateFlags::SIZE)
             .build())
         .invoke_handler(tauri::generate_handler![
+            set_pinned,
             update_tray_models,
             pick_vrm_file,
             pick_dance_file,
@@ -337,12 +354,12 @@ pub fn run() {
                             if win.is_visible().unwrap_or(false) {
                                 let _ = win.hide();
                             } else {
-                                let _ = win.show();
+                                show_main(&win);
                                 let _ = win.set_focus();
                             }
                         }
                         "app_settings" => {
-                            let _ = win.show();
+                            show_main(&win);
                             let _ = win.set_focus();
                             let _ = win.emit("open-settings", ());
                         }

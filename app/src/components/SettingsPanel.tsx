@@ -60,6 +60,8 @@ interface SettingsPanelProps {
   onBubbleSettingsChange: (v: BubbleSettings) => void
   panelWidth: number
   onPanelWidthChange: (v: number) => void
+  pinned: boolean
+  onPinnedChange: (v: boolean) => void
 }
 
 type Tab = 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance' | 'quality' | 'display'
@@ -128,6 +130,7 @@ export function SettingsPanel({
   currentDance, onDanceChange,
   bubbleSettings, onBubbleSettingsChange,
   panelWidth, onPanelWidthChange,
+  pinned, onPinnedChange,
 }: SettingsPanelProps) {
   const t = (zh: string, en: string) => language === 'en' ? en : zh
 
@@ -476,6 +479,7 @@ export function SettingsPanel({
                   <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', width: 44, textAlign: 'right' }}>{panelWidth}px</span>
                 </div>
               </div>
+              <ToggleRow label={t('窗口置顶', 'Stay on top')} value={pinned} onChange={onPinnedChange} />
               <ToggleRow label={t('隐藏UI', 'Hide UI')} value={hideUI} onChange={onHideUIChange} />
               <ToggleRow label={t('隐藏心情条', 'Hide Mood Bar')} value={hideMood} onChange={onHideMoodChange} />
               <ToggleRow label={t('屏幕观察', 'Screen Observe')} value={screenObserve} onChange={onScreenObserveChange} />

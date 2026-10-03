@@ -195,6 +195,16 @@ export function applySipPose(cache: TypingPoseCache, time: number, amount: numbe
   const mouth = head.getWorldPosition(new THREE.Vector3())
     .addScaledVector(faceDir, faceOffset + .04)
   mouth.y -= .02
+  // Drink to the arm's own side of the mouth rather than dead center: the
+  // wrist sits here but the fingers extend ~10cm along the forearm axis
+  // (up-left from the low right elbow), so parking the wrist ~6cm right of
+  // the lips lands the fingertips on the mouth. Applied before bone
+  // measuring so the IK below still lands exact.
+  {
+    const side = upperR.getWorldPosition(new THREE.Vector3()).sub(mouth)
+    side.y = 0
+    if (side.lengthSq() > 1e-8) mouth.addScaledVector(side.normalize(), .06)
+  }
 
   // Bone lengths are rotation-invariant: measure in world space before
   // re-aiming anything, so model scale never matters.

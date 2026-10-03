@@ -115,7 +115,7 @@ export default function App() {
   useEffect(() => {
     loadSettings()
       .then((s) => {
-        if (s.pinned !== undefined) { setPinned(s.pinned); void getCurrentWindow().setAlwaysOnTop(s.pinned) }
+        { const pin = s.pinned ?? true; setPinned(pin); void getCurrentWindow().setAlwaysOnTop(pin); void invoke('set_pinned', { pinned: pin }).catch(() => {}) }
         if (s.collapsed !== undefined) setCollapsed(s.collapsed)
         if (s.modelPath) setModelPath(s.modelPath.startsWith('/model/') ? petUrl(s.modelPath) : s.modelPath)
         if (s.ttsEnabled !== undefined) setTtsEnabled(s.ttsEnabled)
@@ -449,12 +449,15 @@ export default function App() {
     }
   }, [])
 
-  const togglePin = async () => {
-    const win = getCurrentWindow()
-    const next = !pinned
-    await win.setAlwaysOnTop(next)
+  const applyPinned = async (next: boolean) => {
+    await getCurrentWindow().setAlwaysOnTop(next)
     setPinned(next)
     saveSettings({ pinned: next })
+    void invoke('set_pinned', { pinned: next }).catch(() => {})
+  }
+
+  const togglePin = async () => {
+    await applyPinned(!pinned)
   }
 
   return (
@@ -527,6 +530,8 @@ export default function App() {
         onBubbleSettingsChange={handleBubbleSettingsChange}
         panelWidth={panelWidth}
         onPanelWidthChange={(v) => { setPanelWidth(v); saveSettings({ panelWidth: v }) }}
+        pinned={pinned}
+        onPinnedChange={(v) => { void applyPinned(v) }}
       />
       {!hideUI && <div
         style={{

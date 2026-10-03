@@ -33,6 +33,7 @@ import { DEFAULT_MAX_FPS, QUALITY_PRESETS, normalizeQualitySettings } from '../r
 import { defaultViewFromBounds, isValidView, loadSavedCameraView, saveCameraView, type CameraView } from '../camera-framing'
 import { collectEarMorphSlots, dampenEarMorphs, type EarMorphSlot } from '../ear-morph-dampen'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { getCachedSetting } from '../settings'
 export type { RenderQuality, QualitySettings, QualityPresetOrCustom, QualityDetails } from '../render-quality'
 export { RENDER_QUALITIES, QUALITY_PRESETS as QUALITY_CONFIGS, normalizeQuality, presetSettings, resolvePreset, normalizeQualitySettings } from '../render-quality'
 
@@ -1169,7 +1170,10 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         suspendActive = false
         if (windowHiddenBySuspend) {
           windowHiddenBySuspend = false
-          getCurrentWindow().show().catch(() => {})
+          // Re-assert always-on-top: some WMs drop the topmost hint across hide/show.
+          getCurrentWindow().show()
+            .then(() => { if (getCachedSetting('pinned', true) !== false) return getCurrentWindow().setAlwaysOnTop(true) })
+            .catch(() => {})
         }
         // Stay paused if the page itself is hidden (e.g. minimized).
         if (!document.hidden) resumeRendering()

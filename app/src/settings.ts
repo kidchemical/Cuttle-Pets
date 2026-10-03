@@ -46,6 +46,10 @@ export function saveSettings(patch: Settings) {
   write(PENDING, { ...inFlight, ...pending })
   void flush()
 }
+export function getCachedSetting(key: string, fallback: any = undefined): any {
+  const merged = { ...read(CACHE), ...read(PENDING), ...pending }
+  return merged[key] !== undefined ? merged[key] : fallback
+}
 export async function loadSettings(): Promise<Settings> {
   try {
     const response = await fetch(petUrl('/settings'))
