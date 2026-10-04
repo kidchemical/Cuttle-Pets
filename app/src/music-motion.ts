@@ -17,7 +17,7 @@ export class MusicMotion {
   private pitch = 0
   private roll = 0
   receiveBeat(beat: { bpm: number | null; confidence: number; timestamp: number }, now: number, age: number) {
-    if (!beat.bpm || !Number.isFinite(beat.bpm) || !Number.isFinite(beat.confidence) || !Number.isFinite(age) || beat.confidence < .35 || age > 2) return
+    if (!beat.bpm || !Number.isFinite(beat.bpm) || !Number.isFinite(beat.confidence) || !Number.isFinite(age) || age < 0 || beat.confidence < .35 || age > 2) return
     this.lockedBpm = clamp(beat.bpm, 40, 240)
     this.lastLock = now
     this.phaseError = wrap(age * this.lockedBpm / 60 - this.phase)

@@ -10,8 +10,10 @@ import { TextBubble } from './components/TextBubble'
 import type { OnVrmMessage } from './components/TextBubble'
 import { ChatInput } from './components/ChatInput'
 import { ResizeHandles } from './components/ResizeHandles'
-import { openSettingsWindow, subscribeWindowEvent, replyScreenshot, type PetCommand } from './window-sync'
+import { openSettingsWindow, subscribeWindowEvent, replyScreenshot, publishStatus, type PetCommand } from './window-sync'
 import { DEFAULT_ANIMATIONS, normalizeAnimations, type AnimationSettings } from './animation-settings'
+import { normalizeBehaviorSettings, resolvePetState, playOnceById, applyBaseById, type BehaviorSettings, type BehaviorStateId } from './behavior'
+import { useBehaviorEngine } from './hooks/useBehaviorEngine'
 import { usePassThrough } from './hooks/usePassThrough'
 import { dancePresets, actionPresets } from './motion-controller'
 import { LipSync } from './lip-sync'
@@ -74,6 +76,12 @@ export default function App() {
   const [musicPlaying, setMusicPlaying] = useState(false)
   const musicPlayingRef = useRef(false)
   const workingRef = useRef(false)
+  const [working, setWorkingState] = useState(false)
+  const [behaviorSettings, setBehaviorSettings] = useState<BehaviorSettings>(() => normalizeBehaviorSettings(undefined))
+  const behaviorEnabledRef = useRef(true)
+  behaviorEnabledRef.current = behaviorSettings.enabled
+  const [petState, setPetState] = useState<BehaviorStateId>('idle')
+  const lastPublishedRef = useRef('')
   const [pinned, setPinned] = useState(true)
   const [tracking, setTracking] = useState<'mouse' | 'camera'>('mouse')
   const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => presetSettings('high'))
@@ -140,6 +148,7 @@ export default function App() {
       saveSettings({ language: detected })
     }
     if (s.animationSettings) setAnimationSettings(normalizeAnimations(s.animationSettings))
+    if (s.behaviorSettings) setBehaviorSettings(normalizeBehaviorSettings(s.behaviorSettings))
   }, [])
   useEffect(() => {
     let active = true
@@ -150,13 +159,12 @@ export default function App() {
   }, [applyPreferences])
   useEffect(() => subscribeWindowEvent<PetCommand>('pet-command', command => {
     if (command.type === 'animation') {
-      sceneRef.current?.resetPose()
+      const scene = sceneRef.current
+      if (!scene) return
+      scene.resetPose()
       if (command.id === 'idle') return
-      if (command.id === 'typing' || command.id === 'sip') {
-        sceneRef.current?.setWorking(true)
-        if (command.id === 'sip') sceneRef.current?.requestCoffeeSip()
-      } else if (command.id.startsWith('action:')) sceneRef.current?.playAnimationOnce(command.id.slice(7))
-      else if (command.id.startsWith('dance:')) sceneRef.current?.playDance(command.preset ?? command.id.slice(6), command.id)
+      if (command.mode === 'loop') applyBaseById(scene, command.id, command.preset)
+      else playOnceById(scene, command.id, command.preset, 15000)
     }
     if (command.type === 'stop') { sceneRef.current?.resetPose(); setDancing(false) }
     if (command.type === 'music-preview') sceneRef.current?.setMusicPreview(command.active)
@@ -207,6 +215,34 @@ export default function App() {
 
   useEffect(() => { musicPlayingRef.current = musicEnabled && musicPlaying; sceneRef.current?.setMusicMode(musicEnabled && musicPlaying) }, [musicEnabled, musicPlaying, modelPath])
 
+  // Built-in sip scheduler runs only when the behavior engine is off; the
+  // engine schedules sips itself from the working state's occasionals.
+  useEffect(() => { sceneRef.current?.setAutoSip(!behaviorSettings.enabled) }, [behaviorSettings.enabled, modelPath])
+
+  // Live status for the settings banner + behavior engine state, polled from
+  // the scene so dances (any source) count as dancing.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const playback = sceneRef.current?.getPlaybackStatus()
+      if (!playback) return
+      const state = resolvePetState({ dancing: playback.dancing, working, music: musicEnabled && musicPlaying })
+      setPetState(previous => (previous === state ? previous : state))
+      const key = JSON.stringify([state, playback.actionId, playback.danceId, playback.working, playback.sipping])
+      if (key !== lastPublishedRef.current) {
+        lastPublishedRef.current = key
+        publishStatus({ state, actionId: playback.actionId, danceId: playback.danceId, working: playback.working, sipping: playback.sipping })
+      }
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [working, musicEnabled, musicPlaying])
+
+  useBehaviorEngine({
+    enabled: behaviorSettings.enabled,
+    profile: behaviorSettings.current,
+    state: petState,
+    getScene: () => sceneRef.current,
+  })
+
   useEffect(() => {
     bindScene(sceneRef.current)
     return () => bindScene(null)
@@ -226,7 +262,7 @@ export default function App() {
     }
     if (msg.demoReset) sceneRef.current?.resetPose()
     if (msg.sipCoffee) sceneRef.current?.requestCoffeeSip()
-    if (msg.working !== undefined) { workingRef.current = msg.working; sceneRef.current?.setWorking(msg.working) }
+    if (msg.working !== undefined) { workingRef.current = msg.working; setWorkingState(msg.working); sceneRef.current?.setWorking(msg.working) }
     if (msg.playAction) sceneRef.current?.playAction(msg.playAction, msg.hold ?? false)
     if (msg.emotion && sceneRef.current) {
       const action = emotionActionMap[msg.emotion]
@@ -268,7 +304,8 @@ export default function App() {
     const FIDGET_CHECK_MS = 15_000 // check every 15s, randomness inside
 
     const timer = setInterval(() => {
-      if (workingRef.current || musicPlayingRef.current) return
+      // The behavior engine owns idle variety when enabled; this is the fallback.
+      if (behaviorEnabledRef.current || workingRef.current || musicPlayingRef.current) return
       const idleMs = Date.now() - lastActivityRef.current
       if (idleMs < IDLE_THRESHOLD_MS) return
       // 50% chance each check to avoid being too predictable

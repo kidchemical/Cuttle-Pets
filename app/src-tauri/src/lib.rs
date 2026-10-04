@@ -20,8 +20,8 @@ fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     }
     tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App("index.html?settings".into()))
         .title("Cuttle Pets — Settings")
-        .inner_size(760.0, 800.0)
-        .min_inner_size(480.0, 500.0)
+        .inner_size(1280.0, 720.0)
+        .min_inner_size(960.0, 540.0)
         .resizable(true)
         .decorations(true)
         .transparent(false)
@@ -44,7 +44,6 @@ fn show_main(window: &tauri::WebviewWindow) {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos"))]
 #[derive(Clone, serde::Serialize)]
 struct CursorPosition {
     x: i32,
@@ -84,7 +83,7 @@ async fn pick_music_file() -> Result<Option<String>, String> {
 
 #[tauri::command]
 async fn start_cursor_monitor(window: tauri::Window) -> Result<(), String> {
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     let _ = &window;
 
     if MONITORING.load(Ordering::Relaxed) {
@@ -92,6 +91,79 @@ async fn start_cursor_monitor(window: tauri::Window) -> Result<(), String> {
     }
     MONITORING.store(true, Ordering::Relaxed);
 
+    // Linux/X11 runs on a dedicated OS thread: raw X pointers are not Send,
+    // and Xlib calls must stay on one thread. XQueryPointer reports cursor
+    // position in the same X-server pixels as the window geometry below
+    // (both divided by scale_factor on emit, like the Windows path).
+    #[cfg(target_os = "linux")]
+    {
+        std::thread::spawn(move || {
+            use std::os::raw::{c_int, c_uint};
+            use std::time::Duration;
+
+            let xlib = match x11_dl::xlib::Xlib::open() {
+                Ok(lib) => lib,
+                Err(_) => {
+                    MONITORING.store(false, Ordering::Relaxed);
+                    return;
+                }
+            };
+            // SAFETY: display is used only on this thread, closed below.
+            let display = unsafe { (xlib.XOpenDisplay)(std::ptr::null()) };
+            if display.is_null() {
+                MONITORING.store(false, Ordering::Relaxed);
+                return;
+            }
+            while MONITORING.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(32));
+                let scale = window.scale_factor().unwrap_or(1.0);
+                let pos = window.outer_position().unwrap_or_default();
+                let size = window.outer_size().unwrap_or_default();
+                let mut root_ret: x11_dl::xlib::Window = 0;
+                let mut child_ret: x11_dl::xlib::Window = 0;
+                let mut root_x: c_int = 0;
+                let mut root_y: c_int = 0;
+                let mut win_x: c_int = 0;
+                let mut win_y: c_int = 0;
+                let mut mask: c_uint = 0;
+                let queried = unsafe {
+                    let root = (xlib.XDefaultRootWindow)(display);
+                    (xlib.XQueryPointer)(
+                        display,
+                        root,
+                        &mut root_ret,
+                        &mut child_ret,
+                        &mut root_x,
+                        &mut root_y,
+                        &mut win_x,
+                        &mut win_y,
+                        &mut mask,
+                    )
+                };
+                if queried == 0 {
+                    continue;
+                }
+
+                let _ = window.emit(
+                    "cursor-position",
+                    CursorPosition {
+                        x: (root_x as f64 / scale) as i32,
+                        y: (root_y as f64 / scale) as i32,
+                        window_x: (pos.x as f64 / scale) as i32,
+                        window_y: (pos.y as f64 / scale) as i32,
+                        window_w: (size.width as f64 / scale) as u32,
+                        window_h: (size.height as f64 / scale) as u32,
+                    },
+                );
+            }
+            unsafe {
+                (xlib.XCloseDisplay)(display);
+            }
+        });
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "linux"))]
     tauri::async_runtime::spawn(async move {
         use tokio::time::{sleep, Duration};
 
@@ -169,6 +241,7 @@ async fn start_cursor_monitor(window: tauri::Window) -> Result<(), String> {
         }
     });
 
+    #[cfg(not(target_os = "linux"))]
     Ok(())
 }
 

@@ -20,7 +20,7 @@ function Find-Python {
     $cand += "$Root\.venv\Scripts\python.exe", 'python', 'python3'
     foreach ($c in $cand) {
         try {
-            & $c -c 'import flask' 2>$null
+            & $c -c 'import flask, numpy, soundcard' 2>$null
             if ($LASTEXITCODE -eq 0) { return $c }
         } catch { }
     }
@@ -29,7 +29,7 @@ function Find-Python {
 
 $Python = Find-Python
 if (-not $Python) {
-    Write-Error 'Python 3 with Flask is required. Run: python -m venv .venv; .\.venv\Scripts\pip.exe install -r requirements.txt'
+    Write-Error 'Python 3 with Flask, NumPy, and SoundCard is required. Run: python -m venv .venv; .\.venv\Scripts\pip.exe install -r requirements.txt'
 }
 
 foreach ($cmd in @('npm', 'cargo')) {

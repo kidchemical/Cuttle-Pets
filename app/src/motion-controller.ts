@@ -162,6 +162,12 @@ export class MotionController {
 
   get isDancing() { return this._isDancing }
   get actionPlaying() { return this._actionPlaying }
+  /** Animation-list id of the currently fading-in action ('idle', 'action:x', 'dance:x', …), if any. */
+  currentAnimationId(): string | null {
+    return (this.currentAction && this.actionKeys.get(this.currentAction)) ?? null
+  }
+  /** Dance preference key while a dance is playing, otherwise null. */
+  get danceId(): string | null { return this._isDancing ? this.danceKey : null }
 
   /** Set BGM volume (0–1). Also applies to currently playing BGM. */
   setVolume(v: number) {
@@ -347,6 +353,68 @@ export class MotionController {
       this.crossFadeTo(danceAction, this.danceKey)
     } catch (err) {
       console.error('Failed to start dance:', err)
+      this._isDancing = false
+    }
+  }
+
+  /** Dance clip played once, then back to idle (with BGM fade-out). */
+  async playDanceOnce(nameOrPreset: string | DancePreset, preferenceKey?: string) {
+    if (this._isDancing) return
+    this._isDancing = true
+    const gen = ++this._actionGeneration
+    this.danceKey = preferenceKey ?? `dance:${typeof nameOrPreset === 'string' ? nameOrPreset : nameOrPreset.url}`
+
+    try {
+      const preset: DancePreset | undefined =
+        typeof nameOrPreset === 'object' ? nameOrPreset : dancePresets[nameOrPreset]
+      const clip = preset
+        ? await this.loadClip(preset)
+        : await this.loadClipByUrl(nameOrPreset as string)
+
+      if (gen !== this._actionGeneration) return
+      if (!clip) {
+        this._isDancing = false
+        return
+      }
+
+      this.clearTimers()
+      this._actionPlaying = false
+      this.onActionChange?.(null)
+
+      this.onDanceStart?.()
+
+      this.stopBgmImmediate()
+      if (preset?.bgm) {
+        this.bgmAudio = new Audio(preset.bgm)
+        this.bgmAudio.loop = false
+        this.bgmAudio.playbackRate = Math.max(.0625, animationSpeed(this.animationSettings, this.danceKey))
+        this.bgmAudio.volume = this._volume
+        this.bgmAudio.play().catch(() => {})
+      }
+
+      if (!this.mixer) { this._isDancing = false; return }
+      const danceAction = this.mixer.clipAction(clip)
+      danceAction.setLoop(THREE.LoopOnce, 1)
+      danceAction.clampWhenFinished = true
+      this.crossFadeTo(danceAction, this.danceKey)
+
+      let settled = false
+      const settle = () => {
+        if (settled) return
+        settled = true
+        this.mixer?.removeEventListener('finished', onFinished)
+        if (gen !== this._actionGeneration) return
+        this.resetToIdle()
+      }
+      const onFinished = (event: { action: THREE.AnimationAction }) => {
+        if (event.action === danceAction) settle()
+      }
+      this.mixer?.addEventListener('finished', onFinished)
+
+      const duration = clip.duration > 0 ? clip.duration : 3
+      this.safetyWatch = { action: danceAction, duration, elapsed: 0, settle }
+    } catch (err) {
+      console.error('Failed to play dance once:', err)
       this._isDancing = false
     }
   }

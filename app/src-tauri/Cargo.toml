@@ -29,6 +29,11 @@ tauri-plugin-window-state = "2"
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# X11 cursor polling for click-through on Xwayland (the launcher forces
+# GDK_BACKEND=x11, so X coords match the window geometry units).
+x11-dl = "2.21"
+
 [features]
 devtools = []
 

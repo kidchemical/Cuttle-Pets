@@ -4,6 +4,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { SettingsPanel } from './SettingsPanel'
 import { loadSettings, saveSettings } from '../settings'
 import { normalizeAnimations } from '../animation-settings'
+import { normalizeBehaviorSettings } from '../behavior'
 import { DEFAULT_MUSIC, DEFAULT_FIT, normalizeMusic, normalizeFit, modelFitKey } from '../music-settings'
 import { normalizeQualitySettings } from '../render-quality'
 import { normalizeBubbleSettings } from '../bubble-settings'
@@ -61,7 +62,8 @@ export function SettingsWindow() {
     panelWidth={settings.panelWidth ?? 400} onPanelWidthChange={panelWidth => patch({ panelWidth })}
     pinned={settings.pinned ?? true} onPinnedChange={pinned => patch({ pinned })}
     animationSettings={normalizeAnimations(settings.animationSettings)} onAnimationSettingsChange={animationSettings => patch({ animationSettings })}
-    onAnimationPreview={(id, preset) => sendPetCommand({ type: 'animation', id, preset })}
+    onAnimationPreview={(id, preset, mode) => sendPetCommand({ type: 'animation', id, preset, mode })}
     onAnimationStop={() => sendPetCommand({ type: 'stop' })}
+    behaviorSettings={normalizeBehaviorSettings(settings.behaviorSettings)} onBehaviorSettingsChange={behaviorSettings => patch({ behaviorSettings })}
   />
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import subprocess
 import time
+import sys
 
 
 def bus_call(destination: str, path: str, method: str, *args: str) -> str:
@@ -26,6 +27,9 @@ def is_playing() -> bool:
 
 
 def watch(publish, stop=None):
+    # Audio signal presence is authoritative on Windows; MPRIS is Linux-only.
+    if not sys.platform.startswith('linux'):
+        return
     while stop is None or not stop.is_set():
         try:
             active = is_playing()

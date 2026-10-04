@@ -46,6 +46,15 @@ async function main() {
   release(new THREE.AnimationClip('dance', 2, []))
   await loading
   assert.equal(motion.isDancing, false, 'Stopping a preview cancels an in-flight dance load')
+
+  // One-shot dance: flagged dancing while the clip plays, idle after.
+  internal.loadClip = async () => new THREE.AnimationClip('dance-once', 2, [])
+  motion.setAnimationSettings(normalizeAnimations({ speed: 1 }))
+  await motion.playDanceOnce('ualDance')
+  assert.equal(motion.isDancing, true, 'One-shot dance is dancing while the clip plays')
+  for (let i = 0; i < 80; i++) motion.update(.05)
+  assert.equal(motion.isDancing, false, 'One-shot dance returns to idle after the clip')
+  assert.equal(motion.actionPlaying, false, 'One-shot dance leaves no action lock behind')
   motion.dispose()
   console.log('Animation settings passed: normalization, live speed, slow completion, and preview cancellation.')
 }

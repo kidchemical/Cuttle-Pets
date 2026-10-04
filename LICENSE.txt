@@ -27,3 +27,5 @@ Third-party notices: the renderer in `app/` is vendored from
 contributors) — see `app/UPSTREAM-LICENSE.txt`, which must be kept intact on
 redistribution. Bundled models, motions, and props each keep their own terms —
 see `docs/ASSET_LICENSES.md`.
+
+Audio-analysis and capture dependency notices: see `THIRD_PARTY_NOTICES.md`.

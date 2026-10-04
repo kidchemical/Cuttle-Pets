@@ -1,0 +1,22 @@
+.music-settings { display: flex; flex-direction: column; gap: 24px; font-size: 13px; }
+.music-settings section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.music-settings h3 { margin: 0; font-size: 15px; color: var(--settings-text, #edf2fb); }
+.music-settings .music-note { margin: 0; color: var(--settings-muted, #aebbd0); font-size: 12px; }
+.music-bpm-card {
+  padding: 20px; border: 1px solid var(--settings-border, #39465c);
+  border-radius: 12px; background: var(--settings-surface, #202838);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.music-bpm-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.music-bpm-state { border-radius: 20px; padding: 3px 10px; background: #ffffff0c; font-size: 12px; }
+.music-bpm-value { display: flex; align-items: baseline; gap: 10px; color: #edf2fb; font-variant-numeric: tabular-nums; }
+.music-bpm-value strong { font-size: clamp(44px, 8vw, 64px); line-height: 1.1; letter-spacing: -.04em; }
+.music-bpm-value span { font-size: 14px; opacity: .75; }
+.music-bpm-card[data-state="locked"] .music-bpm-value,
+.music-bpm-card[data-state="locked"] .music-bpm-state { color: #72e3a1; }
+.music-bpm-card[data-state="calculating"] .music-bpm-value,
+.music-bpm-card[data-state="calculating"] .music-bpm-state { color: #f3d477; }
+.music-bpm-confidence { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--settings-muted, #aebbd0); }
+.music-bpm-confidence > span { flex: 0 0 auto; }
+.music-bpm-confidence meter { width: 100%; min-width: 40px; height: 10px; accent-color: #72e3a1; }
+.music-headphone-fit { padding-top: 20px; border-top: 1px solid var(--settings-border, #39465c); }

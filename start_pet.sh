@@ -18,8 +18,8 @@ PYTHON="${CUTTLE_PET_PYTHON:-$ROOT/.venv/bin/python}"
 if [[ ! -x "$PYTHON" ]]; then
     PYTHON="$(command -v python3 || true)"
 fi
-if [[ -z "$PYTHON" ]] || ! "$PYTHON" -c 'import flask' 2>/dev/null; then
-    echo "Python 3 with Flask is required. Run: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
+if [[ -z "$PYTHON" ]] || ! "$PYTHON" -c 'import flask, numpy' 2>/dev/null; then
+    echo "Python 3 with Flask and NumPy is required. Run: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
     exit 1
 fi
 command -v npm >/dev/null || { echo 'npm is required.' >&2; exit 1; }

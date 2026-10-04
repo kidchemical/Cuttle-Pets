@@ -8,6 +8,9 @@ import { CuttleConnection } from './CuttleConnection'
 import { petUrl } from '../config'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, Play, Loader, Sparkles, Trash2, Upload, Music } from 'lucide-react'
+import { BehaviorPanel } from './BehaviorPanel'
+import { describeStatus, type BehaviorSettings, type BehaviorStateId } from '../behavior'
+import { subscribeWindowEvent, type PetStatusPayload } from '../window-sync'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isTauri, invoke } from '@tauri-apps/api/core'
 import { dancePresets, type DancePreset } from '../motion-controller'
@@ -26,7 +29,7 @@ interface SettingsPanelProps {
   standalone?: boolean
   animationSettings: AnimationSettings
   onAnimationSettingsChange: (value: AnimationSettings) => void
-  onAnimationPreview?: (id: string, preset?: DancePreset) => void
+  onAnimationPreview?: (id: string, preset?: DancePreset, mode?: 'once' | 'loop') => void
   onAnimationStop?: () => void
   onBubblePreview?: () => void
   musicSettings: MusicSettings
@@ -72,9 +75,11 @@ interface SettingsPanelProps {
   onPanelWidthChange: (v: number) => void
   pinned: boolean
   onPinnedChange: (v: boolean) => void
+  behaviorSettings: BehaviorSettings
+  onBehaviorSettingsChange: (v: BehaviorSettings) => void
 }
 
-type Tab = 'animations' | 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance' | 'quality' | 'display'
+type Tab = 'animations' | 'behavior' | 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance' | 'quality' | 'display'
 
 const BUILTIN_MODELS = ['/model1.vrm', '/model2.vrm', '/model3.vrm', '/model4.vrm', '/model5.vrm']
 
@@ -142,6 +147,7 @@ export function SettingsPanel({
   bubbleSettings, onBubbleSettingsChange,
   panelWidth, onPanelWidthChange,
   pinned, onPinnedChange,
+  behaviorSettings, onBehaviorSettingsChange,
 }: SettingsPanelProps) {
   const t = (zh: string, en: string) => language === 'en' ? en : zh
 
@@ -173,6 +179,17 @@ export function SettingsPanel({
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [customDances, setCustomDances] = useState<DanceItem[]>([])
   const [importingDance, setImportingDance] = useState(false)
+  const [petStatus, setPetStatus] = useState<PetStatusPayload | null>(null)
+  useEffect(() => {
+    if (!visible) return
+    return subscribeWindowEvent<PetStatusPayload>('pet-status', setPetStatus)
+  }, [visible])
+  const petStatusText = petStatus
+    ? describeStatus({
+      state: (['idle', 'working', 'music', 'dancing'] as string[]).includes(petStatus.state) ? petStatus.state as BehaviorStateId : 'idle',
+      actionId: petStatus.actionId, danceId: petStatus.danceId, working: petStatus.working, sipping: petStatus.sipping,
+    }, customDances)
+    : null
 
 
   // Drag state
@@ -390,23 +407,24 @@ export function SettingsPanel({
 
         {/* Tabs */}
         <nav className="settings-tabs" aria-label="Settings sections" style={tabBarStyle}>
-          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'dance', 'animations', 'quality', 'display'] as const).map((tb) => (
+          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'dance', 'animations', 'behavior', 'quality', 'display'] as const).map((tb) => (
             <button
               key={tb}
               className="settings-tab" aria-current={tab === tb ? "page" : undefined}
               onClick={() => setTab(tb)}
               style={{ ...tabStyle, ...(tab === tb ? activeTabStyle : {}) }}
             >
-              {{ animations: t('动画', 'Animations'), music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tb]}
+              {{ animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tb]}
             </button>
           ))}
         </nav>
 
         {/* Tab content */}
         <div className="settings-content" style={{ ...contentStyle, maxHeight: standalone ? undefined : tab === 'music' && musicPreview ? '32vh' : '60vh', ...(standalone ? { flex: 1, minHeight: 0 } : {}), overflowY: 'auto', paddingRight: 4 }}>
-          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), animations: t('动画', 'Animations'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tab]}</h2><p>{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</p></div>}
+          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tab]}</h2><p>{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</p></div>}
           {tab === 'music'  && <MusicSettingsPanel fit={headphoneFit} music={musicSettings} enabled={musicEnabled} onFitChange={onHeadphoneFitChange} onMusicChange={onMusicSettingsChange} onEnabledChange={onMusicEnabledChange} onPreview={handlePreview} />}
-          {tab === 'animations' && <AnimationSettingsPanel settings={animationSettings} onChange={onAnimationSettingsChange} customDances={customDances} onPreview={onAnimationPreview} onStop={onAnimationStop} />}
+          {tab === 'animations' && <AnimationSettingsPanel settings={animationSettings} onChange={onAnimationSettingsChange} customDances={customDances} onPreview={onAnimationPreview} onStop={onAnimationStop} statusText={petStatusText} />}
+          {tab === 'behavior' && <BehaviorPanel settings={behaviorSettings} onChange={onBehaviorSettingsChange} customDances={customDances} statusText={petStatusText} onPreview={onAnimationPreview} onStop={onAnimationStop} />}
           {tab === 'cuttle' && <CuttleConnection />}
           {tab === 'general' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

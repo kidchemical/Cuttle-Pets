@@ -97,6 +97,12 @@
 :is(.pet-settings-window, .pet-settings-panel) button:disabled { opacity: .5; cursor: not-allowed; }
 :is(.pet-settings-window, .pet-settings-panel) :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--settings-accent) !important; outline-offset: 3px; }
 :is(.pet-settings-window, .pet-settings-panel) * { scrollbar-width: thin; scrollbar-color: #52627c transparent; }
+/* Keep the animations-list scrollbar off the per-row transport buttons.
+   The padding is the real fix (works where scrollbar-gutter is unsupported);
+   the gutter just avoids a layout shift where it is supported. */
+.animation-list { scrollbar-gutter: stable; padding-right: 14px; }
+.animation-list > div { min-width: 0; }
+.animation-list > div > div:last-child { flex-shrink: 0; }
 @media (max-width: 600px) {
   .pet-settings-window .settings-shell { grid-template-columns: 112px minmax(0, 1fr); }
   .pet-settings-window .settings-content { padding: 16px !important; }

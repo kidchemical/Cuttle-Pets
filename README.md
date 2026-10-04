@@ -27,7 +27,7 @@ When Cuttle works, she types. When it's done, she cheers. When tests go green, s
 | Agent streams code | Typing pose with laptop, coffee mug, and speech bubble |
 | Work finishes | Cheers, waves, or dances |
 | Tests go green | Tells you in a speech bubble |
-| Music plays on your desktop | Headphones on, beat-synced nod (PipeWire + MPRIS) |
+| Music plays on your desktop | Headphones on, beat-synced nod (Ubuntu/PipeWire or Windows/WASAPI) |
 | Your cursor moves | Eyes and head follow it |
 | You lock the screen | Steps away — render loop stops, window hides |
 
@@ -170,7 +170,7 @@ Actions: `akimbo playFingers scratchHead stretch happy angry greeting excited sh
 
 Use **VRM** (`.vrm`) — export free from [VRoid Studio](https://vroid.studio), or from Unity via [UniVRM](https://github.com/vrm-c/UniVRM) (MIT). Import with `cuttle-pet models --import file.vrm`.
 
-Bundled motion: 10 Mixamo clips (Adobe free account terms), the CC0 [Quaternius](https://quaternius.com) animation libraries (sitting, talking, phone call, dance), and CC0 hand props (laptop, phone, coffee cup — the cup appears for a ~4s sip every minute or so of sustained work). Beat sync nods along to your music via PipeWire, with MPRIS fallback — headphones appear automatically while music plays, including during typing.
+Bundled motion: 10 Mixamo clips (Adobe free account terms), the CC0 [Quaternius](https://quaternius.com) animation libraries (sitting, talking, phone call, dance), and CC0 hand props (laptop, phone, coffee cup — the cup appears for a ~4s sip every minute or so of sustained work). Beat sync nods along to your music via PipeWire on Ubuntu or WASAPI output loopback on Windows, with MPRIS playback-state fallback on Linux — headphones appear automatically while music plays, including during typing.
 
 Full provenance for every bundled binary lives in [`docs/ASSET_LICENSES.md`](docs/ASSET_LICENSES.md) — code is MIT, assets keep their own terms.
 
@@ -212,7 +212,43 @@ minimum playback rate).
 powershell -ExecutionPolicy Bypass -File .\start_pet.ps1
 ```
 
-Same behavior as `start_pet.sh`: reuses a running control server, starts the bridge unless `$env:CUTTLE_PET_BRIDGE` is `'0'`, then opens the Tauri dev window. Needs Python 3 + Flask, Node 20+, and Rust on `PATH`. (Release binaries are planned; dev-window launch for now.)
+Same behavior as `start_pet.sh`: reuses a running control server, starts the bridge unless `$env:CUTTLE_PET_BRIDGE` is `'0'`, then opens the Tauri dev window. Needs Python 3 with `pip install -r requirements.txt`, Node 20+, and Rust on `PATH`. (Release binaries are planned; dev-window launch for now.)
+
+### Live beat tracking
+
+Install Python dependencies with `python -m pip install -r requirements.txt`.
+NumPy runs the shared detector on both platforms. Windows additionally installs
+SoundCard (and CFFI) through the platform-specific requirement; Ubuntu requires
+`pw-record` and `wpctl` from PipeWire/WirePlumber.
+
+The detector combines bass, midrange, and treble spectral changes, estimates tempo
+from eight seconds of recent rhythm evidence, and tracks a continuous beat grid.
+Musical onsets provide evidence; only tracked grid pulses steer the pet's phase.
+New settings default to 60–200 BPM; existing saved minimum/maximum bounds remain
+in effect. The bass-band control changes one analysis band, rather than rejecting
+all higher-frequency rhythm. Sensitivity controls onset admission.
+
+Music settings show a large live BPM estimate: yellow while calculating, green
+when locked. If rhythm evidence drops out, the last estimate stays visible and
+is labeled accordingly. Analysis controls come first, followed by motion and
+per-model headphone fitting.
+
+Audio stays local in memory; microphones are never selected. Windows captures
+multiple playback channels and downmixes/resamples them internally, avoiding
+SoundCard's documented single-channel WASAPI issue. Output-device changes and
+capture errors cause a reconnect and reset the tracker. Windows playing status
+comes from audio signal presence, so all desktop audio can activate music mode;
+there is no native per-player media-session fallback. Mono-only Windows output
+endpoints are currently unsupported by the SoundCard backend.
+
+Music without a clear pulse can remain unlocked. Half/double tempo and beat-phase
+ambiguity remain possible; the bounds and manual fallback are available in Music
+settings. Confidence is a rhythm-stability heuristic, not a probability.
+Acquisition time differs from steady-state phase accuracy. Hardware
+capture latency and audible output delay (especially Bluetooth) require testing
+on the target device; sub-120 ms end-to-end latency is not guaranteed.
+
+Third-party license notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Development
 

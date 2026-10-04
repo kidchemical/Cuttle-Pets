@@ -221,7 +221,8 @@ def publish_analysis(result: dict):
         _sync_music()
     broadcast({'musicAudio': {'amplitude': result.get('amplitude', 0), 'available': result.get('status') == 'listening', 'timestamp': result.get('timestamp', time.time())}})
     if result.get('beat') and _music_playing:
-        broadcast({'musicBeat': {k: result.get(k) for k in ('bpm', 'confidence', 'timestamp')}})
+        broadcast({'musicBeat': {'bpm': result.get('bpm'), 'confidence': result.get('confidence'),
+                                 'timestamp': result.get('beat_timestamp') if result.get('beat_timestamp') is not None else result.get('timestamp')}})
 
 
 def sync_activity(state: str):

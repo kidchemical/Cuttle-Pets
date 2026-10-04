@@ -13,13 +13,14 @@ base_url = parser.parse_args().base_url.rstrip('/')
 scratch = Path(__file__).resolve().parents[2] / 'temp'
 scratch.mkdir(exist_ok=True)
 saved = {}
+music_analysis = {'status': 'listening', 'bpm': None, 'candidate_bpm': 118.4, 'confidence': .22, 'playing': True}
 def mock(route):
     path = route.request.url.split(':8790')[-1]
     if path == '/settings':
         if route.request.method == 'POST': saved.update(route.request.post_data_json)
         body = saved
     elif path == '/model/list': body = {'models': [{'name': 'Example.vrm', 'url': '/model/serve/Example.vrm'}]}
-    elif path == '/music': body = {'analysis': {'status': 'listening'}}
+    elif path == '/music': body = {'analysis': music_analysis}
     elif path == '/cuttle/connection': body = {'ok': True, 'state': 'disconnected'}
     elif path == '/dance/list': body = {'dances': [{'name': 'Test imported dance.vmd', 'url': '/dance/serve/Test imported dance.vmd'}]}
     else: body = {}
@@ -72,10 +73,26 @@ with sync_playwright() as p:
     assert option.evaluate("e => getComputedStyle(e).color") == 'rgb(237, 242, 251)'
     page.screenshot(path=str(scratch / 'settings-model.png'))
     page.get_by_role('button', name='Music', exact=True).click()
+    page.locator('.music-bpm-card[data-state="calculating"]').wait_for()
+    assert page.locator('.music-bpm-value strong').inner_text() == '118'
+    assert page.locator('.music-bpm-value').evaluate('e => getComputedStyle(e).color') == 'rgb(243, 212, 119)'
+    assert page.locator('.music-bpm-value strong').evaluate('e => parseFloat(getComputedStyle(e).fontSize)') >= 44
+    assert page.get_by_role('region', name='BPM analysis').bounding_box()['y'] < page.get_by_role('region', name='Headphone fit', exact=True).bounding_box()['y']
+    page.locator('.settings-content').evaluate('e => e.scrollTop = 0')
+    page.screenshot(path=str(scratch / 'music-calculating.png'))
+    music_analysis.update(bpm=120, locked=True, confidence=.85)
+    page.locator('.music-bpm-card[data-state="locked"]').wait_for()
+    assert page.locator('.music-bpm-value strong').inner_text() == '120'
+    assert page.locator('.music-bpm-value').evaluate('e => getComputedStyle(e).color') == 'rgb(114, 227, 161)'
+    page.screenshot(path=str(scratch / 'music-locked.png'))
+    music_analysis.update(bpm=None, candidate_bpm=None, locked=False, confidence=.1)
+    page.locator('.music-bpm-card[data-state="calculating"]').wait_for()
+    assert page.locator('.music-bpm-value strong').inner_text() == '120'
+    page.get_by_text('Last estimate · still checking the rhythm.', exact=True).wait_for()
     page.get_by_role('checkbox', name='Preview headphones and nodding without music').check()
     peer.wait_for_function("commands.filter(c=>c.type==='music-preview').at(-1)?.active === true")
     with page.expect_response(lambda r: r.url.endswith('/settings') and r.request.method == 'POST'):
-        page.locator('input[type=range]').nth(3).fill('1.2')
+        page.get_by_role('slider', name='Overall scale', exact=True).fill('1.2')
     assert peer.evaluate("commands.filter(c=>c.type==='music-preview').at(-1).active") is True
     for tab in ['General','Music','Cuttle','Voice','Model','Persona','Dance','Quality','Display']:
         page.get_by_role('button', name=tab, exact=True).click()
