@@ -6,6 +6,14 @@ and `app/src/version.ts`.
 
 - Bump only via `scripts/bump-version.sh [patch|minor|major|x.y.z]`. Never
   hand-edit just one of the mirrored files.
+- Bump as part of finishing work, not per edit: when a task changes
+  user-facing behavior, run `scripts/bump-version.sh` once at completion —
+  patch for fixes and tweaks, minor for new features and behavior changes.
+  No bump for internal refactors, tests-only, docs-only, or tooling changes.
+  Never bump mid-task. Verify with `scripts/check-version-sync.sh` and leave
+  the result uncommitted for UI review like any other change.
+- Major (breaking) bumps always ask first. Note a bumped Cargo.toml forces a
+  full native recompile on next build — expected, not a reason to skip the bump.
 - `scripts/check-version-sync.sh` verifies they agree (CI + pre-push hook via
   `scripts/install-hooks.sh`). The hook is check-only: it never mutates the
   tree, and no flow auto-increments the version on push or commit.
