@@ -12,7 +12,7 @@ import { ChatInput } from './components/ChatInput'
 import { ResizeHandles } from './components/ResizeHandles'
 import { openSettingsWindow, subscribeWindowEvent, replyScreenshot, publishStatus, type PetCommand } from './window-sync'
 import { DEFAULT_ANIMATIONS, normalizeAnimations, type AnimationSettings } from './animation-settings'
-import { normalizeBehaviorSettings, resolvePetState, playOnceById, applyBaseById, type BehaviorSettings, type BehaviorStateId } from './behavior'
+import { normalizeBehaviorSettings, resolvePetState, playOnceById, applyBaseById, playReactionStep, type BehaviorSettings, type BehaviorStateId } from './behavior'
 import { useBehaviorEngine } from './hooks/useBehaviorEngine'
 import { usePassThrough } from './hooks/usePassThrough'
 import { dancePresets, actionPresets } from './motion-controller'
@@ -103,6 +103,12 @@ export default function App() {
   const [dancing, setDancing] = useState(false)
   const [currentDance, setCurrentDance] = useState('jile')
   const [customDancePreset, setCustomDancePreset] = useState<import('./motion-controller').DancePreset | undefined>(undefined)
+  const userDanceRef = useRef({ dancing, currentDance, customDancePreset })
+  userDanceRef.current = { dancing, currentDance, customDancePreset }
+  // Custom reaction in progress (server reactionStep frames). Pauses the
+  // behavior engine; reactionDone restores the pet's own working/dance state.
+  const [reactionActive, setReactionActive] = useState(false)
+  const reactionRef = useRef<{ dance: string | null; watchdog?: ReturnType<typeof setTimeout> } | null>(null)
   const [hideMood, setHideMood] = useState(false)
   const [screenObserve, setScreenObserve] = useState(false)
   const [screenObserveInterval, setScreenObserveInterval] = useState(60)
@@ -240,8 +246,36 @@ export default function App() {
     enabled: behaviorSettings.enabled,
     profile: behaviorSettings.current,
     state: petState,
+    paused: reactionActive,
     getScene: () => sceneRef.current,
   })
+
+  const endReaction = useCallback(() => {
+    const active = reactionRef.current
+    if (!active) return
+    clearTimeout(active.watchdog)
+    reactionRef.current = null
+    const scene = sceneRef.current
+    if (scene) {
+      scene.resetPose()
+      scene.setWorking(workingRef.current)
+      // Resume a dance the reaction interrupted: the user's dance toggle, or
+      // any other dance replayable from its key (built-in name or file URL).
+      const user = userDanceRef.current
+      let resumedDance = true
+      if (user.dancing) {
+        if (user.currentDance.startsWith('custom:') && user.customDancePreset) scene.playDance(user.customDancePreset, `dance:${user.currentDance}`)
+        else scene.playDance(user.currentDance)
+      } else if (active.dance?.startsWith('dance:') && !active.dance.startsWith('dance:custom:')) {
+        scene.playDance(active.dance.slice(6), active.dance)
+      } else {
+        resumedDance = false
+      }
+      setPetState(resolvePetState({ dancing: resumedDance, working: workingRef.current, music: musicPlayingRef.current }))
+    }
+    setReactionActive(false)
+  }, [])
+  useEffect(() => () => clearTimeout(reactionRef.current?.watchdog), [])
 
   useEffect(() => {
     bindScene(sceneRef.current)
@@ -260,9 +294,30 @@ export default function App() {
       setMusicPlaying(msg.musicPlaying)
       return
     }
+    if (msg.reactionStep) {
+      const scene = sceneRef.current
+      if (!reactionRef.current) {
+        reactionRef.current = { dance: scene?.getPlaybackStatus().danceId ?? null }
+        setReactionActive(true)
+      }
+      // Safety net if reactionDone never arrives (server restart mid-reaction).
+      clearTimeout(reactionRef.current.watchdog)
+      reactionRef.current.watchdog = setTimeout(endReaction, msg.reactionStep.durationMs + 5000)
+      if (scene) {
+        playReactionStep(scene, msg.reactionStep)
+        if (msg.emotion) scene.setEmotionWithReset(msg.emotion, msg.emotionDuration ?? msg.reactionStep.durationMs, msg.emotionIntensity)
+      }
+      return
+    }
+    if (msg.reactionDone) { endReaction(); return }
     if (msg.demoReset) sceneRef.current?.resetPose()
     if (msg.sipCoffee) sceneRef.current?.requestCoffeeSip()
-    if (msg.working !== undefined) { workingRef.current = msg.working; setWorkingState(msg.working); sceneRef.current?.setWorking(msg.working) }
+    if (msg.working !== undefined) {
+      // During a reaction only record the state; endReaction applies it.
+      workingRef.current = msg.working
+      setWorkingState(msg.working)
+      if (!reactionRef.current) sceneRef.current?.setWorking(msg.working)
+    }
     if (msg.playAction) sceneRef.current?.playAction(msg.playAction, msg.hold ?? false)
     if (msg.emotion && sceneRef.current) {
       const action = emotionActionMap[msg.emotion]
@@ -276,7 +331,7 @@ export default function App() {
         if (action && !msg.playAction && msg.working !== true) sceneRef.current.playAction(action, true)
       }
     }
-  }, [])
+  }, [endReaction])
 
   // ── Idle fidget: random emotion + action every ~60s when idle ──────────────
   const lastActivityRef = useRef(Date.now())
@@ -305,7 +360,7 @@ export default function App() {
 
     const timer = setInterval(() => {
       // The behavior engine owns idle variety when enabled; this is the fallback.
-      if (behaviorEnabledRef.current || workingRef.current || musicPlayingRef.current) return
+      if (behaviorEnabledRef.current || workingRef.current || musicPlayingRef.current || reactionRef.current) return
       const idleMs = Date.now() - lastActivityRef.current
       if (idleMs < IDLE_THRESHOLD_MS) return
       // 50% chance each check to avoid being too predictable

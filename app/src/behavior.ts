@@ -56,10 +56,56 @@ export interface BehaviorProfile {
   states: Record<BehaviorStateId, StateBehavior>
 }
 
+export interface ReactionParam {
+  /** Template variable name, [a-z0-9_], referenced as {{name}} in say text. */
+  name: string
+  type: 'string' | 'number' | 'boolean'
+  default: string | number | boolean
+  description: string
+}
+
+export interface ReactionStepProps {
+  /** Show the laptop + typing pose for this step. */
+  working?: boolean
+  /** Play the coffee-sip one-shot on this step. */
+  sip?: boolean
+}
+
+export interface ReactionStep {
+  /** Animation id from the animations catalog ('idle', 'action:x', 'dance:x', 'typing', 'sip', 'music', …) or 'random:action'. */
+  animation: string
+  /** Emotion id, 'random', or '' for none. */
+  emotion?: string
+  /** Optional speech-bubble text; may use {{param}} templates. */
+  say?: string
+  /** How long this step holds before the next one (ms). */
+  durationMs: number
+  /** Required to replay imported dances (carries the file URLs). */
+  preset?: DancePreset
+  props?: ReactionStepProps
+}
+
+/**
+ * An agent-callable one-shot reaction: a named animation/speech sequence with
+ * typed parameters. Unlike the four persistent states (idle/working/music/
+ * dancing), a reaction plays once and the pet returns to whatever state it
+ * was in — e.g. "rocket-launch" or "hat-dance".
+ */
+export interface CustomReaction {
+  /** Stable slug used by the API/CLI: [a-z0-9-_], e.g. "rocket-launch". */
+  id: string
+  name: string
+  /** Shown to agents browsing the catalog so they know when to call it. */
+  description: string
+  params: ReactionParam[]
+  steps: ReactionStep[]
+}
+
 export interface BehaviorSettings {
   enabled: boolean
   current: BehaviorProfile
   profiles: BehaviorProfile[]
+  reactions: CustomReaction[]
 }
 
 export interface PetStatus {
@@ -179,7 +225,204 @@ export function normalizeBehaviorSettings(value: unknown): BehaviorSettings {
     enabled: source.enabled !== false,
     current: normalizeProfile(source.current, 'Default'),
     profiles,
+    reactions: normalizeReactions(source.reactions),
   }
+}
+
+// ── Agent-callable reactions ───────────────────────────────────────────────
+// New behavior *states* would need new renderer drivers (working/music/
+// dancing flags), so user-defined behaviors are transient *reactions* instead:
+// a named step sequence an agent triggers by id, optionally with parameters
+// (e.g. "rocket-launch", or "hat-dance" with a seconds parameter). The pet
+// plays the steps once and returns to its current persistent state.
+
+const REACTION_ID_RE = /^[a-z0-9][a-z0-9-_]{0,39}$/
+const REACTION_PARAM_RE = /^[a-z][a-z0-9_]{0,29}$/
+
+export function slugifyReactionId(value: unknown, fallback: string): string {
+  const slug = String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+  if (slug && REACTION_ID_RE.test(slug)) return slug
+  return fallback
+}
+
+/**
+ * Keystroke-safe id cleanup for the editor: like slugifyReactionId but keeps
+ * a trailing separator so "rocket-" can become "rocket-launch". Returns ''
+ * when nothing valid remains.
+ */
+export function editReactionId(value: string): string {
+  const id = value.toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/^[-_]+/, '').slice(0, 40)
+  return REACTION_ID_RE.test(id) ? id : ''
+}
+
+export function isValidReactionParamName(name: string): boolean {
+  return REACTION_PARAM_RE.test(name)
+}
+
+function cleanReactionParam(value: unknown): ReactionParam | null {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  const name = typeof item.name === 'string' ? item.name.trim().toLowerCase() : ''
+  if (!REACTION_PARAM_RE.test(name)) return null
+  const type = item.type === 'number' ? 'number' : item.type === 'boolean' ? 'boolean' : 'string'
+  let coerced: string | number | boolean = type === 'number' ? 0 : type === 'boolean' ? false : ''
+  if (type === 'number') {
+    const n = Number(item.default)
+    coerced = Number.isFinite(n) ? n : 0
+  } else if (type === 'boolean') {
+    coerced = item.default === true || item.default === 'true' || item.default === 1 || item.default === '1'
+  } else if (typeof item.default === 'string' || typeof item.default === 'number' || typeof item.default === 'boolean') {
+    coerced = String(item.default).slice(0, 200)
+  }
+  const description = typeof item.description === 'string' ? item.description.slice(0, 200) : ''
+  return { name, type, default: coerced, description }
+}
+
+function cleanReactionStep(value: unknown): ReactionStep | null {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  const animation = cleanId(item.animation)
+  if (!knownAnimation(animation)) return null
+  const step: ReactionStep = { animation, durationMs: 3000 }
+  const emotion = cleanEmotion(item.emotion)
+  if (emotion) step.emotion = emotion
+  if (typeof item.say === 'string' && item.say.trim()) step.say = item.say.slice(0, 280)
+  const durationMs = Number(item.durationMs ?? item.duration_ms ?? 3000)
+  step.durationMs = Number.isFinite(durationMs) ? Math.max(500, Math.min(30000, Math.round(durationMs))) : 3000
+  if (animation.startsWith('dance:custom:')) {
+    // Imported dances are only playable through their preset (file URL).
+    const preset = (item.preset && typeof item.preset === 'object' ? item.preset : {}) as Partial<DancePreset>
+    if (typeof preset.url !== 'string' || typeof preset.label !== 'string') return null
+    step.preset = { label: preset.label, type: 'vmd', url: preset.url, bgm: typeof preset.bgm === 'string' ? preset.bgm : undefined }
+  }
+  const rawProps = item.props && typeof item.props === 'object' ? item.props as Record<string, unknown> : null
+  if (rawProps && (rawProps.working === true || rawProps.sip === true)) {
+    step.props = {}
+    if (rawProps.working === true) step.props.working = true
+    if (rawProps.sip === true) step.props.sip = true
+  }
+  return step
+}
+
+export function normalizeReaction(value: unknown, fallbackId: string): CustomReaction | null {
+  if (!value || typeof value !== 'object') return null
+  const source = value as Record<string, unknown>
+  const id = slugifyReactionId(source.id, fallbackId)
+  if (!id) return null
+  const name = cleanId(source.name).slice(0, 60) || id
+  const description = typeof source.description === 'string' ? source.description.slice(0, 280) : ''
+  const seen = new Set<string>()
+  const params = Array.isArray(source.params)
+    ? source.params.map(cleanReactionParam)
+      .filter((p): p is ReactionParam => p !== null && !seen.has(p.name) && (seen.add(p.name), true))
+      .slice(0, 8)
+    : []
+  const steps = Array.isArray(source.steps)
+    ? source.steps.map(cleanReactionStep).filter((s): s is ReactionStep => s !== null).slice(0, 10)
+    : []
+  if (steps.length === 0) return null
+  return { id, name, description, params, steps }
+}
+
+export function normalizeReactions(value: unknown): CustomReaction[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const out: CustomReaction[] = []
+  value.forEach((item, index) => {
+    const reaction = normalizeReaction(item, `reaction-${index + 1}`)
+    if (reaction && !seen.has(reaction.id)) {
+      seen.add(reaction.id)
+      out.push(reaction)
+    }
+  })
+  return out.slice(0, 50)
+}
+
+/** Example reaction shipped in the editor as a starting point (not persisted). */
+export function exampleReaction(): CustomReaction {
+  return {
+    id: 'rocket-launch',
+    name: 'Rocket launch',
+    description: 'Celebrate a deploy: cheer, shout the message, then dance. Call after a successful git push or release.',
+    params: [{ name: 'message', type: 'string', default: 'Shipped it!', description: 'Shouted in the speech bubble.' }],
+    steps: [
+      { animation: 'action:excited', emotion: 'happy', durationMs: 2500 },
+      { animation: 'action:cheering', emotion: 'happy', say: '{{message}}', durationMs: 3500 },
+      { animation: 'dance:jile', emotion: 'happy', durationMs: 8000 },
+    ],
+  }
+}
+
+/** `{{name}}` templates in say text, rendered with the call's parameters. */
+export function renderReactionTemplate(text: string, values: Record<string, string | number | boolean>): string {
+  return text.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (match, key: string) => {
+    const value = values[key.toLowerCase()]
+    return value === undefined ? match : String(value)
+  })
+}
+
+function coerceParamValue(type: ReactionParam['type'], raw: unknown, fallback: string | number | boolean): string | number | boolean {
+  if (type === 'number') {
+    const n = typeof raw === 'number' ? raw : Number(raw)
+    return Number.isFinite(n) ? n : fallback
+  }
+  if (type === 'boolean') {
+    if (typeof raw === 'boolean') return raw
+    const s = String(raw ?? '').trim().toLowerCase()
+    if (['true', '1', 'yes', 'y', 'on'].includes(s)) return true
+    if (['false', '0', 'no', 'n', 'off'].includes(s)) return false
+    return fallback
+  }
+  if (raw === undefined || raw === null) return fallback
+  return String(raw).slice(0, 280)
+}
+
+/** Merge caller args over a reaction's param defaults (unknown args ignored). */
+export function coerceReactionParams(reaction: CustomReaction, args: Record<string, unknown>): Record<string, string | number | boolean> {
+  const values: Record<string, string | number | boolean> = {}
+  for (const param of reaction.params) values[param.name] = param.default
+  for (const param of reaction.params) {
+    if (args[param.name] !== undefined) values[param.name] = coerceParamValue(param.type, args[param.name], param.default)
+  }
+  return values
+}
+
+export interface ResolvedReactionStep extends ReactionStep {
+  sayRendered?: string
+}
+
+/** Validate + render a reaction call into playable steps. Unknown ids and unknown animations are errors, not silent no-ops. */
+export function resolveReactionCall(
+  reactions: CustomReaction[],
+  id: string,
+  args: Record<string, unknown> = {},
+): { ok: true; reaction: CustomReaction; values: Record<string, string | number | boolean>; steps: ResolvedReactionStep[] } | { ok: false; error: string; known: string[] } {
+  const known = reactions.map(r => r.id)
+  const reaction = reactions.find(r => r.id === id)
+  if (!reaction) return { ok: false, error: `unknown reaction ${JSON.stringify(id)}`, known }
+  const values = coerceReactionParams(reaction, args)
+  const steps = reaction.steps.map(step => ({
+    ...step,
+    sayRendered: step.say ? renderReactionTemplate(step.say, values).slice(0, 280) : undefined,
+  }))
+  return { ok: true, reaction, values, steps }
+}
+
+/** Copy-paste CLI invocation for a reaction, for the editor + API catalog. */
+export function reactionCliExample(id: string, params: ReactionParam[] = []): string {
+  const extra = params.length ? ' [--param name=value ...]' : ''
+  return `python3 cli/cuttle_pet.py react ${id}${extra}`
+}
+
+/** One-line editor/catalog summary, e.g. "Rocket launch — 3 steps · params: message". */
+export function describeReaction(reaction: CustomReaction): string {
+  const bits = [`${reaction.steps.length} step${reaction.steps.length === 1 ? '' : 's'}`]
+  if (reaction.params.length) bits.push(`params: ${reaction.params.map(p => p.name).join(', ')}`)
+  return `${reaction.name} — ${bits.join(' · ')}`
 }
 
 // ── State resolution ─────────────────────────────────────────────────────────
@@ -280,6 +523,28 @@ export function playOnceById(scene: BehaviorScene, id: string, preset?: DancePre
   if (id.startsWith('action:')) { scene.playAnimationOnce(id.slice(7)); return }
   if (id.startsWith('dance:')) { scene.playDanceOnce(preset ?? id.slice(6), id); return }
   scene.resetPose()
+}
+
+/** One step of a reaction as broadcast by the server (`reactionStep` frame). */
+export interface ReactionStepFrame {
+  animation: string
+  durationMs: number
+  preset?: DancePreset
+  props?: ReactionStepProps
+}
+
+/**
+ * Play a reaction step. Each step first clears the previous motion (a clip
+ * still finishing, a dance, the laptop) so it can't be silently skipped by
+ * the one-at-a-time action/dance locks; props apply to this step only.
+ */
+export function playReactionStep(scene: BehaviorScene, step: ReactionStepFrame) {
+  scene.resetPose()
+  const id = step.animation
+  if (step.props?.working || step.props?.sip) scene.setWorking(true)
+  if (step.props?.sip && id !== 'sip') scene.requestCoffeeSip()
+  if (!id || id === 'idle') return
+  playOnceById(scene, id, step.preset, id === 'typing' || id === 'music' ? step.durationMs : 0)
 }
 
 /** Sustain an animation until stopped (engine state base, looped preview). */

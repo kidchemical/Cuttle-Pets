@@ -6,6 +6,10 @@ import { DEFAULT_BUBBLE_SETTINGS, hexToRgba, type BubbleSettings } from '../bubb
 interface VrmMessage {
   playAction?: string
   hold?: boolean
+  /** Custom reaction step (see playReactionStep); reactionDone ends the reaction. */
+  reactionStep?: import('../behavior').ReactionStepFrame
+  reactionDone?: boolean
+  reaction?: string
   clearText?: boolean
   text?: string
   emotion?: string
@@ -353,9 +357,9 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
       return
     }
 
-    // Emotion-only message
+    // Emotion-only message (also custom reaction frames)
     if (!msg.text) {
-      if (msg.emotion || msg.playAction) {
+      if (msg.emotion || msg.playAction || msg.reactionStep || msg.reactionDone) {
         onMessageRef.current?.({ ...msg, emotionDuration: msg.emotionDuration ?? 10000 })
         if (thinkingRef.current) {
           setThinking(false)
@@ -417,11 +421,15 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
     const baseRate = getCharRate(fullText, ttsEnabledRef.current)
     charRateRef.current = baseRate
 
+    // Reaction steps are timed by the server: play them now, not after the
+    // usual 1s reply delay, so steps and reactionDone keep their order.
+    if (msg.reactionStep) onMessageRef.current?.(msg)
+
     if (graphemes.length === 0) {
       tryScheduleHideRef.current()
     } else {
       const emotionDuration = graphemes.length * baseRate + 5000
-      setTimeout(() => onMessageRef.current?.({ ...msg, emotionDuration }), 1000)
+      if (!msg.reactionStep) setTimeout(() => onMessageRef.current?.({ ...msg, emotionDuration }), 1000)
 
       let idx = 0
       typewriterRef.current = setInterval(() => {

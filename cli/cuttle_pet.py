@@ -7,6 +7,8 @@
     cuttle-pet event thinking --detail "Reading three files…"
     cuttle-pet click-through on
     cuttle-pet models --import ~/pets/reef.vrm
+    cuttle-pet behaviors      # browse agent-callable custom reactions
+    cuttle-pet react rocket-launch --param message="Shipped!"
     cuttle-pet watch          # stream pet events to stdout
 """
 
@@ -193,6 +195,45 @@ def cmd_watch(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_behaviors(a: argparse.Namespace) -> int:
+    """Agent-browsable library of user-defined reactions (Settings → Behavior)."""
+    res = _request("GET", "/behaviors")
+    behaviors = res.get("behaviors", []) if isinstance(res, dict) else []
+    if not behaviors:
+        print("no custom reactions yet — add one in Settings → Behavior → Custom reactions")
+        return 0
+    for b in behaviors:
+        print(f"{b['id']:<28} {b.get('summary', b.get('name', ''))}")
+        if b.get("description"):
+            print(f"    {b['description']}")
+        for p in b.get("params", []):
+            print(f"    param {p['name']} ({p['type']}, default {p['default']!r})"
+                  + (f" — {p['description']}" if p.get("description") else ""))
+        fallback_call = f"cuttle-pet react {b['id']}"
+        print(f"    call: {b.get('cli', fallback_call)}")
+    return 0
+
+
+def _parse_param(text: str) -> tuple[str, str]:
+    """Split name=value. Values stay strings: the server coerces each one to
+    the parameter's declared type, so "007" stays "007" for string params."""
+    if "=" not in text:
+        raise CliError(f"bad --param {text!r}: use --param name=value")
+    name, raw = text.split("=", 1)
+    name = name.strip()
+    if not name:
+        raise CliError(f"bad --param {text!r}: use --param name=value")
+    return name, raw
+
+
+def cmd_react(a: argparse.Namespace) -> int:
+    params: dict[str, str] = {}
+    for item in a.param or []:
+        name, value = _parse_param(item)
+        params[name] = value
+    return _report(_request("POST", "/behaviors/trigger", {"id": a.id, "params": params}))
+
+
 def cmd_status(a: argparse.Namespace) -> int:
     return _report(_request("GET", "/health"))
 
@@ -271,6 +312,15 @@ def build_parser() -> argparse.ArgumentParser:
     m = sub.add_parser("models", help="list or import .vrm models")
     m.add_argument("--import", dest="import_path", metavar="PATH")
     m.set_defaults(func=cmd_models)
+
+    b = sub.add_parser("behaviors", help="list agent-callable custom reactions")
+    b.set_defaults(func=cmd_behaviors)
+
+    r = sub.add_parser("react", help="play a custom reaction by id")
+    r.add_argument("id", help="reaction id from `behaviors`")
+    r.add_argument("--param", action="append", default=[],
+                   help="parameter override as name=value (repeatable)")
+    r.set_defaults(func=cmd_react)
 
     w = sub.add_parser("watch", help="stream pet events")
     w.set_defaults(func=cmd_watch)

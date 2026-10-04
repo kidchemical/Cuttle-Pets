@@ -26,6 +26,8 @@ import json
 import mimetypes
 import os
 import queue
+import random
+import re
 import shutil
 import tempfile
 import threading
@@ -478,6 +480,284 @@ def demo():
     return jsonify({"ok": True, "delivered": delivered, "sequence": kind})
 
 
+# ── agent-callable reactions ───────────────────────────────────────────────
+# User-defined one-shot behaviors from Settings → Behavior → Custom reactions
+# (stored under settings["behaviorSettings"]["reactions"]). Agents browse them
+# with GET /behaviors and play them with POST /behaviors/trigger. This mirrors
+# the TypeScript normalization in app/src/behavior.ts — keep the two in sync.
+
+_REACTION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-_]{0,39}$")
+_REACTION_PARAM_RE = re.compile(r"^[a-z][a-z0-9_]{0,29}$")
+_REACTION_TEMPLATE_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+_KNOWN_REACTION_ANIMATIONS = ("idle", "typing", "sip", "music", "random:action",
+                              "hands", "eyes", "blink", "expressions")
+
+
+def _reaction_animation_known(animation: str) -> bool:
+    if not isinstance(animation, str) or not animation:
+        return False
+    if animation in _KNOWN_REACTION_ANIMATIONS:
+        return True
+    if animation.startswith("dance:"):
+        # Built-in dance names are validated client-side against dancePresets;
+        # custom dances carry their preset (URL) on the step itself.
+        return len(animation) > len("dance:")
+    if animation.startswith("action:"):
+        return animation[7:] in PRESET_ACTIONS
+    return False
+
+
+def _normalize_reaction_param(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    name = str(value.get("name", "")).strip().lower()
+    if not _REACTION_PARAM_RE.match(name):
+        return None
+    kind = value.get("type")
+    kind = kind if kind in ("string", "number", "boolean") else "string"
+    default = value.get("default")
+    if kind == "number":
+        try:
+            num = float(default)
+            default = int(num) if num == num and abs(num) != float("inf") and num.is_integer() else (num if num == num and abs(num) != float("inf") else 0)
+        except (TypeError, ValueError):
+            default = 0
+    elif kind == "boolean":
+        default = default is True or default in ("true", "1", 1)
+    else:
+        default = str(default)[:200] if isinstance(default, (str, int, float, bool)) else ""
+    description = value.get("description")
+    description = str(description)[:200] if isinstance(description, str) else ""
+    return {"name": name, "type": kind, "default": default, "description": description}
+
+
+def _normalize_reaction_step(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    animation = value.get("animation")
+    if not isinstance(animation, str) or not _reaction_animation_known(animation):
+        return None
+    preset = value.get("preset")
+    if animation.startswith("dance:custom:") and not (
+            isinstance(preset, dict) and isinstance(preset.get("url"), str)
+            and isinstance(preset.get("label"), str)):
+        return None
+    step: dict[str, Any] = {"animation": animation, "durationMs": 3000}
+    emotion = value.get("emotion")
+    if isinstance(emotion, str) and (emotion in PRESET_EMOTIONS or emotion == "random"):
+        step["emotion"] = emotion
+    say = value.get("say")
+    if isinstance(say, str) and say.strip():
+        step["say"] = say[:280]
+    try:
+        duration = int(value.get("durationMs", value.get("duration_ms", 3000)))
+    except (TypeError, ValueError):
+        duration = 3000
+    step["durationMs"] = max(500, min(30000, duration))
+    if animation.startswith("dance:custom:"):
+        step["preset"] = {"label": preset["label"], "type": "vmd", "url": preset["url"],
+                          "bgm": preset.get("bgm") if isinstance(preset.get("bgm"), str) else None}
+    props = value.get("props")
+    if isinstance(props, dict) and (props.get("working") is True or props.get("sip") is True):
+        step["props"] = {}
+        if props.get("working") is True:
+            step["props"]["working"] = True
+        if props.get("sip") is True:
+            step["props"]["sip"] = True
+    return step
+
+
+def _normalize_reaction(value: Any, fallback_id: str) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    raw_id = str(value.get("id", "")).strip().lower()
+    rid = raw_id if _REACTION_ID_RE.match(raw_id) else fallback_id
+    if not _REACTION_ID_RE.match(rid):
+        return None
+    name = str(value.get("name", ""))[:60] or rid
+    description = value.get("description")
+    description = str(description)[:280] if isinstance(description, str) else ""
+    seen: set[str] = set()
+    params: list[dict[str, Any]] = []
+    for item in value.get("params", []) if isinstance(value.get("params"), list) else []:
+        param = _normalize_reaction_param(item)
+        if param and param["name"] not in seen:
+            seen.add(param["name"])
+            params.append(param)
+    params = params[:8]
+    steps = []
+    for item in value.get("steps", []) if isinstance(value.get("steps"), list) else []:
+        step = _normalize_reaction_step(item)
+        if step:
+            steps.append(step)
+    steps = steps[:10]
+    if not steps:
+        return None
+    return {"id": rid, "name": name, "description": description,
+            "params": params, "steps": steps}
+
+
+def _load_reactions() -> list[dict[str, Any]]:
+    settings = _load_settings()
+    behavior = settings.get("behaviorSettings")
+    raw = behavior.get("reactions") if isinstance(behavior, dict) else None
+    if not isinstance(raw, list):
+        return []
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(raw):
+        reaction = _normalize_reaction(item, f"reaction-{index + 1}")
+        if reaction and reaction["id"] not in seen:
+            seen.add(reaction["id"])
+            out.append(reaction)
+    return out[:50]
+
+
+def _render_reaction_template(text: str, values: dict[str, Any]) -> str:
+    def replace(match: re.Match) -> str:
+        key = match.group(1).lower()
+        return match.group(0) if key not in values else str(values[key])
+    return _REACTION_TEMPLATE_RE.sub(replace, text)[:280]
+
+
+def _coerce_reaction_args(reaction: dict[str, Any], args: Any) -> dict[str, Any]:
+    values: dict[str, Any] = {p["name"]: p["default"] for p in reaction["params"]}
+    if not isinstance(args, dict):
+        return values
+    for param in reaction["params"]:
+        if param["name"] not in args:
+            continue
+        raw = args[param["name"]]
+        if param["type"] == "number":
+            try:
+                num = float(raw)
+                if num != num or abs(num) == float("inf"):
+                    values[param["name"]] = param["default"]
+                elif num.is_integer():
+                    values[param["name"]] = int(num)
+                else:
+                    values[param["name"]] = num
+            except (TypeError, ValueError):
+                values[param["name"]] = param["default"]
+        elif param["type"] == "boolean":
+            if isinstance(raw, bool):
+                values[param["name"]] = raw
+            else:
+                text = str(raw or "").strip().lower()
+                if text in ("true", "1", "yes", "y", "on"):
+                    values[param["name"]] = True
+                elif text in ("false", "0", "no", "n", "off"):
+                    values[param["name"]] = False
+                else:
+                    values[param["name"]] = param["default"]
+        else:
+            values[param["name"]] = str(raw)[:280] if raw is not None else param["default"]
+    return values
+
+
+def _reaction_cli_example(rid: str, params: list[dict[str, Any]]) -> str:
+    extra = " [--param name=value ...]" if params else ""
+    return f"python3 cli/cuttle_pet.py react {rid}{extra}"
+
+
+def _reaction_catalog_entry(reaction: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": reaction["id"],
+        "name": reaction["name"],
+        "description": reaction["description"],
+        "params": reaction["params"],
+        "steps": len(reaction["steps"]),
+        "summary": f"{reaction['name']} — {len(reaction['steps'])} step(s)"
+                   + (f" · params: {', '.join(p['name'] for p in reaction['params'])}" if reaction["params"] else ""),
+        "cli": _reaction_cli_example(reaction["id"], reaction["params"]),
+        "http": {"method": "POST", "path": "/behaviors/trigger",
+                 "body": {"id": reaction["id"], "params": {p["name"]: p["default"] for p in reaction["params"]}}},
+    }
+
+
+_reaction_generation = 0
+_reaction_lock = threading.RLock()
+
+
+def _play_reaction_sequence(reaction: dict[str, Any], values: dict[str, Any], generation: int) -> None:
+    """Broadcast one reactionStep frame per step, then reactionDone.
+
+    The renderer owns playback: it enters a reaction mode (behavior engine
+    paused, each step interrupts the previous motion) and restores the pet's
+    own working/dancing state on reactionDone. A newer trigger supersedes an
+    in-flight sequence between steps; its frames keep the renderer in
+    reaction mode, so the superseded run sends no reactionDone.
+    """
+    steps = reaction["steps"]
+    for index, step in enumerate(steps):
+        with _reaction_lock:
+            if generation != _reaction_generation:
+                return
+        frame: dict[str, Any] = {"animation": step["animation"], "durationMs": step["durationMs"]}
+        if step.get("preset"):
+            frame["preset"] = step["preset"]
+        if step.get("props"):
+            frame["props"] = step["props"]
+        payload: dict[str, Any] = {
+            "reactionStep": frame, "reaction": reaction["id"],
+            "reactionIndex": index, "reactionCount": len(steps),
+        }
+        emotion = step.get("emotion")
+        if emotion:
+            payload["emotion"] = random.choice(PRESET_EMOTIONS) if emotion == "random" else emotion
+            payload["emotionIntensity"] = 0.8
+            payload["emotionDuration"] = step["durationMs"]
+        if step.get("say"):
+            payload["text"] = _render_reaction_template(step["say"], values)
+            if payload.get("emotion"):
+                payload["emotionDuration"] = max(payload["emotionDuration"], 5000)
+        broadcast(payload)
+        time.sleep(step["durationMs"] / 1000.0)
+    with _reaction_lock:
+        if generation != _reaction_generation:
+            return
+    broadcast({"reactionDone": True, "reaction": reaction["id"]})
+
+
+@app.get("/behaviors")
+def behaviors_catalog():
+    """Agent-browsable library of user-defined reactions (see Settings → Behavior)."""
+    reactions = _load_reactions()
+    return jsonify({"ok": True, "behaviors": [_reaction_catalog_entry(r) for r in reactions]})
+
+
+@app.post("/behaviors/trigger")
+def behaviors_trigger():
+    global _reaction_generation
+    body = request.get_json(force=True, silent=True) or {}
+    rid = body.get("id")
+    if not isinstance(rid, str) or not rid:
+        return jsonify({"ok": False, "error": "need reaction id"}), 400
+    if isinstance(body.get("reaction"), dict):
+        # Inline definition (Settings "Test on pet"): plays the editor's
+        # current draft without waiting for the settings save to land.
+        reaction = _normalize_reaction({**body["reaction"], "id": rid}, rid)
+        if reaction is None:
+            return jsonify({"ok": False, "error": "reaction has no playable steps"}), 400
+    else:
+        reactions = _load_reactions()
+        reaction = next((r for r in reactions if r["id"] == rid), None)
+        if reaction is None:
+            return jsonify({"ok": False, "error": f"unknown reaction {rid!r}",
+                            "known": [r["id"] for r in reactions]}), 404
+    values = _coerce_reaction_args(reaction, body.get("params"))
+    with _reaction_lock:
+        _reaction_generation += 1
+        generation = _reaction_generation
+    rendered = [{**s, "sayRendered": _render_reaction_template(s["say"], values) if s.get("say") else None}
+                for s in reaction["steps"]]
+    thread = threading.Thread(target=_play_reaction_sequence,
+                              args=(reaction, values, generation), daemon=True)
+    thread.start()
+    return jsonify({"ok": True, "id": rid, "steps": len(rendered),
+                    "params": values, "payload": {"steps": rendered}})
+
+
 @app.post("/pet/sync")
 def pet_sync():
     state = (request.get_json(silent=True) or {}).get('state')
@@ -707,7 +987,8 @@ def root():
     return jsonify({
         "service": "cuttle-pet",
         "sse": "/events",
-        "verbs": ["/emote", "/action", "/say", "/pet/event", "/clear", "/click-through"],
+        "verbs": ["/emote", "/action", "/say", "/pet/event", "/clear", "/click-through",
+                  "/behaviors", "/behaviors/trigger"],
         "emotions": list(PRESET_EMOTIONS),
         "actions": list(PRESET_ACTIONS),
         "activities": list(ACTIVITY_MAP),

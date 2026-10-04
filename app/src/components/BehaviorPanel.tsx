@@ -1,13 +1,15 @@
-import { useRef, useState } from 'react'
-import { Play, Repeat, Square, Plus, Trash2, Download, Upload, Save } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Play, Repeat, Square, Plus, Trash2, Download, Upload, Save, FlaskConical } from 'lucide-react'
 import {
   BEHAVIOR_STATES, EMOTION_OPTIONS, RANDOM_ACTION, RANDOM_EMOTION, animationCatalog,
-  normalizeProfile, defaultBehaviorProfile,
+  normalizeProfile, normalizeReaction, defaultBehaviorProfile, exampleReaction,
+  slugifyReactionId, editReactionId, isValidReactionParamName, describeReaction, reactionCliExample,
   type AnimationOption, type BehaviorEntry, type BehaviorSettings, type BehaviorStateId,
-  type OccasionalEntry, type StateBehavior,
+  type CustomReaction, type OccasionalEntry, type ReactionParam, type StateBehavior,
 } from '../behavior'
 import type { DancePreset } from '../motion-controller'
 import type { PreviewMode } from './AnimationSettingsPanel'
+import { petUrl } from '../config'
 
 interface Props {
   settings: BehaviorSettings
@@ -62,8 +64,60 @@ function EmotionSelect({ value, onPick }: { value: string; onPick: (emotion: str
 export function BehaviorPanel({ settings, onChange, customDances, statusText, onPreview, onStop }: Props) {
   const catalog = animationCatalog(customDances)
   const current = settings.current
+  const reactions = settings.reactions ?? []
   const [importError, setImportError] = useState('')
+  const [reactionMsg, setReactionMsg] = useState('')
+  const [testingId, setTestingId] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  const patchReactions = (fn: (list: CustomReaction[]) => CustomReaction[]) => {
+    onChange({ ...settings, reactions: fn(clone(reactions)) })
+  }
+  const patchReaction = (id: string, fn: (reaction: CustomReaction) => void) => {
+    patchReactions(list => {
+      const target = list.find(r => r.id === id)
+      if (target) fn(target)
+      return list
+    })
+  }
+  const addReaction = (template?: CustomReaction) => {
+    setReactionMsg('')
+    if (reactions.length >= 50) { setReactionMsg('Reaction limit reached (50).'); return }
+    const base = clone(template ?? { id: '', name: 'New reaction', description: '', params: [], steps: [{ animation: 'action:excited', emotion: 'happy', durationMs: 3000 }] })
+    const taken = new Set(reactions.map(r => r.id))
+    let n = reactions.length + 1
+    let id = slugifyReactionId(base.id, `reaction-${n}`)
+    while (taken.has(id)) { n++; id = `reaction-${n}` }
+    base.id = id
+    const clean = normalizeReaction(base, id)
+    if (!clean) { setReactionMsg('Could not create a reaction — try again.'); return }
+    patchReactions(list => [...list, clean])
+  }
+  const testReaction = async (reaction: CustomReaction) => {
+    setTestingId(reaction.id)
+    setReactionMsg('')
+    try {
+      const defaults: Record<string, string | number | boolean> = {}
+      for (const p of reaction.params) defaults[p.name] = p.default
+      const response = await fetch(petUrl('/behaviors/trigger'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Send the draft itself so the test never races the settings save.
+        body: JSON.stringify({ id: reaction.id, params: defaults, reaction }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || data.ok === false) setReactionMsg(`Test failed: ${data.error ?? response.status}`)
+      else setReactionMsg(`Playing “${reaction.name}” on the pet (${data.steps ?? reaction.steps.length} steps).`)
+    } catch (error) {
+      setReactionMsg(`Test failed: ${String(error)}`)
+    } finally {
+      setTestingId(null)
+    }
+  }
+  const pickReactionAnimation = (animationId: string): { animation: string; preset?: DancePreset } => {
+    const option = catalog.find(o => o.id === animationId)
+    return { animation: animationId, preset: option?.preset }
+  }
 
   const patchCurrent = (fn: (profile: typeof current) => typeof current) => {
     onChange({ ...settings, current: fn(clone(current)) })
@@ -162,6 +216,92 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
       </span>)}
     </div>}
 
+    <section aria-label="Custom reactions" style={{ border: '1px solid #39465c', borderRadius: 10, padding: 14, display: 'grid', gap: 12, background: '#1a2130' }}>
+      <div>
+        <strong style={{ fontSize: 15 }}>Custom reactions</strong>
+        <div style={muted}>One-shot behaviors any agent can call by id — e.g. after a git push. They play once and the pet returns to its current state. Persistent states (idle / working / music / dancing) stay fixed; reactions are the way to add new callable behaviors.</div>
+      </div>
+      <div style={row}>
+        <button style={smallButton} onClick={() => addReaction()}><Plus size={12} style={{ verticalAlign: -2 }} /> New reaction</button>
+        <button style={smallButton} onClick={() => addReaction(exampleReaction())} title="Add the rocket-launch celebrate-a-deploy example"><Plus size={12} style={{ verticalAlign: -2 }} /> Add rocket-launch example</button>
+        <span style={muted}>Agents browse these with <code>cuttle-pet behaviors</code> and call them with <code>cuttle-pet react &lt;id&gt;</code>.</span>
+      </div>
+      {reactionMsg && <div role="status" style={{ color: '#9fd6ff' }}>{reactionMsg}</div>}
+      {reactions.length === 0 && <span style={muted}>No custom reactions yet — add one, or start from the rocket-launch example.</span>}
+      {/* Index keys: the id is editable, and keying on it would remount the card (dropping input focus) on every keystroke. */}
+      {reactions.map((reaction, reactionIndex) => <article key={reactionIndex} aria-label={`Reaction ${reaction.id}`} style={{ border: '1px solid #2c3547', borderRadius: 8, padding: 12, display: 'grid', gap: 10, background: '#202839' }}>
+        <div style={row}>
+          <code style={{ color: '#9fd6ff' }}>{reaction.id}</code>
+          <span style={muted}>{describeReaction(reaction)}</span>
+          <span style={{ flex: 1 }} />
+          <button style={smallButton} onClick={() => void testReaction(reaction)} disabled={testingId === reaction.id} title="Play this reaction on the pet with default parameters"><FlaskConical size={12} style={{ verticalAlign: -2 }} /> {testingId === reaction.id ? 'Playing…' : 'Test on pet'}</button>
+          <button style={smallButton} onClick={() => patchReactions(list => list.filter(r => r.id !== reaction.id))} title="Delete" aria-label={`Delete ${reaction.id}`}><Trash2 size={12} /></button>
+        </div>
+        <div style={row}>
+          <input aria-label="Reaction name" value={reaction.name} onChange={e => patchReaction(reaction.id, r => { r.name = e.target.value.slice(0, 60) })} style={{ flex: '1 1 160px', minWidth: 0 }} placeholder="Name" />
+          <input aria-label="Reaction id" value={reaction.id} onChange={e => {
+            const next = editReactionId(e.target.value)
+            if (next && next !== reaction.id && !reactions.some(r => r.id === next)) patchReaction(reaction.id, r => { r.id = next })
+          }} style={{ flex: '0 1 160px', minWidth: 0 }} title="Stable id used by the API/CLI (a-z 0-9 - _)" />
+        </div>
+        <input aria-label="Agent description" value={reaction.description} onChange={e => patchReaction(reaction.id, r => { r.description = e.target.value.slice(0, 280) })} style={{ width: '100%', boxSizing: 'border-box' }} placeholder="Description agents see when browsing (when should they call this?)" />
+        <code style={{ ...muted, wordBreak: 'break-all' }}>{reactionCliExample(reaction.id, reaction.params)}</code>
+        <div style={{ display: 'grid', gap: 6 }}>
+          <span style={muted}>Parameters — referenced in speech text as {`{{name}}`}:</span>
+          {reaction.params.length === 0 && <span style={muted}>None. Add one for e.g. “dance for n seconds”.</span>}
+          {reaction.params.map((param, index) => <ReactionParamRow
+            key={index}
+            param={param}
+            nameTaken={name => reaction.params.some((p, i) => i !== index && p.name === name)}
+            fallbackName={`param${index + 1}`}
+            onPatch={patch => patchReaction(reaction.id, r => { Object.assign(r.params[index], patch) })}
+            onRemove={() => patchReaction(reaction.id, r => { r.params.splice(index, 1) })}
+          />)}
+          <div><button style={smallButton} onClick={() => patchReaction(reaction.id, r => {
+            if (r.params.length < 8) {
+              let n = r.params.length + 1
+              let name = `param${n}`
+              while (r.params.some(p => p.name === name)) { n++; name = `param${n}` }
+              r.params.push({ name, type: 'string', default: '', description: '' })
+            }
+          })}><Plus size={12} style={{ verticalAlign: -2 }} /> Add parameter</button></div>
+        </div>
+        <div style={{ display: 'grid', gap: 6 }}>
+          <span style={muted}>Steps — played in order, then the pet returns to its state:</span>
+          {reaction.steps.map((step, index) => <div key={index} style={row}>
+            <span style={{ ...muted, minWidth: 18 }}>{index + 1}.</span>
+            <AnimationSelect value={step.animation} catalog={catalog} onPick={animationId => patchReaction(reaction.id, r => { r.steps[index] = { ...r.steps[index], ...pickReactionAnimation(animationId) } })} />
+            <EmotionSelect value={step.emotion ?? ''} onPick={emotion => patchReaction(reaction.id, r => { r.steps[index].emotion = emotion })} />
+            <input aria-label="Speech text" value={step.say ?? ''} onChange={e => patchReaction(reaction.id, r => { r.steps[index].say = e.target.value.slice(0, 280) })} placeholder="Say… ({{param}})" style={{ flex: '1 1 140px', minWidth: 0 }} />
+            <label style={{ ...muted, display: 'flex', gap: 4, alignItems: 'center' }}>
+              <SecondsInput valueMs={step.durationMs} onCommit={ms => patchReaction(reaction.id, r => { r.steps[index].durationMs = ms })} />s
+            </label>
+            <label style={{ ...muted, display: 'flex', gap: 4, alignItems: 'center' }} title="Show the laptop + typing pose for this step">
+              <input type="checkbox" checked={!!step.props?.working} onChange={e => patchReaction(reaction.id, r => {
+                const props = { ...(r.steps[index].props ?? {}) }
+                if (e.target.checked) props.working = true
+                else delete props.working
+                r.steps[index].props = Object.keys(props).length ? props : undefined
+              })} /> laptop
+            </label>
+            <label style={{ ...muted, display: 'flex', gap: 4, alignItems: 'center' }} title="Sip coffee on this step">
+              <input type="checkbox" checked={!!step.props?.sip} onChange={e => patchReaction(reaction.id, r => {
+                const props = { ...(r.steps[index].props ?? {}) }
+                if (e.target.checked) props.sip = true
+                else delete props.sip
+                r.steps[index].props = Object.keys(props).length ? props : undefined
+              })} /> coffee
+            </label>
+            <button style={smallButton} onClick={() => tryEntry(step, false)} title="Try once"><Play size={12} /></button>
+            <button style={smallButton} onClick={() => patchReaction(reaction.id, r => { if (r.steps.length > 1) r.steps.splice(index, 1) })} title="Remove" aria-label="Remove step"><Trash2 size={12} /></button>
+          </div>)}
+          <div><button style={smallButton} onClick={() => patchReaction(reaction.id, r => {
+            if (r.steps.length < 10) r.steps.push({ animation: 'idle', durationMs: 3000 })
+          })}><Plus size={12} style={{ verticalAlign: -2 }} /> Add step</button></div>
+        </div>
+      </article>)}
+    </section>
+
     {BEHAVIOR_STATES.map(({ id, label, hint }) => {
       const cfg = current.states[id]
       return <section key={id} aria-label={`${label} state`} style={{ border: '1px solid #39465c', borderRadius: 10, padding: 14, display: 'grid', gap: 12, background: '#1a2130' }}>
@@ -216,5 +356,67 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
         </div>
       </section>
     })}
+  </div>
+}
+
+/** Step length in seconds; keeps a local draft so clearing the box to retype doesn't snap to a default. */
+function SecondsInput({ valueMs, onCommit }: { valueMs: number; onCommit: (ms: number) => void }) {
+  const parse = (text: string) => {
+    const seconds = Number(text)
+    return text.trim() && Number.isFinite(seconds) ? Math.max(500, Math.min(30000, Math.round(seconds * 1000))) : null
+  }
+  const [draft, setDraft] = useState(String(valueMs / 1000))
+  // Follow outside changes, but keep an in-progress draft like "1." that already means this value.
+  useEffect(() => { setDraft(d => parse(d) === valueMs ? d : String(valueMs / 1000)) }, [valueMs])
+  return <input aria-label="Step seconds" type="number" min={0.5} max={30} step={0.5} value={draft}
+    onChange={e => {
+      setDraft(e.target.value)
+      const ms = parse(e.target.value)
+      // Commit in-range values while typing; out-of-range ones clamp on blur.
+      if (ms !== null && ms === Math.round(Number(e.target.value) * 1000)) onCommit(ms)
+    }}
+    onBlur={() => {
+      const ms = parse(draft)
+      if (ms === null) setDraft(String(valueMs / 1000))
+      else if (ms !== valueMs) onCommit(ms)
+      else setDraft(String(ms / 1000))
+    }}
+    style={{ width: 52 }} />
+}
+
+function ReactionParamRow({ param, nameTaken, fallbackName, onPatch, onRemove }: {
+  param: ReactionParam
+  nameTaken: (name: string) => boolean
+  fallbackName: string
+  onPatch: (patch: Partial<ReactionParam>) => void
+  onRemove: () => void
+}) {
+  const row: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
+  const smallButton: React.CSSProperties = { padding: '5px 9px', fontSize: 13, border: '1px solid #505665', borderRadius: 7, background: '#303645', color: 'white', cursor: 'pointer', textAlign: 'left' }
+  return <div style={row}>
+    <input aria-label="Parameter name" value={param.name} onChange={e => {
+      const name = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 30)
+      onPatch({ name })
+    }} onBlur={() => {
+      // Invalid or duplicate names would be dropped on the next load; replace them now.
+      if (isValidReactionParamName(param.name) && !nameTaken(param.name)) return
+      let n = 1
+      let name = fallbackName
+      while (nameTaken(name)) name = `${fallbackName}_${++n}`
+      onPatch({ name })
+    }} title="Letters, digits and _; must start with a letter" style={{ flex: '0 1 110px', minWidth: 0 }} placeholder="name" />
+    <select aria-label="Parameter type" value={param.type} onChange={e => onPatch({ type: e.target.value as ReactionParam['type'] })}>
+      <option value="string">string</option>
+      <option value="number">number</option>
+      <option value="boolean">boolean</option>
+    </select>
+    <input aria-label="Default value" value={String(param.default)} onChange={e => {
+      const raw = e.target.value
+      if (param.type === 'number') onPatch({ default: Number.isFinite(Number(raw)) ? Number(raw) : 0 })
+      else if (param.type === 'boolean') onPatch({ default: ['true', '1', 'yes', 'y', 'on'].includes(raw.trim().toLowerCase()) })
+      else onPatch({ default: raw.slice(0, 200) })
+    }} style={{ flex: '0 1 110px', minWidth: 0 }} placeholder="default" />
+    <input aria-label="Parameter description" value={param.description} onChange={e => onPatch({ description: e.target.value.slice(0, 200) })} style={{ flex: '1 1 160px', minWidth: 0 }} placeholder="What is this for?" />
+    <button style={smallButton} onClick={onRemove} title="Remove" aria-label="Remove parameter"><Trash2 size={12} /></button>
   </div>
 }

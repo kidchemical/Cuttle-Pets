@@ -9,6 +9,8 @@ interface EngineInput {
   enabled: boolean
   profile: BehaviorProfile
   state: BehaviorStateId
+  /** A custom reaction owns the pet: stop scheduling, then re-apply the base on resume. */
+  paused?: boolean
   getScene: () => BehaviorScene | null
 }
 
@@ -31,13 +33,16 @@ function waitForSettled(scene: BehaviorScene, timeoutMs: number, pollMs: number)
  * previous state's end sequence, then the new state's start sequence and base
  * loop, and schedules that state's occasional one-shots (frequency + chance).
  * Manual previews and interactions win: sequences wait for a free mixer and
- * occasionals skip busy rounds.
+ * occasionals skip busy rounds. While paused (a reaction is playing) nothing
+ * is scheduled; resuming re-applies the current state's base without
+ * replaying its start/end sequences.
  */
-export function useBehaviorEngine({ enabled, profile, state, getScene }: EngineInput) {
+export function useBehaviorEngine({ enabled, profile, state, paused = false, getScene }: EngineInput) {
   const genRef = useRef(0)
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([])
   const handledStateRef = useRef<BehaviorStateId | null>(null)
   const prevStateRef = useRef<BehaviorStateId | null>(null)
+  const resumingRef = useRef(false)
   const sceneRef = useRef(getScene)
   sceneRef.current = getScene
 
@@ -60,6 +65,25 @@ export function useBehaviorEngine({ enabled, profile, state, getScene }: EngineI
       prevStateRef.current = null
       genRef.current++
       clearTimers()
+      return
+    }
+    if (paused) {
+      genRef.current++
+      clearTimers()
+      if (handledStateRef.current !== null) resumingRef.current = true
+      handledStateRef.current = null
+      return
+    }
+    if (resumingRef.current) {
+      resumingRef.current = false
+      handledStateRef.current = state
+      prevStateRef.current = state
+      // A resumed user dance already owns the mixer (see the dancing note below).
+      const scene = sceneRef.current()
+      if (scene && state !== 'dancing') {
+        const base = profile.states[state].base
+        applyBaseById(scene, base.animation, base.preset)
+      }
       return
     }
     // Profile-only edit: occasionals reschedule below; don't replay sequences.
@@ -100,11 +124,11 @@ export function useBehaviorEngine({ enabled, profile, state, getScene }: EngineI
     })()
     return () => { genRef.current++ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, state, profile])
+  }, [enabled, paused, state, profile])
 
   // Occasional one-shots always follow the latest profile edit.
   useEffect(() => {
-    if (!enabled || handledStateRef.current !== state) return
+    if (!enabled || paused || handledStateRef.current !== state) return
     const gen = genRef.current
     clearTimers()
     const schedule = (entry: OccasionalEntry) => {
@@ -123,5 +147,5 @@ export function useBehaviorEngine({ enabled, profile, state, getScene }: EngineI
     }
     for (const entry of profile.states[state].occasionals) schedule(entry)
     return () => { genRef.current++ }
-  }, [enabled, state, profile])
+  }, [enabled, paused, state, profile])
 }

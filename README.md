@@ -162,6 +162,8 @@ The server is plain HTTP on `127.0.0.1:8790` — anything can drive her:
 | `POST /click-through` | Toggle mouse pass-through |
 | `GET/POST /settings` | Renderer settings store |
 | `GET /model/list`, `POST /model/import` | Manage models |
+| `GET /behaviors` | Agent-browsable library of user-defined custom reactions |
+| `POST /behaviors/trigger` | Play a reaction by `id` with optional `params` (or an inline `reaction` draft) |
 
 Emotions: `happy sad angry surprised think awkward question curious neutral love flirty greeting relaxed`.
 Actions: `akimbo playFingers scratchHead stretch happy angry greeting excited shy point salute angryPump`, plus Mixamo and Quaternius dance packs.
@@ -205,6 +207,17 @@ reset buttons to try changes. Procedural music motion can also be previewed from
 Music tab. Speech remains synchronized to its audio; music beat matching works best
 at 1×. At effective speeds below 0.0625×, dance audio stays at 0.0625× (the browser's
 minimum playback rate).
+
+**Custom reactions** (same tab, below the states) are one-shot behaviors any
+agent can call by id — e.g. a `rocket-launch` celebration after a git push.
+Each reaction is an ordered step sequence (animation + emotion + speech +
+laptop/coffee props) with typed parameters referenced as `{{name}}` in speech
+text. Agents browse the library with `python3 cli/cuttle_pet.py behaviors`
+(`GET /behaviors`) and play one with
+`python3 cli/cuttle_pet.py react rocket-launch --param message="Shipped!"`
+(`POST /behaviors/trigger`). Reactions play once and the pet returns to its
+current state; the four persistent states (idle / working / music / dancing)
+stay fixed.
 
 ## Windows
 
