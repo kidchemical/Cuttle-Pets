@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { open } from '@tauri-apps/plugin-shell'
 import { isTauri } from '@tauri-apps/api/core'
-import { APP_RELEASES_URL, APP_VERSION } from '../version'
+import { APP_VERSION } from '../version'
 import { cachedUpdateStatus, checkForUpdates, type UpdateStatus } from '../update-check'
 
 async function openExternal(url: string) {
@@ -16,11 +16,34 @@ async function openExternal(url: string) {
   window.open(url, '_blank', 'noopener')
 }
 
+/** Small version pill for the settings header. Click to copy. */
+export function VersionChip({ language }: { language: 'zh' | 'en' }) {
+  const t = (zh: string, en: string) => (language === 'en' ? en : zh)
+  const [copied, setCopied] = useState(false)
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(`v${APP_VERSION}`)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* clipboard unavailable — the pill text is still selectable */
+    }
+  }, [])
+  return (
+    <button
+      onClick={() => void copy()}
+      title={t('点击复制版本号', 'Click to copy version')}
+      style={chipStyle}
+    >
+      {copied ? t('已复制', 'copied') : `v${APP_VERSION}`}
+    </button>
+  )
+}
+
 export function VersionFooter({ language }: { language: 'zh' | 'en' }) {
   const t = (zh: string, en: string) => (language === 'en' ? en : zh)
   const [status, setStatus] = useState<UpdateStatus>(() => cachedUpdateStatus())
   const [checking, setChecking] = useState(false)
-  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -41,16 +64,6 @@ export function VersionFooter({ language }: { language: 'zh' | 'en' }) {
     }
   }, [])
 
-  const copyVersion = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(`v${APP_VERSION}`)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch {
-      /* clipboard unavailable — the version text is still selectable */
-    }
-  }, [])
-
   const dotColor =
     status.state === 'available'
       ? '#4da3ff'
@@ -58,44 +71,35 @@ export function VersionFooter({ language }: { language: 'zh' | 'en' }) {
         ? '#58d68d'
         : 'rgba(255, 255, 255, 0.35)'
 
+  // One quiet line, no box: status left, a single text action right.
+  // (The standalone window places this on its own full-width grid row via
+  // .settings-version-footer in settings.css — without that it collapses
+  // into the 152px tab rail.)
   return (
-    <div style={footerStyle}>
-      <button
-        onClick={() => void copyVersion()}
-        title={t('点击复制版本号', 'Click to copy version')}
-        style={versionStyle}
-      >
-        v{APP_VERSION}
-        {copied && <span style={{ color: '#aebbd0' }}> · {t('已复制', 'copied')}</span>}
-      </button>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#aebbd0' }}>
+    <div className="settings-version-footer" style={footerStyle}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
         <span
           style={{
-            width: 8,
-            height: 8,
+            width: 7,
+            height: 7,
             borderRadius: 4,
             background: dotColor,
             display: 'inline-block',
           }}
         />
-        {status.state === 'available' && (
+        {status.state === 'available' ? (
           <button onClick={() => void openExternal(status.info.url)} style={linkStyle}>
             {t(`有新版本 v${status.info.latest}`, `Update available: v${status.info.latest}`)}
           </button>
+        ) : status.state === 'latest' ? (
+          <span>{t('已是最新版本', 'Up to date')}</span>
+        ) : (
+          <span>{checking ? t('正在检查更新…', 'Checking…') : t('未能检查更新', "Couldn't check")}</span>
         )}
-        {status.state === 'latest' && t('已是最新', 'Up to date')}
-        {status.state === 'unknown' && t('未能检查更新', 'Update check unavailable')}
       </span>
-      <span style={{ display: 'inline-flex', gap: 8 }}>
-        {status.state === 'available' && (
-          <button onClick={() => void openExternal(APP_RELEASES_URL)} style={linkStyle}>
-            {t('更新说明', 'Release notes')}
-          </button>
-        )}
-        <button onClick={() => void recheck()} disabled={checking} style={checkBtnStyle}>
-          {checking ? t('检查中…', 'Checking…') : t('检查更新', 'Check for updates')}
-        </button>
-      </span>
+      <button onClick={() => void recheck()} disabled={checking} style={quietStyle}>
+        {t('检查更新', 'Check for updates')}
+      </button>
     </div>
   )
 }
@@ -105,19 +109,21 @@ const footerStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 8,
-  flexWrap: 'wrap',
-  marginTop: 12,
-  paddingTop: 10,
-  borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+  fontSize: 12,
+  color: '#aebbd0',
+  fontFamily: 'inherit',
 }
 
-const versionStyle: React.CSSProperties = {
-  background: 'transparent',
-  border: 'none',
-  color: '#fff',
-  fontSize: 12,
+const chipStyle: React.CSSProperties = {
+  background: 'rgba(255, 255, 255, 0.08)',
+  border: '1px solid rgba(255, 255, 255, 0.12)',
+  borderRadius: 10,
+  color: '#aebbd0',
+  fontSize: 11,
   cursor: 'pointer',
-  padding: 0,
+  padding: '1px 8px',
+  marginLeft: 8,
+  verticalAlign: 'middle',
   fontFamily: 'inherit',
 }
 
@@ -129,16 +135,14 @@ const linkStyle: React.CSSProperties = {
   cursor: 'pointer',
   padding: 0,
   fontFamily: 'inherit',
-  textDecoration: 'underline',
 }
 
-const checkBtnStyle: React.CSSProperties = {
-  background: 'rgba(255, 255, 255, 0.08)',
-  border: '1px solid rgba(255, 255, 255, 0.15)',
-  borderRadius: 6,
-  color: '#fff',
+const quietStyle: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  color: '#7d8aa0',
   fontSize: 12,
   cursor: 'pointer',
-  padding: '4px 10px',
+  padding: 0,
   fontFamily: 'inherit',
 }

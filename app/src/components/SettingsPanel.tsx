@@ -10,7 +10,7 @@ import { petUrl } from '../config'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, Play, Loader, Sparkles, Trash2, Upload, Music } from 'lucide-react'
 import { BehaviorPanel } from './BehaviorPanel'
-import { VersionFooter } from './VersionFooter'
+import { VersionChip, VersionFooter } from './VersionFooter'
 import { describeStatus, type BehaviorSettings, type BehaviorStateId } from '../behavior'
 import { subscribeWindowEvent, type PetStatusPayload } from '../window-sync'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -405,7 +405,7 @@ export function SettingsPanel({
     <div className={standalone ? "pet-settings-window" : "pet-settings-panel"} style={{ ...overlayStyle, ...(standalone ? { background: '#1b1d25', alignItems: 'stretch', padding: 0 } : {}), ...(!standalone && tab === 'music' && musicPreview ? { background: 'transparent', alignItems: 'flex-end' } : {}) }} data-no-passthrough onClick={onClose}>
       <div className="settings-shell" style={{ ...panelStyle, ...(standalone ? { width: '100%', height: '100%', borderRadius: 0, display: 'flex', flexDirection: 'column' } : { width: panelWidth, maxWidth: '90vw', transform: `translate(${panelPos.x}px, ${panelPos.y}px)` }) }} data-no-passthrough onClick={(e) => e.stopPropagation()}>
         <div className="settings-header" style={headerStyle} onMouseDown={standalone ? undefined : onDragStart}>
-          <div><h1 style={{ fontSize: 20, margin: 0 }}>{t('设置', 'Settings')}</h1><p className="settings-caption">{t('个性化你的桌面伙伴', 'Make your desktop companion your own')}</p></div>
+          <div><h1 style={{ fontSize: 20, margin: 0 }}>{t('设置', 'Settings')}<VersionChip language={language} /></h1><p className="settings-caption">{t('个性化你的桌面伙伴', 'Make your desktop companion your own')}</p></div>
           {!standalone && <button aria-label="Close settings" onClick={onClose} style={closeBtnStyle}>
             <X size={16} />
           </button>}

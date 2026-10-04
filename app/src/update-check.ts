@@ -70,7 +70,7 @@ export function compareVersions(a: string, b: string): -1 | 0 | 1 {
   return 0
 }
 
-async function fetchLatestRelease(): Promise<CachedCheck | null> {
+async function fetchLatestRelease(): Promise<CachedCheck | 'none' | null> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   try {
@@ -78,12 +78,13 @@ async function fetchLatestRelease(): Promise<CachedCheck | null> {
       headers: { Accept: 'application/vnd.github+json' },
       signal: controller.signal,
     })
-    // No releases published yet (or repo without releases): not an error state.
-    if (response.status === 404) return null
+    // No releases published yet: distinct from a network failure. There is
+    // nothing newer than the running build, so this resolves to 'latest'.
+    if (response.status === 404) return 'none'
     if (!response.ok) throw new Error(`GitHub releases: HTTP ${response.status}`)
     const data = await response.json()
     const tag = String(data.tag_name || '').replace(/^v/i, '')
-    if (!tag) return null
+    if (!tag) return 'none'
     return {
       checkedAt: Date.now(),
       latest: tag,
@@ -125,6 +126,7 @@ export async function checkForUpdates(current = APP_VERSION, force = false): Pro
   }
   try {
     const fresh = await fetchLatestRelease()
+    if (fresh === 'none') return { state: 'latest', latest: current }
     if (!fresh) return toStatus(current, cached)
     writeCache(fresh)
     return toStatus(current, fresh)
