@@ -252,6 +252,9 @@ Third-party license notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.
 
 ## Development
 
+Coding agents: start with [AGENTS.md](AGENTS.md) for source entry points, validation
+commands, and native mouse-input regression guidance.
+
 ```bash
 python3 -m pytest tests/          # Python suite (server, bridge, beats, CLI)
 cd app && npx tsc --noEmit        # renderer typecheck
