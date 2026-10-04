@@ -13,19 +13,26 @@ static PINNED: AtomicBool = AtomicBool::new(true);
 
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    // Ordinary window: raise it on open so it doesn't land behind other
+    // windows, but never pin it topmost.
     if let Some(window) = app.get_webview_window("settings") {
+        if window.is_minimized().unwrap_or(false) {
+            window.unminimize().map_err(|e| e.to_string())?;
+        }
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
         return Ok(());
     }
-    tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App("index.html?settings".into()))
+    let window = tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App("index.html?settings".into()))
         .title("Cuttle Pets — Settings")
         .inner_size(1280.0, 720.0)
         .min_inner_size(960.0, 540.0)
         .resizable(true)
         .decorations(true)
         .transparent(false)
+        .focused(true)
         .build().map_err(|e| e.to_string())?;
+    let _ = window.set_focus();
     Ok(())
 }
 

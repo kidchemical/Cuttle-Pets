@@ -70,6 +70,28 @@ for (let i = 0; i < root.values.length; i += 3) {
 }
 console.log('Real phone clip passed: converted Z-up rig and anchored root displacement stays within 0.5m.')
 
+// Travelling Mixamo clip (breakdance walks ~1.5m sideways in source units):
+// horizontal hips motion must be pinned in place so the pet doesn't run off,
+// while vertical motion (footwork dips) is preserved.
+const rawDance = readFileSync('app/public/mixamo_breakdance.fbx')
+const danceAsset = new FBXLoader().parse(rawDance.buffer.slice(rawDance.byteOffset, rawDance.byteOffset + rawDance.byteLength), '')
+const danceSourceTrack = danceAsset.animations[0].tracks.find((t: any) => t.name === 'mixamorigHips.position')!
+{
+  const n = danceSourceTrack.values.length / 3
+  const netX = Math.abs(danceSourceTrack.values[(n - 1) * 3] - danceSourceTrack.values[0])
+  assert.ok(netX > 100, `Breakdance fixture must actually travel (net source X=${netX}), or this test is vacuous`)
+}
+const danceClip = retargetToVRM(danceAsset, fakePhoneVRM)
+const danceRoot = danceClip.tracks.find(t => t.name === 'normalized_hips.position')!
+for (let i = 0; i < danceRoot.values.length; i += 3) {
+  assert.equal(danceRoot.values[i], 0, 'Breakdance hips X must stay anchored in place')
+  assert.equal(danceRoot.values[i + 2], 0, 'Breakdance hips Z must stay anchored in place')
+}
+let danceYRange = 0
+for (let i = 0; i < danceRoot.values.length; i += 3) danceYRange = Math.max(danceYRange, Math.abs(danceRoot.values[i + 1] - 1))
+assert.ok(danceYRange > 0.02, 'Breakdance vertical hips motion must be preserved')
+console.log('Real breakdance clip passed: horizontal root motion pinned, vertical motion preserved.')
+
 // Exercise both bind-axis signs and both scene orientations. Previous tests
 // assumed one sign and missed the real VRM0 models with reversed arm offsets.
 for (const sign of [-1, 1]) for (const yaw of [0, Math.PI]) {

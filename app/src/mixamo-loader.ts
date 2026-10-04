@@ -203,7 +203,10 @@ export function retargetToVRM(asset: THREE.Group, vrm: VRM, takeName?: string): 
           ),
         )
       } else if (track instanceof THREE.VectorKeyframeTrack && propertyName === 'position' && vrmBoneName === 'hips') {
-        // Preserve displacement, not the source rig's absolute hip location.
+        // Preserve vertical displacement, not the source rig's absolute hip
+        // location — and pin horizontal (XZ) displacement in place. The pet
+        // performs on a fixed spot, so travelling clips (e.g. breakdance,
+        // which walks ~1.5m sideways) must not carry the model off with them.
         // Source parent rotation converts Z-up packs to world space; then
         // convert the movement into the target hip's parent-local coordinates.
         const first = new THREE.Vector3().fromArray(track.values)
@@ -213,7 +216,7 @@ export function retargetToVRM(asset: THREE.Group, vrm: VRM, takeName?: string): 
             .multiply(sourceParentScale).applyQuaternion(parentRestWorldRotation)
             .multiplyScalar(hipsPositionScale).applyQuaternion(targetParentInverse)
             .divide(targetParentScale).add(targetHips.position)
-          value.push(_vec3.x, _vec3.y, _vec3.z)
+          value.push(targetHips.position.x, _vec3.y, targetHips.position.z)
         }
         tracks.push(
           new THREE.VectorKeyframeTrack(`${vrmNodeName}.${propertyName}`, Array.from(track.times), value),

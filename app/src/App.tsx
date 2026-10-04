@@ -96,6 +96,8 @@ export default function App() {
   const [modelPath, setModelPath] = useState(DEFAULT_MODEL)
   const [animationSettings, setAnimationSettings] = useState<AnimationSettings>(DEFAULT_ANIMATIONS)
   const openSettings = useCallback(() => { void openSettingsWindow().catch(error => setModelError(String(error))) }, [])
+  // TEMP-VERIFY: auto-open settings once to verify raise-on-open. Revert after check.
+  useEffect(() => { const t = setTimeout(() => { void openSettingsWindow() }, 2500); return () => clearTimeout(t) }, [])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [hideUI, setHideUI] = useState(false)
   const [volume, setVolume] = useState(0.5)
