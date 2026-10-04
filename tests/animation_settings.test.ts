@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { normalizeAnimations, animationSpeed, animationOptions } from '../app/src/animation-settings'
+import { normalizeAnimations, animationSpeed, animationOptions, proceduralSpeed } from '../app/src/animation-settings'
 import { normalizeCustomDances } from '../app/src/custom-dances'
 import { MotionController } from '../app/src/motion-controller'
 const THREE = createRequire(new URL('../app/package.json', import.meta.url))('three')
@@ -16,6 +16,14 @@ async function main() {
   assert.equal(animationSpeed(settings, 'idle'), 2)
   assert.deepEqual(animationOptions(settings, 'action:happy'), { speed: .5, transition: 3, hold: 0 })
   assert.equal(normalizeAnimations({ speed: Infinity }).speed, 1)
+
+  // Procedural (additive) layers ignore the global multiplier: other sliders
+  // must never change their tempo (e.g. typing/global speeding up music nod).
+  const proc = normalizeAnimations({ speed: 3, overrides: { typing: { speed: 2 }, music: { speed: 1.5 } } })
+  assert.equal(proceduralSpeed(proc, 'typing'), 2)
+  assert.equal(proceduralSpeed(proc, 'music'), 1.5)
+  assert.equal(proceduralSpeed(proc, 'hands'), 1, 'Unset procedural layers run at 1x regardless of global')
+  assert.equal(animationSpeed(proc, 'idle'), 3, 'Base clips still honor the global multiplier')
 
   // Real Three mixer, fake asset loader: no model files, audio, or network.
   const vrm: any = { scene: new THREE.Group(), humanoid: { getRawBoneNode: () => null, getNormalizedBoneNode: () => null } }

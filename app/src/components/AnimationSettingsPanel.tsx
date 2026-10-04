@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { actionPresets, dancePresets, type DancePreset } from '../motion-controller'
-import { animationOptions, DEFAULT_ANIMATIONS, DEFAULT_ANIMATION, proceduralAnimations, type AnimationSettings } from '../animation-settings'
+import { animationOptions, proceduralSpeed, DEFAULT_ANIMATIONS, DEFAULT_ANIMATION, proceduralAnimations, type AnimationSettings } from '../animation-settings'
 
 interface Props {
   settings: AnimationSettings
@@ -31,7 +31,7 @@ export function AnimationSettingsPanel({ settings, onChange, customDances, onPre
   )
   return <div style={{ display: 'grid', gap: 18, fontSize: 14 }}>
     {slider('Global animation speed', settings.speed, .1, 4, .05, speed => onChange({ ...settings, speed }))}
-    <p style={{ color: '#adb5c8', lineHeight: 1.5 }}>Global and individual speeds multiply. Changes apply immediately. Speech audio stays synchronized; music beat matching works best at 1×.</p>
+    <p style={{ color: '#adb5c8', lineHeight: 1.5 }}>Global and individual speeds multiply for base clips (idle, actions, dances). Procedural layers (typing, music nod, eyes, blink, …) use only their individual speed. Changes apply immediately. Speech audio stays synchronized; music beat matching works best at 1×.</p>
     <input aria-label="Search animations" placeholder="Search animations…" value={query} onChange={e => setQuery(e.target.value)} style={{ ...button, width: '100%' }} />
     <div className="animation-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) minmax(180px, 1.3fr)', gap: 16 }}>
       <div className="animation-list" role="listbox" aria-label="Animations" style={{ overflowY: 'auto', height: 330, display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -42,7 +42,7 @@ export function AnimationSettingsPanel({ settings, onChange, customDances, onPre
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         <strong>{item.label}</strong>
         {slider('Individual speed', options.speed, .1, 4, .05, speed => update({ speed }))}
-        <span>Effective speed: {(settings.speed * options.speed).toFixed(2)}×</span>
+        <span>Effective speed: {(item.procedural ? proceduralSpeed(settings, item.id) : settings.speed * options.speed).toFixed(2)}×{item.procedural ? ' (individual only)' : ''}</span>
         {!item.procedural && slider('Transition duration', options.transition, 0, 3, .05, transition => update({ transition }), 's')}
         {item.id.startsWith('action:') && slider('Held pose duration', options.hold, 0, 60, 1, hold => update({ hold }), 's')}
         {item.id.startsWith('action:') && <small style={{ color: '#adb5c8' }}>Held duration applies when an interaction requests a held pose.</small>}

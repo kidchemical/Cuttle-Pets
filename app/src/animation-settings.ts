@@ -20,6 +20,15 @@ export function animationOptions(settings: AnimationSettings, id: string): Anima
 export function animationSpeed(settings: AnimationSettings, id: string) {
   return settings.speed * animationOptions(settings, id).speed
 }
+/**
+ * Procedural (additive) layers — typing wiggle, relaxed hands, sip, music
+ * nod, eyes, blink, expressions — use only their own individual speed.
+ * The global multiplier applies to base clips (idle/actions/dances) only,
+ * so e.g. raising global or typing speed never changes the music bob tempo.
+ */
+export function proceduralSpeed(settings: AnimationSettings, id: string) {
+  return animationOptions(settings, id).speed
+}
 export const proceduralAnimations = [
   { id: 'hands', label: 'Relaxed hands' }, { id: 'typing', label: 'Working / typing' },
   { id: 'sip', label: 'Coffee sip' }, { id: 'music', label: 'Music nod / sway' },

@@ -1,5 +1,5 @@
 import { FramePacer } from '../frame-pacer'
-import { DEFAULT_ANIMATIONS, animationSpeed, type AnimationSettings } from '../animation-settings'
+import { DEFAULT_ANIMATIONS, proceduralSpeed, type AnimationSettings } from '../animation-settings'
 import { MusicMotion } from '../music-motion'
 import { prepareLaptop, cupPositions } from '../work-props'
 import { DEFAULT_MUSIC, DEFAULT_FIT, type MusicSettings, type HeadphoneFit } from '../music-settings'
@@ -944,6 +944,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     let renderingPaused = document.hidden
     const framePacer = new FramePacer()
     const animationTimes = { hands: 0, typing: 0, sip: 0 }
+    // Wall-clock for music scheduling: never scaled by any animation speed,
+    // so sip/typing sliders can't shift music dance timing.
+    let musicClock = 0
 
     function animate() {
       animFrameId = requestAnimationFrame(animate)
@@ -958,7 +961,10 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
       if (vrm) {
         const prefs = animationSettingsRef.current
-        for (const key of ['hands', 'typing', 'sip'] as const) animationTimes[key] += delta * animationSpeed(prefs, key)
+        musicClock += delta
+        // Procedural layers use only their own individual speed; the global
+        // multiplier applies to base clips (mixer) only.
+        for (const key of ['hands', 'typing', 'sip'] as const) animationTimes[key] += delta * proceduralSpeed(prefs, key)
         // Remove last frame’s procedural layer, including bones absent from the idle clip.
         if (typingCache) restoreTypingPose(typingCache)
         // 1. Animation mixer
@@ -1035,15 +1041,15 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           headphones.rotation.set(THREE.MathUtils.degToRad(fit.rx), THREE.MathUtils.degToRad(fit.ry), THREE.MathUtils.degToRad(fit.rz))
           headphones.visible = listening
         }
-        const musicPose = musicMotionRef.current.step(delta, performance.now() / 1000, musicOptions, listening, musicPreviewRef.current, workingTargetRef.current, sipBlend, animationSpeed(prefs, 'music'))
+        const musicPose = musicMotionRef.current.step(delta, performance.now() / 1000, musicOptions, listening, musicPreviewRef.current, workingTargetRef.current, sipBlend, proceduralSpeed(prefs, 'music'))
         if (typingCache && !motion?.actionPlaying && !motion?.isDancing) applyMusicAngles(typingCache, musicPose.pitch, musicPose.roll)
         if (listening && !motion?.actionPlaying && !motion?.isDancing) {
-          if (!nextMusicDance) nextMusicDance = now + 20 + Math.random() * 25
-          if (musicOptions.randomDance && !musicPreviewRef.current && !workingTargetRef.current && workingBlend < .02 && now >= nextMusicDance) {
+          if (!nextMusicDance) nextMusicDance = musicClock + 20 + Math.random() * 25
+          if (musicOptions.randomDance && !musicPreviewRef.current && !workingTargetRef.current && workingBlend < .02 && musicClock >= nextMusicDance) {
             const choices = ['breakdance', 'cheering', 'joyfulJump']
             musicDanceActiveRef.current = true
             void motion?.playAction(choices[Math.floor(Math.random() * choices.length)])
-            nextMusicDance = now + 45 + Math.random() * 45
+            nextMusicDance = musicClock + 45 + Math.random() * 45
           }
         } else if (!listening) {
           if (musicDanceActiveRef.current) {
@@ -1071,16 +1077,16 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         }
 
         // 4. LookAt update
-        vrm.lookAt?.update(delta * animationSpeed(prefs, 'eyes'))
+        vrm.lookAt?.update(delta * proceduralSpeed(prefs, 'eyes'))
 
         // 5. Eye saccades (airi style)
-        saccades.update(vrm, lookAtTarget, delta * animationSpeed(prefs, 'eyes'))
+        saccades.update(vrm, lookAtTarget, delta * proceduralSpeed(prefs, 'eyes'))
 
         // 5. Blinking
-        updateBlink(vrm, delta * animationSpeed(prefs, 'blink'), blinkState)
+        updateBlink(vrm, delta * proceduralSpeed(prefs, 'blink'), blinkState)
 
         // 6. Emote transitions
-        emote?.update(delta * animationSpeed(prefs, 'expressions'))
+        emote?.update(delta * proceduralSpeed(prefs, 'expressions'))
 
         // 7. Lip sync
         lipSyncRef.current.update(vrm, delta)
