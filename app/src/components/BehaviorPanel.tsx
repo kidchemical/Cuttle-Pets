@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Play, Repeat, Square, Plus, Trash2, Download, Upload, Save, FlaskConical } from 'lucide-react'
 import {
-  BEHAVIOR_STATES, EMOTION_OPTIONS, RANDOM_ACTION, RANDOM_EMOTION, MAX_MAINS, animationCatalog,
+  BEHAVIOR_STATES, EMOTION_OPTIONS, RANDOM_ACTION, RANDOM_EMOTION, MAX_MAINS, animationCatalog, animationLabel,
   normalizeProfile, normalizeReaction, defaultBehaviorProfile, exampleReaction,
   slugifyReactionId, editReactionId, isValidReactionParamName, describeReaction, reactionCliExample,
   type AnimationOption, type BehaviorEntry, type BehaviorSettings, type BehaviorStateId,
@@ -28,7 +28,16 @@ function clone<T>(value: T): T {
 const button: React.CSSProperties = { padding: '9px 12px', border: '1px solid #505665', borderRadius: 7, background: '#303645', color: 'white', cursor: 'pointer', textAlign: 'left' }
 const smallButton: React.CSSProperties = { ...button, padding: '5px 9px', fontSize: 13 }
 const row: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }
-const select: React.CSSProperties = { flex: '1 1 160px', minWidth: 0 }
+/* Entry rows mirror the animations-page list rows: a flexible label control
+   plus a horizontal icon-button group. */
+const iconButton: React.CSSProperties = { ...button, padding: '6px 7px' }
+const numberInput: React.CSSProperties = { width: 52, background: '#262c38', border: '1px solid #505665', borderRadius: 7, color: 'white', padding: '5px 6px', fontSize: 13 }
+const select: React.CSSProperties = {
+  flex: '1 1 160px', minWidth: 0, padding: '6px 10px',
+  border: '1px solid #505665', borderRadius: 7, background: '#262c38',
+  color: 'white', fontSize: 14, cursor: 'pointer',
+  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+}
 const muted: React.CSSProperties = { color: '#adb5c8', fontSize: 12 }
 
 function groupedOptions(catalog: AnimationOption[], allowLeaveAlone: boolean) {
@@ -54,14 +63,14 @@ function AnimationSelect({ value, catalog, allowLeaveAlone, onPick }: {
   </select>
 }
 
-/** Resulting pick chances from Main weights, e.g. "Gokuraku Jodo 33% · Love Circulation 33% · …". */
-function MainChanceSummary({ mains, catalog }: { mains: WeightedEntry[]; catalog: AnimationOption[] }) {
-  if (mains.length < 2) return null
-  const total = mains.reduce((sum, e) => sum + Math.max(0, e.weight), 0)
-  if (total <= 0) return <span style={muted}>All weights are zero — nothing will be picked.</span>
-  const labelOf = (id: string) => catalog.find(o => o.id === id)?.label ?? id
-  return <span style={muted}>{mains.map(e => `${labelOf(e.animation)} ${Math.round((Math.max(0, e.weight) / total) * 100)}%`).join(' · ')}</span>
-}
+/** Entry phases within one behavior state, each with its own list section. */
+type EntryPhase = 'start' | 'mains' | 'occasionals' | 'end'
+const PHASES: { id: EntryPhase; label: string; addLabel: string; cap: number }[] = [
+  { id: 'start', label: 'Start', addLabel: 'Add entry', cap: 5 },
+  { id: 'mains', label: 'Main', addLabel: 'Add loop', cap: MAX_MAINS },
+  { id: 'occasionals', label: 'Occasionals', addLabel: 'Add occasional', cap: 8 },
+  { id: 'end', label: 'End', addLabel: 'Add exit', cap: 5 },
+]
 
 function EmotionSelect({ value, onPick }: { value: string; onPick: (emotion: string) => void }) {
   return <select aria-label="Emotion" value={value || ''} onChange={e => onPick(e.target.value)} style={{ flex: '0 1 130px', minWidth: 0 }}>
@@ -79,6 +88,8 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
   const [reactionMsg, setReactionMsg] = useState('')
   const [testingId, setTestingId] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  /** Inspector selection: one entry in the state/phase list below. */
+  const [selected, setSelected] = useState<{ state: BehaviorStateId; phase: EntryPhase; index: number } | null>(null)
 
   const patchReactions = (fn: (list: CustomReaction[]) => CustomReaction[]) => {
     onChange({ ...settings, reactions: fn(clone(reactions)) })
@@ -144,7 +155,7 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
   /** Keep legacy `base` in sync: first Main entry, or empty for leave-as-is. */
   const syncBase = (state: StateBehavior) => {
     const first = state.mains[0]
-    state.base = first ? { animation: first.animation, preset: first.preset } : { animation: '' }
+    state.base = first ? (first.preset ? { animation: first.animation, preset: first.preset } : { animation: first.animation }) : { animation: '' }
   }
   const setMains = (id: BehaviorStateId, mains: WeightedEntry[]) => {
     patchState(id, state => { state.mains = mains; syncBase(state) })
@@ -159,15 +170,64 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
       syncBase(state)
     })
   }
-  const addStart = (id: BehaviorStateId) => patchState(id, state => {
-    if (state.start.length < 5) state.start.push({ animation: 'idle' })
-  })
-  const addOccasional = (id: BehaviorStateId) => patchState(id, state => {
-    if (state.occasionals.length < 8) state.occasionals.push({ animation: RANDOM_ACTION, emotion: RANDOM_EMOTION, everyMin: 45, everyMax: 75, chance: 0.5 })
-  })
-  const addEnd = (id: BehaviorStateId) => patchState(id, state => {
-    if (state.end.length < 5) state.end.push({ animation: 'idle' })
-  })
+  const phaseEntries = (stateId: BehaviorStateId, phase: EntryPhase): BehaviorEntry[] => {
+    const cfg = current.states[stateId]
+    return phase === 'start' ? cfg.start : phase === 'end' ? cfg.end : phase === 'occasionals' ? cfg.occasionals : cfg.mains
+  }
+
+  const addEntry = (stateId: BehaviorStateId, phase: EntryPhase) => {
+    const cfg = current.states[stateId]
+    if (phase === 'start' && cfg.start.length < 5) {
+      patchState(stateId, s => { s.start.push({ animation: 'idle' }) })
+      setSelected({ state: stateId, phase, index: cfg.start.length })
+    } else if (phase === 'end' && cfg.end.length < 5) {
+      patchState(stateId, s => { s.end.push({ animation: 'idle' }) })
+      setSelected({ state: stateId, phase, index: cfg.end.length })
+    } else if (phase === 'occasionals' && cfg.occasionals.length < 8) {
+      patchState(stateId, s => { s.occasionals.push({ animation: RANDOM_ACTION, emotion: RANDOM_EMOTION, everyMin: 45, everyMax: 75, chance: 0.5 }) })
+      setSelected({ state: stateId, phase, index: cfg.occasionals.length })
+    } else if (phase === 'mains' && cfg.mains.length < MAX_MAINS) {
+      patchState(stateId, s => {
+        s.mains.push({ animation: stateId === 'dancing' ? 'dance:jile' : 'idle', weight: 1 })
+        syncBase(s)
+      })
+      setSelected({ state: stateId, phase, index: cfg.mains.length })
+    }
+  }
+
+  const removeEntry = (stateId: BehaviorStateId, phase: EntryPhase, index: number) => {
+    const len = phaseEntries(stateId, phase).length
+    patchState(stateId, s => {
+      if (phase === 'start') s.start.splice(index, 1)
+      else if (phase === 'end') s.end.splice(index, 1)
+      else if (phase === 'occasionals') s.occasionals.splice(index, 1)
+      else { s.mains.splice(index, 1); syncBase(s) }
+    })
+    // Keep the selection on a neighbor instead of losing it.
+    if (selected?.state === stateId && selected?.phase === phase) {
+      if (len <= 1) setSelected(null)
+      else if (selected.index === index) setSelected({ state: stateId, phase, index: Math.min(index, len - 2) })
+      else if (selected.index > index) setSelected({ state: stateId, phase, index: selected.index - 1 })
+    }
+  }
+
+  /** Preset for previews: stored on the entry, else resolved from the catalog. */
+  const presetFor = (entry: BehaviorEntry) => entry.preset ?? catalog.find(o => o.id === entry.animation)?.preset
+
+  /** Small meta line per list row: chance for mains, timing for occasionals, emotion otherwise. */
+  const entryMeta = (stateId: BehaviorStateId, phase: EntryPhase, entry: BehaviorEntry): string => {
+    if (phase === 'mains') {
+      const mains = current.states[stateId].mains
+      const total = mains.reduce((sum, e) => sum + Math.max(0, e.weight), 0)
+      const weight = Math.max(0, (entry as WeightedEntry).weight ?? 0)
+      return total > 0 ? `${Math.round((weight / total) * 100)}%` : '0%'
+    }
+    if (phase === 'occasionals') {
+      const o = entry as OccasionalEntry
+      return `every ${o.everyMin}–${o.everyMax}s · ${Math.round(o.chance * 100)}%`
+    }
+    return entry.emotion || ''
+  }
 
   const updateEntry = (id: BehaviorStateId, list: 'start' | 'end', index: number, patch: Partial<BehaviorEntry>) => {
     patchState(id, state => { state[list][index] = { ...state[list][index], ...patch } })
@@ -213,6 +273,19 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
       setImportError('That file is not a valid behavior profile.')
     }
   }
+
+  // Inspector selection: the explicit choice when still valid, else the topmost entry.
+  const selValid = selected && phaseEntries(selected.state, selected.phase)[selected.index] !== undefined ? selected : null
+  const selFallback = (() => {
+    for (const { id: stateId } of BEHAVIOR_STATES)
+      for (const { id: phase } of PHASES)
+        if (phaseEntries(stateId, phase).length > 0) return { state: stateId, phase, index: 0 }
+    return null
+  })()
+  const sel = selValid ?? selFallback
+  const selEntry = sel ? phaseEntries(sel.state, sel.phase)[sel.index] : undefined
+  const selStateLabel = sel ? BEHAVIOR_STATES.find(s => s.id === sel.state)?.label ?? sel.state : ''
+  const selPhaseLabel = sel ? PHASES.find(p => p.id === sel.phase)?.label ?? sel.phase : ''
 
   return <div style={{ display: 'grid', gap: 18, fontSize: 14 }}>
     {statusText && <div role="status" style={{ ...row, background: '#22303f', border: '1px solid #39465c', borderRadius: 8, padding: '9px 12px' }}>
@@ -326,80 +399,87 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
       </article>)}
     </section>
 
-    {BEHAVIOR_STATES.map(({ id, label, hint }) => {
-      const cfg = current.states[id]
-      return <section key={id} aria-label={`${label} state`} style={{ border: '1px solid #39465c', borderRadius: 10, padding: 14, display: 'grid', gap: 12, background: '#1a2130' }}>
-        <div><strong style={{ fontSize: 15 }}>{label}</strong><div style={muted}>{hint}</div></div>
-        <div style={{ display: 'grid', gap: 6 }}>
-          <span style={muted}>Start — plays once when entering {label.toLowerCase()}:</span>
-          {cfg.start.length === 0 && <span style={muted}>Nothing — jumps straight to the base loop.</span>}
-          {cfg.start.map((entry, index) => <div key={index} style={row}>
-            <AnimationSelect value={entry.animation} catalog={catalog} onPick={animationId => updateEntry(id, 'start', index, pickAnimation(animationId))} />
-            <EmotionSelect value={entry.emotion ?? ''} onPick={emotion => updateEntry(id, 'start', index, { emotion })} />
-            <button style={smallButton} onClick={() => tryEntry(entry, false)} title="Try once"><Play size={12} /></button>
-            <button style={smallButton} onClick={() => patchState(id, state => { state.start.splice(index, 1) })} title="Remove" aria-label="Remove start entry"><Trash2 size={12} /></button>
-          </div>)}
-          <div><button style={smallButton} onClick={() => addStart(id)}><Plus size={12} style={{ verticalAlign: -2 }} /> Add entry animation</button></div>
+    <div className="animation-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 1.65fr) minmax(150px, 0.85fr)', gap: 16, alignItems: 'stretch' }}>
+        <div className="animation-list" role="listbox" aria-label="Behavior animations" style={{ overflowY: 'auto', height: '100%', minHeight: 330, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {BEHAVIOR_STATES.map(({ id: stateId, label: stateLabel, hint }) => (
+            <div key={stateId} style={{ display: 'grid', gap: 6 }}>
+              <div><strong style={{ fontSize: 13 }}>{stateLabel}</strong><div style={muted}>{hint}</div></div>
+              {PHASES.map(({ id: phase, label: phaseLabel, addLabel, cap }) => {
+                const entries = phaseEntries(stateId, phase)
+                return <div key={phase} style={{ display: 'grid', gap: 4 }}>
+                  <span style={muted}>{phaseLabel}</span>
+                  {entries.map((entry, index) => {
+                    const isSel = sel?.state === stateId && sel?.phase === phase && sel?.index === index
+                    const preset = presetFor(entry)
+                    const title = animationLabel(entry.animation, customDances, language)
+                    return <div key={stateId + ':' + phase + ':' + index} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <button role="option" aria-selected={isSel} onClick={() => setSelected({ state: stateId, phase, index })} style={{ ...button, padding: '6px 10px', flex: 1, minWidth: 0, background: isSel ? '#385a90' : '#262c38', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {title} <small style={{ color: '#b5becf' }}>{entryMeta(stateId, phase, entry)}</small>
+                      </button>
+                      <div style={{ display: 'flex', flexDirection: 'row', gap: 2, flexShrink: 0 }}>
+                        <button title={'Play ' + title + ' once'} aria-label={'Play ' + title + ' once'} onClick={() => onPreview?.(entry.animation, preset, 'once')} style={{ ...button, padding: '6px 7px' }}><Play size={12} /></button>
+                        <button title={'Play ' + title + ' looped'} aria-label={'Play ' + title + ' looped'} onClick={() => onPreview?.(entry.animation, preset, 'loop')} style={{ ...button, padding: '6px 7px' }}><Repeat size={12} /></button>
+                        <button title={'Stop ' + title} aria-label={'Stop ' + title} onClick={() => onStop?.()} style={{ ...button, padding: '6px 7px' }}><Square size={12} /></button>
+                      </div>
+                    </div>
+                  })}
+                  <div><button style={smallButton} disabled={entries.length >= cap} onClick={() => addEntry(stateId, phase)} title={entries.length >= cap ? 'At most ' + cap : undefined}><Plus size={12} style={{ verticalAlign: -2 }} /> {addLabel}</button></div>
+                </div>
+              })}
+            </div>
+          ))}
         </div>
-        <div style={{ display: 'grid', gap: 6 }}>
-          <span style={muted}>Main — the sustaining loop{cfg.mains.length > 1 ? ', picked by relative chance each time' : ''}:</span>
-          {cfg.mains.length === 0 && <span style={muted}>
-            {id === 'dancing'
-              ? 'Leave playing as-is — a dance started elsewhere keeps playing.'
-              : `Nothing listed — falls back to ${cfg.base.animation || 'idle'}.`}
-          </span>}
-          {cfg.mains.map((entry, index) => <div key={index} style={row}>
-            <AnimationSelect value={entry.animation} catalog={catalog} allowLeaveAlone={id === 'dancing'} onPick={animationId => {
-              const option = catalog.find(o => o.id === animationId)
-              setMainEntry(id, index, { animation: animationId, preset: option?.preset })
-            }} />
-            <label style={{ ...muted, display: 'flex', gap: 4, alignItems: 'center' }} title="Relative chance this one is picked">
-              ×<input aria-label="Pick weight" type="number" min={0} max={99} value={entry.weight}
-                onChange={e => setMainEntry(id, index, { weight: Math.max(0, Math.min(99, Math.round(Number(e.target.value) || 0))) })}
-                style={{ width: 52 }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {sel && selEntry ? <>
+            <div>
+              <span style={muted}>{selStateLabel} · {selPhaseLabel} · #{sel.index + 1}</span>
+              <div><strong style={{ fontSize: 15 }}>{animationLabel(selEntry.animation, customDances, language)}</strong></div>
+            </div>
+            <label style={{ display: 'grid', gap: 8 }}>Animation
+              <AnimationSelect value={selEntry.animation} catalog={catalog} allowLeaveAlone={sel.state === 'dancing'} onPick={animationId => {
+                const picked = pickAnimation(animationId)
+                if (sel.phase === 'mains') setMainEntry(sel.state, sel.index, { animation: picked.animation, preset: picked.preset })
+                else if (sel.phase === 'occasionals') updateOccasional(sel.state, sel.index, { animation: picked.animation, preset: picked.preset })
+                else updateEntry(sel.state, sel.phase, sel.index, { animation: picked.animation, preset: picked.preset })
+              }} />
             </label>
-            <button style={smallButton} onClick={() => onPreview?.(entry.animation, entry.preset, 'loop')} title="Try looped"><Repeat size={12} /></button>
-            <button style={smallButton} onClick={() => setMains(id, cfg.mains.filter((_, i) => i !== index))} title="Remove" aria-label="Remove main entry"><Trash2 size={12} /></button>
-          </div>)}
-          <MainChanceSummary mains={cfg.mains} catalog={catalog} />
-          <div style={row}>
-            <button style={smallButton} onClick={() => {
-              if (cfg.mains.length < MAX_MAINS) setMains(id, [...cfg.mains, { animation: 'idle', weight: 1 }])
-            }} disabled={cfg.mains.length >= MAX_MAINS} title={`Add another loop (max ${MAX_MAINS})`}><Plus size={12} style={{ verticalAlign: -2 }} /> Add loop</button>
-            <button style={smallButton} onClick={() => onStop?.()} title="Stop"><Square size={12} /></button>
-          </div>
+            {sel.phase === 'mains' && (() => {
+              const mains = current.states[sel.state].mains
+              const total = mains.reduce((sum, e) => sum + Math.max(0, e.weight), 0)
+              const w = Math.max(0, (selEntry as WeightedEntry).weight ?? 0)
+              const pct = total > 0 ? Math.round((w / total) * 100) : 0
+              return <label style={{ display: 'grid', gap: 8 }}>Pick weight — {pct}% of {selPhaseLabel}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <input aria-label="Pick weight" type="range" min={0} max={99} step={1} value={w} onChange={e => setMainEntry(sel.state, sel.index, { weight: Number(e.target.value) })} style={{ flex: 1, minWidth: 0 }} />
+                  <output style={{ minWidth: 44 }}>×{w}</output>
+                </div>
+              </label>
+            })()}
+            {sel.phase !== 'mains' && (
+              <label style={{ display: 'grid', gap: 8 }}>Emotion
+                <EmotionSelect value={selEntry.emotion ?? ''} onPick={emotion => {
+                  if (sel.phase === 'occasionals') updateOccasional(sel.state, sel.index, { emotion })
+                  else updateEntry(sel.state, sel.phase as 'start' | 'end', sel.index, { emotion })
+                }} />
+              </label>
+            )}
+            {sel.phase === 'occasionals' && (
+              <label style={{ display: 'grid', gap: 8 }}>Timing
+                <span style={{ ...muted, display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>every
+                  <input aria-label="Minimum seconds" type="number" min={5} max={3600} value={(selEntry as OccasionalEntry).everyMin} onChange={e => updateOccasional(sel.state, sel.index, { everyMin: Number(e.target.value) })} style={numberInput} />
+                  –<input aria-label="Maximum seconds" type="number" min={5} max={3600} value={(selEntry as OccasionalEntry).everyMax} onChange={e => updateOccasional(sel.state, sel.index, { everyMax: Number(e.target.value) })} style={numberInput} />s
+                  at {(selEntry as OccasionalEntry).chance !== undefined ? Math.round((selEntry as OccasionalEntry).chance * 100) : 0}%
+                  <input aria-label="Chance percent" type="range" min={0} max={100} step={5} value={Math.round((selEntry as OccasionalEntry).chance * 100)} onChange={e => updateOccasional(sel.state, sel.index, { chance: Number(e.target.value) / 100 })} style={{ flex: 1, minWidth: 80 }} />
+                </span>
+              </label>
+            )}
+            <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'once')}>Preview once</button>
+            <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'loop')}>Preview looped</button>
+            <button style={button} onClick={onStop}>Stop preview</button>
+            <button style={button} onClick={() => removeEntry(sel.state, sel.phase, sel.index)}>Remove entry</button>
+          </> : <span style={muted}>No animations yet — add one from any section on the left.</span>}
         </div>
-        <div style={{ display: 'grid', gap: 6 }}>
-          <span style={muted}>Also during {label.toLowerCase()} — occasional one-shots:</span>
-          {cfg.occasionals.length === 0 && <span style={muted}>Nothing extra happens.</span>}
-          {cfg.occasionals.map((entry, index) => <div key={index} style={row}>
-            <AnimationSelect value={entry.animation} catalog={catalog} onPick={animationId => updateOccasional(id, index, pickAnimation(animationId))} />
-            <EmotionSelect value={entry.emotion ?? ''} onPick={emotion => updateOccasional(id, index, { emotion })} />
-            <label style={{ ...muted, display: 'flex', gap: 4, alignItems: 'center' }}>every
-              <input aria-label="Minimum seconds" type="number" min={5} max={3600} value={entry.everyMin} onChange={e => updateOccasional(id, index, { everyMin: Number(e.target.value) })} style={{ width: 56 }} />
-              –<input aria-label="Maximum seconds" type="number" min={5} max={3600} value={entry.everyMax} onChange={e => updateOccasional(id, index, { everyMax: Number(e.target.value) })} style={{ width: 56 }} />s
-            </label>
-            <label style={{ ...muted, display: 'flex', gap: 6, alignItems: 'center' }}>{Math.round(entry.chance * 100)}%
-              <input aria-label="Chance percent" type="range" min={0} max={100} step={5} value={Math.round(entry.chance * 100)} onChange={e => updateOccasional(id, index, { chance: Number(e.target.value) / 100 })} style={{ width: 70 }} />
-            </label>
-            <button style={smallButton} onClick={() => tryEntry(entry, false)} title="Try once"><Play size={12} /></button>
-            <button style={smallButton} onClick={() => patchState(id, state => { state.occasionals.splice(index, 1) })} title="Remove" aria-label="Remove occasional"><Trash2 size={12} /></button>
-          </div>)}
-          <div><button style={smallButton} onClick={() => addOccasional(id)}><Plus size={12} style={{ verticalAlign: -2 }} /> Add occasional</button></div>
-        </div>
-        <div style={{ display: 'grid', gap: 6 }}>
-          <span style={muted}>End — plays once when leaving {label.toLowerCase()}:</span>
-          {cfg.end.length === 0 && <span style={muted}>Nothing — hands straight over to the next state.</span>}
-          {cfg.end.map((entry, index) => <div key={index} style={row}>
-            <AnimationSelect value={entry.animation} catalog={catalog} onPick={animationId => updateEntry(id, 'end', index, pickAnimation(animationId))} />
-            <EmotionSelect value={entry.emotion ?? ''} onPick={emotion => updateEntry(id, 'end', index, { emotion })} />
-            <button style={smallButton} onClick={() => tryEntry(entry, false)} title="Try once"><Play size={12} /></button>
-            <button style={smallButton} onClick={() => patchState(id, state => { state.end.splice(index, 1) })} title="Remove" aria-label="Remove end entry"><Trash2 size={12} /></button>
-          </div>)}
-          <div><button style={smallButton} onClick={() => addEnd(id)}><Plus size={12} style={{ verticalAlign: -2 }} /> Add exit animation</button></div>
-        </div>
-      </section>
-    })}
+      </div>
   </div>
 }
 

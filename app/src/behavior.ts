@@ -13,7 +13,7 @@ export const BEHAVIOR_STATES: { id: BehaviorStateId; label: string; hint: string
   { id: 'idle', label: 'Idle', hint: 'Hanging out, no task and no music.' },
   { id: 'working', label: 'Working', hint: 'Typing at the laptop (driven by Cuttle activity).' },
   { id: 'music', label: 'Music', hint: 'Music is playing and the pet is listening.' },
-  { id: 'dancing', label: 'Dancing', hint: 'A dance is playing. Base is left alone so the dance is never interrupted.' },
+  { id: 'dancing', label: 'Dancing', hint: 'Plays a weighted pick from Main below (default: the 3 built-in dances, equal chance). Empty Main leaves the playing dance alone.' },
 ]
 
 export const EMOTION_OPTIONS = [
@@ -191,22 +191,32 @@ function cleanWeightedEntry(value: unknown): WeightedEntry | null {
   return { ...entry, weight: bounded(weight, 1, 0, 99) }
 }
 
-function cleanState(value: unknown, fallback: StateBehavior): StateBehavior {
+function cleanState(value: unknown, fallback: StateBehavior, id: BehaviorStateId): StateBehavior {
   const source = value && typeof value === 'object' ? value as Record<string, unknown> : {}
   const start = Array.isArray(source.start) ? source.start.map(cleanEntry).filter((e): e is BehaviorEntry => e !== null).slice(0, 5) : []
   const occasionals = Array.isArray(source.occasionals) ? source.occasionals.map(cleanOccasional).filter((e): e is OccasionalEntry => e !== null).slice(0, 8) : []
   const end = Array.isArray(source.end) ? source.end.map(cleanEntry).filter((e): e is BehaviorEntry => e !== null).slice(0, 5) : []
   // Accept a bare id string for hand-written profiles ("base": "typing").
   const baseSource = typeof source.base === 'string' ? { animation: source.base } : source.base
-  const base = cleanEntry(baseSource) ?? { ...fallback.base }
+  let base = cleanEntry(baseSource) ?? { ...fallback.base }
   // Older profiles predate mains: an explicit base migrates to a single
   // weighted entry so Main always shows what actually plays. A state with no
   // base info at all inherits the default rotation (the 3 dances for dancing).
-  const mains = Array.isArray(source.mains)
+  let mains = Array.isArray(source.mains)
     ? source.mains.map(cleanWeightedEntry).filter((e): e is WeightedEntry => e !== null).slice(0, MAX_MAINS)
     : source.base !== undefined
       ? base.animation ? [{ ...base, weight: 1 }] : []
       : fallback.mains.map(m => ({ ...m }))
+  if (id === 'dancing') {
+    // Dancing only dances: drop non-dance entries (e.g. an action saved as
+    // the old single base). When something was specified but nothing dance
+    // survived, restore the default rotation instead of a bogus main.
+    const specified = mains.length > 0 || base.animation !== ''
+    mains = mains.filter(e => e.animation.startsWith('dance:'))
+    if (mains.length === 0 && specified) mains = fallback.mains.map(m => ({ ...m }))
+    const first = mains[0]
+    base = first ? (first.preset ? { animation: first.animation, preset: first.preset } : { animation: first.animation }) : { animation: '' }
+  }
   return { start, base, mains, occasionals, end }
 }
 
@@ -217,7 +227,7 @@ export function normalizeProfile(value: unknown, fallbackName: string): Behavior
   const out = {} as Record<BehaviorStateId, StateBehavior>
   // A missing state restores the full default (base + occasionals), not an
   // empty shell — otherwise a fresh install would lose the built-in behavior.
-  for (const { id } of BEHAVIOR_STATES) out[id] = cleanState(states[id] ?? fallback[id], fallback[id])
+  for (const { id } of BEHAVIOR_STATES) out[id] = cleanState(states[id] ?? fallback[id], fallback[id], id)
   const name = cleanId(source.name).slice(0, 60)
   return { name: name || fallbackName, states: out }
 }
@@ -241,7 +251,7 @@ function defaultProfileStates(): Record<BehaviorStateId, StateBehavior> {
     music: { start: [], base: { animation: 'music' }, mains: [{ animation: 'music', weight: 1 }], occasionals: [], end: [] },
     dancing: {
       start: [],
-      base: { animation: '' },
+      base: { animation: 'dance:jile' },
       mains: [
         { animation: 'dance:jile', weight: 1 },
         { animation: 'dance:love', weight: 1 },

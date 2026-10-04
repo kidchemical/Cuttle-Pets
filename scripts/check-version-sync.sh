@@ -24,3 +24,37 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 echo "versions in sync ($want)"
+
+# Tauri JS/Rust halves must share major.minor, or `tauri dev` errors out
+# ("Found version mismatched Tauri packages"). Compare the npm ranges in
+# package.json against the pinned crates in Cargo.lock.
+mismatched="$(ROOT="$ROOT" python3 - <<'EOF'
+import json, os, re
+root = os.environ['ROOT']
+pkg = json.load(open(f'{root}/app/package.json'))
+deps = {**pkg.get('dependencies', {}), **pkg.get('devDependencies', {})}
+lock = open(f'{root}/app/src-tauri/Cargo.lock').read()
+bad = []
+for name, npm_range in deps.items():
+    if name == '@tauri-apps/api':
+        crate = 'tauri'
+    elif name.startswith('@tauri-apps/plugin-'):
+        crate = 'tauri-' + name.split('@tauri-apps/')[1]
+    else:
+        continue
+    m = re.search(r'name = "' + re.escape(crate) + r'"\nversion = "([^"]+)"', lock)
+    if not m:
+        continue
+    npm_minor = '.'.join(re.search(r'(\d+)\.(\d+)', npm_range).groups())
+    rust_minor = '.'.join(m.group(1).split('.')[:2])
+    if npm_minor != rust_minor:
+        bad.append(f'{name} (npm {npm_range} vs {crate} {m.group(1)})')
+print(' '.join(bad))
+EOF
+)"
+if [ -n "$mismatched" ]; then
+  echo "tauri minor mismatch: $mismatched" >&2
+  echo "align the npm range with the Cargo.lock minor (e.g. npm i <pkg>@<major>.<minor>)" >&2
+  exit 1
+fi
+echo "tauri js/rust minors match"

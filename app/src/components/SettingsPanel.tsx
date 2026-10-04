@@ -15,7 +15,7 @@ import { describeStatus, type BehaviorSettings, type BehaviorStateId } from '../
 import { subscribeWindowEvent, type PetStatusPayload } from '../window-sync'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isTauri, invoke } from '@tauri-apps/api/core'
-import { dancePresets, localizedPresetLabel, type DancePreset } from '../motion-controller'
+import type { DancePreset } from '../motion-controller'
 import { RENDER_QUALITIES, presetSettings, resolvePreset, type QualityDetails, type QualitySettings } from '../render-quality'
 import { BUBBLE_PREVIEW_TEXT, DEFAULT_BUBBLE_SETTINGS, FONT_CHOICES, type BubbleSettings } from '../bubble-settings'
 
@@ -432,35 +432,10 @@ export function SettingsPanel({
           {tab === 'animations' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div style={sectionStyle}>
-                  <div style={labelStyle}>{t('内置舞蹈', 'Built-in Dances')}</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {Object.entries(dancePresets).map(([id, preset]) => (
-                      <div
-                        key={id}
-                        onClick={() => { onDanceChange(id); onAnimationPreview?.(`dance:${id}`, undefined, 'loop') }}
-                        title={t('点击播放', 'Click to play')}
-                        style={{
-                          ...modelBtnStyle,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '8px 12px',
-                          fontSize: 13,
-                          background: currentDance === id ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
-                          borderColor: currentDance === id ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Music size={14} style={{ opacity: 0.6 }} />
-                          <span>{localizedPresetLabel(preset, language)}</span>
-                        </div>
-                        {preset.bgm && (
-                          <span style={{ fontSize: 11, color: '#aebbd0' }}>{t('含BGM', 'w/ BGM')}</span>
-                        )}
-                      </div>
-                    ))}
+                  <div style={labelStyle}>{t('导入的动作', 'Imported Motion')}</div>
+                  <div style={{ fontSize: 12, color: '#aebbd0', marginBottom: 8 }}>
+                    {t('内置舞蹈见下方动画列表（含预览）。这里只管理你导入的动作文件。', 'Built-in dances live in the animation list below (with previews). This section is only for your imported motion files.')}
                   </div>
-
                   {customDances.length > 0 && (
                     <div style={{ marginTop: 12 }}>
                       <div style={labelStyle}>{t('自定义舞蹈', 'Custom Dances')}</div>
