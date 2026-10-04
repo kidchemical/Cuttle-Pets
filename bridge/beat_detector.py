@@ -48,6 +48,21 @@ class BeatDetector:
         self.preferred_bpm = None
         self.preferred_time = -math.inf
 
+    def retain(self, candidate, confidence):
+        """Tempo to keep when evidence is weak, or None to abstain.
+
+        Release must require sustained disagreement. A single weak frame must
+        not drop a supported pulse, so the lock survives while the candidate
+        still matches it. True silence clears state through the onset gap
+        instead, which keeps this from pinning a stale tempo indefinitely.
+        """
+        if self.weak_count <= 4 and confidence >= .18:
+            return self.bpm
+        if (self.bpm is not None and self.weak_count <= 12
+                and candidate is not None and abs(candidate / self.bpm - 1) < .03):
+            return self.bpm
+        return None
+
     def estimate(self):
         self.candidate_bpm = None
         if len(self.features) < 50 or len(self.onsets) < 2:
@@ -96,7 +111,12 @@ class BeatDetector:
         if self.bpm:
             current = int(np.argmin(abs(self.tempos - self.bpm)))
             different = abs(self.tempos[winner] / self.bpm - 1) >= .03
-            if different and ranking[winner] - ranking[current] < .08:
+            # Incumbency protection scales with how well the current grid is still
+            # supported. A stale lock must not outrank fresher evidence.
+            spread = strength[winner] - np.median(strength)
+            keep = max(float(strength[current] - np.median(strength)), 0.) / max(spread, 1e-6)
+            margin = .02 + .06 * float(np.clip(keep, 0, 1))
+            if different and ranking[winner] - ranking[current] < margin:
                 winner = current  # Require a material improvement before switching grids.
         candidate = float(self.tempos[winner])
         self.candidate_bpm = candidate
@@ -105,10 +125,13 @@ class BeatDetector:
 
         if (self.preferred_bpm and self.last_time - self.preferred_time < 16
                 and abs(candidate / self.preferred_bpm - 1) >= .03 and confidence < .35):
-            # Weak competing subdivisions may be displayed, but must not
-            # replace a recently supported pulse. Abstain while evidence is weak.
-            self.pending_bpm, self.pending_count = None, 0
-            return None, min(.34, confidence)
+            # Weak competing subdivisions may be displayed, but must not replace a
+            # recently supported pulse. Accumulation still proceeds: clearing it here
+            # would deadlock the challenger, since confidence is boosted by how long
+            # the candidate has been consistent and it could never earn a lock.
+            contested = True
+        else:
+            contested = False
         if confidence >= .15:
             if self.pending_bpm is not None and abs(candidate / self.pending_bpm - 1) < .03:
                 self.pending_count += 1
@@ -116,18 +139,28 @@ class BeatDetector:
                 self.pending_bpm, self.pending_count = candidate, 1
             self.weak_count = 0
             confidence = min(1., confidence + .2 * min(1., self.pending_count / 16))
-            if confidence < .35 or not ready:
+            agrees = self.bpm is not None and abs(candidate / self.bpm - 1) < .03
+            if confidence < .35 or not ready or contested:
+                # Hysteresis: an established lock survives brief ambiguity while
+                # the candidate still matches it. Only a competing pulse that
+                # clears the bar above may take over.
+                if agrees and ready:
+                    return float(self.bpm), max(.35, confidence)
                 return None, confidence
             if self.bpm and abs(candidate / self.bpm - 1) < .03:
                 bpm = self.bpm + .25 * (candidate - self.bpm)
             elif self.pending_count >= 3:
-                bpm = candidate
+                # A cold start has no history to lean on, so it must prove itself
+                # over a longer stretch. Early ambiguous windows favour nearby
+                # subdivisions; switching an established lock stays responsive.
+                needed = 6 if self.bpm is None else 3
+                bpm = candidate if self.pending_count >= needed else self.bpm
             else:
                 bpm = self.bpm
         else:
             self.pending_bpm, self.pending_count = None, 0
             self.weak_count += 1
-            bpm = self.bpm if self.weak_count <= 4 and confidence >= .18 else None
+            bpm = self.retain(candidate, confidence)
         if bpm is None:
             return None, min(.34, confidence)
         # Phase evidence comes from the supported channels, with DC/background

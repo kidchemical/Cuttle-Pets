@@ -86,6 +86,48 @@ class TrackingTests(unittest.TestCase):
                 _, results = analyze(np.rint(audio * 32767).astype(np.int16))
                 self.assertFalse(any(r['bpm'] for _, r in results))
 
+    def test_release_needs_sustained_disagreement_not_one_weak_frame(self):
+        # A single dip in confidence must not drop a supported pulse, while a
+        # candidate that has moved away, or silence, still releases it.
+        detector = BeatDetector()
+        detector.bpm = 120.
+        detector.weak_count = 1
+        self.assertEqual(detector.retain(120., .05), 120., 'one weak frame dropped the lock')
+        self.assertIsNone(detector.retain(93., .05), 'a different tempo should release')
+        self.assertIsNone(detector.retain(None, 0.), 'no evidence should release')
+        detector.weak_count = 13
+        self.assertIsNone(detector.retain(120., .05), 'sustained weakness should release')
+        detector.bpm = None
+        detector.weak_count = 1
+        self.assertIsNone(detector.retain(120., .5), 'nothing to retain')
+
+    def test_stable_challenger_eventually_wins_a_contested_lock(self):
+        # Incumbent protection must not freeze the challenger's accumulator:
+        # confidence is boosted by candidate consistency, so clearing it while
+        # the challenger is merely weaker than the recent pulse deadlocks it.
+        # A beat buried in noise: the candidate stays correct while confidence is too
+        # low to switch, which is exactly when incumbent protection engages.
+        rng = np.random.default_rng(5)
+        span = np.arange(int(24 * RATE)) / RATE
+        buried = .5 * np.exp(-(span % (60 / 93)) * 30) * np.sin(2 * np.pi * 75 * span)
+        buried = buried + .7 * rng.normal(size=len(span))
+        detector, results = analyze(np.rint(np.clip(buried, -.99, .99) * 32767).astype(np.int16))
+        weak = [r['confidence'] for now, r in results if now > 12]
+        self.assertLess(np.mean(weak), .35, 'fixture must sit in the contested band')
+        detector.preferred_bpm, detector.preferred_time = 125., 1e9
+        detector.last_time = 1e9
+        # The guard abstains from switching, but must leave the challenger's
+        # accumulator intact so a consistent candidate can still earn the lock.
+        counts = []
+        for _ in range(6):
+            detector.estimate()
+            counts.append(detector.pending_count)
+            self.assertLess(abs(detector.candidate_bpm - 93), 3)
+        self.assertEqual(counts, sorted(counts), 'accumulator went backwards while contested')
+        self.assertGreaterEqual(counts[-1], 6,
+                                'contested accumulator was reset, deadlocking the challenger')
+        self.assertIsNotNone(detector.pending_bpm)
+
     def test_new_tempo_replaces_old_window_evidence(self):
         first, _ = track(120, seconds=10)
         second, _ = track(170, seconds=18)
