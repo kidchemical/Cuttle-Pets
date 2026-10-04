@@ -333,8 +333,13 @@ struct TrayAnimation { name: String, id: String }
 /// into the settings window (a scrollable breakout) via a tail item.
 const TRAY_SUBMENU_PAGE_SIZE: usize = 25;
 
-fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music_enabled: bool, animations: &[TrayAnimation], quality: &str, text_enabled: bool) -> tauri::Result<Menu<tauri::Wry>> {
+fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music_enabled: bool, animations: &[TrayAnimation], quality: &str, text_enabled: bool, update_available: bool, update_version: &str) -> tauri::Result<Menu<tauri::Wry>> {
     let show = MenuItem::with_id(app, "show", "Show / Hide", true, None::<&str>)?;
+    let update_item = if update_available {
+        Some(MenuItem::with_id(app, "update", &format!("● Update available (v{})", update_version), true, None::<&str>)?)
+    } else {
+        None
+    };
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let quality_labels = [("low", "Low"), ("mid", "Mid"), ("high", "High"), ("ultra", "Ultra")];
     let quality_items: Vec<CheckMenuItem<tauri::Wry>> = quality_labels.iter().map(|(id, label)|
@@ -370,18 +375,42 @@ fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music
     let pose = MenuItem::with_id(app, "pose", "Stop animation", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    Menu::with_items(app, &[&show, &models_menu, &animation_menu, &quality_menu, &music, &text, &camera, &pose, &settings, &sep, &quit])
+    if let Some(update) = update_item.as_ref() {
+        Menu::with_items(app, &[update, &show, &models_menu, &animation_menu, &quality_menu, &music, &text, &camera, &pose, &settings, &sep, &quit])
+    } else {
+        Menu::with_items(app, &[&show, &models_menu, &animation_menu, &quality_menu, &music, &text, &camera, &pose, &settings, &sep, &quit])
+    }
 }
 
-#[tauri::command]
-fn update_tray_models(app: tauri::AppHandle, models: Vec<TrayModel>, selected: String, music_enabled: bool, animations: Vec<TrayAnimation>, quality: String, text_enabled: bool) -> Result<(), String> {
-    let menu = tray_menu(&app, &models, &selected, music_enabled, &animations, &quality, text_enabled).map_err(|e| e.to_string())?;
-    if let Some(tray) = app.tray_by_id("cuttle-pet") { tray.set_menu(Some(menu)).map_err(|e| e.to_string())?; }
+const TRAY_ICON_NORMAL: &[u8] = include_bytes!("../icons/128x128.png");
+const TRAY_ICON_UPDATE: &[u8] = include_bytes!("../icons/128x128-update.png");
+
+/// Apply the update badge: blue-dot icon plus tooltip. Never touches user
+/// data — this only changes the tray presentation.
+fn apply_tray_update_state(app: &tauri::AppHandle, update_available: bool, update_version: &str) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id("cuttle-pet") {
+        let icon_bytes = if update_available { TRAY_ICON_UPDATE } else { TRAY_ICON_NORMAL };
+        let icon = tauri::image::Image::from_bytes(icon_bytes).map_err(|e| e.to_string())?;
+        tray.set_icon(Some(icon)).map_err(|e| e.to_string())?;
+        let tooltip = if update_available {
+            format!("Cuttle Pets — update available (v{})", update_version)
+        } else {
+            "Cuttle Pets".to_string()
+        };
+        tray.set_tooltip(Some(&tooltip)).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
+#[tauri::command]
+fn update_tray_models(app: tauri::AppHandle, models: Vec<TrayModel>, selected: String, music_enabled: bool, animations: Vec<TrayAnimation>, quality: String, text_enabled: bool, update_available: bool, update_version: String) -> Result<(), String> {
+    let menu = tray_menu(&app, &models, &selected, music_enabled, &animations, &quality, text_enabled, update_available, &update_version).map_err(|e| e.to_string())?;
+    if let Some(tray) = app.tray_by_id("cuttle-pet") { tray.set_menu(Some(menu)).map_err(|e| e.to_string())?; }
+    apply_tray_update_state(&app, update_available, &update_version)
+}
+
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let menu = tray_menu(app.handle(), &[TrayModel { name: "Default character".into(), url: "/model1.vrm".into() }], "/model1.vrm", true, &[], "high", true)?;
+    let menu = tray_menu(app.handle(), &[TrayModel { name: "Default character".into(), url: "/model1.vrm".into() }], "/model1.vrm", true, &[], "high", true, false, "")?;
 
     TrayIconBuilder::with_id("cuttle-pet")
         .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))?)
@@ -414,7 +443,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                         let _ = window.set_focus();
                     }
                 }
-                "settings" | "more-models" | "more-animations" => { let _ = open_settings_window(app.clone()); }
+                "settings" | "more-models" | "more-animations" | "update" => { let _ = open_settings_window(app.clone()); }
                 "quit" => {
                     app.exit(0);
                 }

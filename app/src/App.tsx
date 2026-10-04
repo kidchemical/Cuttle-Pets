@@ -19,6 +19,7 @@ import { usePassThrough } from './hooks/usePassThrough'
 import { dancePresets, actionPresets, localizedPresetLabel } from './motion-controller'
 import { LipSync } from './lip-sync'
 import { bindScene } from './api'
+import { checkForUpdates } from './update-check'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -196,6 +197,9 @@ export default function App() {
     return () => { void unlisten.then(f => f()) }
   }, [openSettings])
 
+  // Tray update badge. checkForUpdates caches for 6h, so it is cheap to call
+  // on every tray refresh; the badge clears itself once the running build is
+  // no longer behind.
   useEffect(() => {
     let active = true
     const refresh = async () => {
@@ -203,7 +207,11 @@ export default function App() {
         const response = await fetch(petUrl('/model/list'))
         const data = await response.json()
         const models = [{ name: 'Default character', url: DEFAULT_MODEL }, ...(data.models || []).map((m: { name: string; url: string }) => ({ name: m.name, url: petUrl(m.url) }))]
-        if (active) await invoke('update_tray_models', { models, selected: modelPath, musicEnabled, animations: Object.entries(actionPresets).map(([id, preset]) => ({ id, name: preset.label })), quality: qualityPreset, textEnabled: showText })
+        const status = await checkForUpdates().catch(() => null)
+        const updateVersion = status && status.state === 'available' ? status.info.latest : ''
+        if (active) {
+          await invoke('update_tray_models', { models, selected: modelPath, musicEnabled, animations: Object.entries(actionPresets).map(([id, preset]) => ({ id, name: preset.label })), quality: qualityPreset, textEnabled: showText, updateAvailable: updateVersion !== '', updateVersion })
+        }
       } catch (e) { console.warn('Tray model refresh failed', e) }
     }
     void refresh()

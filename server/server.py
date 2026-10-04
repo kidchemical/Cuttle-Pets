@@ -372,6 +372,26 @@ def get_settings():
     return jsonify(_load_settings())
 
 
+def _app_version() -> str:
+    try:
+        return (REPO_ROOT / "VERSION").read_text().strip()
+    except OSError:
+        return "dev"
+
+
+@app.get("/version")
+def get_version():
+    """Running build version (mirrors the repo-root VERSION file).
+
+    Update flows must treat everything under DATA_DIR (~/.cuttle-pet:
+    settings.json, models, dances, audio) as user-owned: replacing the app
+    bundle or checking out a new release must never delete, overwrite, or
+    migrate those files except through an explicit, documented migration for
+    a named setting key.
+    """
+    return jsonify({"version": _app_version()})
+
+
 @app.patch("/settings")
 @app.post("/settings")
 def update_settings():

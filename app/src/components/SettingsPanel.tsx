@@ -10,6 +10,7 @@ import { petUrl } from '../config'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, Play, Loader, Sparkles, Trash2, Upload, Music } from 'lucide-react'
 import { BehaviorPanel } from './BehaviorPanel'
+import { VersionFooter } from './VersionFooter'
 import { describeStatus, type BehaviorSettings, type BehaviorStateId } from '../behavior'
 import { subscribeWindowEvent, type PetStatusPayload } from '../window-sync'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -1187,6 +1188,7 @@ export function SettingsPanel({
             </div>
           )}
         </div>
+        <VersionFooter language={language} />
       </div>
     </div>
   )
