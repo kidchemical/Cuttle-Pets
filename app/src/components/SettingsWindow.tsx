@@ -4,6 +4,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { SettingsPanel } from './SettingsPanel'
 import { loadSettings, saveSettings } from '../settings'
 import { normalizeAnimations } from '../animation-settings'
+import { normalizeGazeGain } from '../cursor-gaze'
 import { normalizeBehaviorSettings } from '../behavior'
 import { DEFAULT_MUSIC, DEFAULT_FIT, normalizeMusic, normalizeFit, modelFitKey } from '../music-settings'
 import { normalizeQualitySettings } from '../render-quality'
@@ -49,6 +50,7 @@ export function SettingsWindow() {
     showText={settings.showText ?? true} onShowTextChange={showText => patch({ showText })}
     ttsEnabled={settings.ttsEnabled ?? true} onTtsEnabledChange={ttsEnabled => patch({ ttsEnabled })}
     tracking={settings.tracking || 'mouse'} onTrackingChange={tracking => patch({ tracking })}
+    gazeGain={normalizeGazeGain(settings.gazeGain)} onGazeGainChange={gazeGain => patch({ gazeGain })}
     qualitySettings={normalizeQualitySettings(settings.quality)} onQualitySettingsChange={quality => patch({ quality })}
     volume={settings.volume ?? .5} onVolumeChange={volume => patch({ volume })}
     uiAlign={settings.uiAlign || 'right'} onUiAlignChange={uiAlign => patch({ uiAlign })}

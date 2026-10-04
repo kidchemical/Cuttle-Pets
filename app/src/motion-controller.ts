@@ -24,10 +24,20 @@ export type MotionFileType = 'vrma' | 'vmd' | 'fbx'
 
 export interface MotionPreset {
   label: string
+  /** English display name; falls back to `label` when absent. */
+  labelEn?: string
   type: MotionFileType
   url: string
   /** FBX take name for multi-take packs (e.g. Quaternius UAL) */
   take?: string
+}
+
+/** Display name for a motion preset in the given UI language. */
+export function localizedPresetLabel(
+  preset: Pick<MotionPreset, 'label' | 'labelEn'>,
+  language: 'zh' | 'en' = 'zh',
+): string {
+  return language === 'en' ? (preset.labelEn ?? preset.label) : preset.label
 }
 
 // Actions: short one-shot gestures triggered by emotions / interactions
@@ -74,9 +84,9 @@ export interface DancePreset extends MotionPreset {
 }
 
 export const dancePresets: Record<string, DancePreset> = {
-  jile: { label: '极乐净土', type: 'vmd', url: '/jile.vmd', bgm: '/jile.mp3' },
-  love: { label: '恋爱循环', type: 'vmd', url: '/love.vmd', bgm: '/love.mp3' },
-  ualDance: { label: '街舞', type: 'fbx', url: '/ual1.fbx', take: 'Armature|Dance_Loop' },
+  jile: { label: '极乐净土', labelEn: 'Gokuraku Jodo', type: 'vmd', url: '/jile.vmd', bgm: '/jile.mp3' },
+  love: { label: '恋爱循环', labelEn: 'Love Circulation', type: 'vmd', url: '/love.vmd', bgm: '/love.mp3' },
+  ualDance: { label: '街舞', labelEn: 'Street Dance', type: 'fbx', url: '/ual1.fbx', take: 'Armature|Dance_Loop' },
 }
 
 // ── Utility: re-anchor root position ────────────────────────────────────────

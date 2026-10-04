@@ -1,5 +1,6 @@
 import { DEFAULT_MUSIC, DEFAULT_FIT, normalizeMusic, normalizeFit, modelFitKey, type MusicSettings, type HeadphoneFit } from './music-settings'
 import { loadSettings, saveSettings } from './settings'
+import { DEFAULT_GAZE_GAIN, normalizeGazeGain } from './cursor-gaze'
 import { petUrl } from './config'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { VRMScene } from './components/VRMScene'
@@ -12,10 +13,10 @@ import { ChatInput } from './components/ChatInput'
 import { ResizeHandles } from './components/ResizeHandles'
 import { openSettingsWindow, subscribeWindowEvent, replyScreenshot, publishStatus, type PetCommand } from './window-sync'
 import { DEFAULT_ANIMATIONS, normalizeAnimations, type AnimationSettings } from './animation-settings'
-import { normalizeBehaviorSettings, resolvePetState, playOnceById, applyBaseById, playReactionStep, type BehaviorSettings, type BehaviorStateId } from './behavior'
+import { normalizeBehaviorSettings, resolvePetState, playOnceById, applyBaseById, playReactionStep, pickWeightedEntry, type BehaviorSettings, type BehaviorStateId } from './behavior'
 import { useBehaviorEngine } from './hooks/useBehaviorEngine'
 import { usePassThrough } from './hooks/usePassThrough'
-import { dancePresets, actionPresets } from './motion-controller'
+import { dancePresets, actionPresets, localizedPresetLabel } from './motion-controller'
 import { LipSync } from './lip-sync'
 import { bindScene } from './api'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -84,11 +85,14 @@ export default function App() {
   const lastPublishedRef = useRef('')
   const [pinned, setPinned] = useState(true)
   const [tracking, setTracking] = useState<'mouse' | 'camera'>('mouse')
+  const [gazeGain, setGazeGain] = useState(DEFAULT_GAZE_GAIN)
   const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => presetSettings('high'))
   const qualitySettingsRef = useRef(qualitySettings)
   qualitySettingsRef.current = qualitySettings
   const qualityPreset = qualitySettings.preset
   const [showText, setShowText] = useState(true)
+  const showTextRef = useRef(showText)
+  showTextRef.current = showText
   const [collapsed, setCollapsed] = useState(false)
 
   const [ttsEnabled, setTtsEnabled] = useState(true)
@@ -109,6 +113,11 @@ export default function App() {
   // behavior engine; reactionDone restores the pet's own working/dance state.
   const [reactionActive, setReactionActive] = useState(false)
   const reactionRef = useRef<{ dance: string | null; watchdog?: ReturnType<typeof setTimeout> } | null>(null)
+  // Manual one-shot preview in progress (settings/tray "play once"): pauses the
+  // behavior engine and defers working frames so typing can't cut the clip.
+  const [previewHold, setPreviewHold] = useState(false)
+  const previewHoldRef = useRef(false)
+  const previewWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [hideMood, setHideMood] = useState(false)
   const [screenObserve, setScreenObserve] = useState(false)
   const [screenObserveInterval, setScreenObserveInterval] = useState(60)
@@ -137,6 +146,7 @@ export default function App() {
     if (s.showText !== undefined) setShowText(s.showText)
     if (s.hideUI !== undefined) setHideUI(s.hideUI)
     if (s.tracking) { setTracking(s.tracking); sceneRef.current?.setTrackingMode(s.tracking) }
+    if (s.gazeGain !== undefined) setGazeGain(normalizeGazeGain(s.gazeGain))
     if (s.quality !== undefined) setQualitySettings(normalizeQualitySettings(s.quality))
     if (s.volume !== undefined) { setVolume(s.volume); LipSync.getInstance().setVolume(s.volume); sceneRef.current?.setBgmVolume(s.volume) }
     if (s.uiAlign) setUiAlign(s.uiAlign)
@@ -170,9 +180,13 @@ export default function App() {
       scene.resetPose()
       if (command.id === 'idle') return
       if (command.mode === 'loop') applyBaseById(scene, command.id, command.preset)
-      else playOnceById(scene, command.id, command.preset, 15000)
+      else {
+        // One-shot: hold behavior until the clip finishes (see status poll).
+        beginPreviewHold()
+        playOnceById(scene, command.id, command.preset, 15000)
+      }
     }
-    if (command.type === 'stop') { sceneRef.current?.resetPose(); setDancing(false) }
+    if (command.type === 'stop') { endPreviewHold(); sceneRef.current?.resetPose(); setDancing(false) }
     if (command.type === 'music-preview') sceneRef.current?.setMusicPreview(command.active)
     if (command.type === 'bubble-preview') (window as any).__clawPreviewBubble?.('Hello! This is your text bubble preview.')
     if (command.type === 'screenshot') replyScreenshot(command.request, sceneRef.current?.captureScreenshot() ?? null)
@@ -189,13 +203,13 @@ export default function App() {
         const response = await fetch(petUrl('/model/list'))
         const data = await response.json()
         const models = [{ name: 'Default character', url: DEFAULT_MODEL }, ...(data.models || []).map((m: { name: string; url: string }) => ({ name: m.name, url: petUrl(m.url) }))]
-        if (active) await invoke('update_tray_models', { models, selected: modelPath, musicEnabled, animations: Object.entries(actionPresets).map(([id, preset]) => ({ id, name: preset.label })), quality: qualityPreset })
+        if (active) await invoke('update_tray_models', { models, selected: modelPath, musicEnabled, animations: Object.entries(actionPresets).map(([id, preset]) => ({ id, name: preset.label })), quality: qualityPreset, textEnabled: showText })
       } catch (e) { console.warn('Tray model refresh failed', e) }
     }
     void refresh()
     const timer = window.setInterval(refresh, 30000)
     return () => { active = false; window.clearInterval(timer) }
-  }, [modelPath, musicEnabled, qualityPreset])
+  }, [modelPath, musicEnabled, qualityPreset, showText])
 
   useEffect(() => {
     const model = listen<string>('select-model', event => {
@@ -203,7 +217,11 @@ export default function App() {
       saveSettings({ modelPath: event.payload })
     })
     const animation = listen<string>('play-animation', event => {
-      if (actionPresets[event.payload]) { setDancing(false); sceneRef.current?.playAnimationOnce(event.payload) }
+      if (actionPresets[event.payload]) {
+        setDancing(false)
+        beginPreviewHold()
+        sceneRef.current?.playAnimationOnce(event.payload)
+      }
     })
     const controls = listen<string>('tray-control', event => {
       if (event.payload === 'music') setMusicEnabled(value => { saveSettings({ musicEnabled: !value }); return !value })
@@ -212,7 +230,16 @@ export default function App() {
         setQualitySettings(qs)
         saveSettings({ quality: qs })
       }
-      if (event.payload === 'text') setShowText(value => { saveSettings({ showText: !value }); return !value })
+      if (event.payload === 'text') {
+        // Flip via ref (not the state updater) so we know the new value:
+        // turning bubbles back on flashes a preview, since an already-empty
+        // screen otherwise gives zero feedback that the toggle worked.
+        const next = !showTextRef.current
+        showTextRef.current = next
+        setShowText(next)
+        saveSettings({ showText: next })
+        if (next) (window as any).__clawPreviewBubble?.('Text bubbles on')
+      }
       if (event.payload === 'camera') sceneRef.current?.resetCamera()
       if (event.payload === 'pose') sceneRef.current?.resetPose()
     })
@@ -229,8 +256,13 @@ export default function App() {
   // the scene so dances (any source) count as dancing.
   useEffect(() => {
     const timer = setInterval(() => {
-      const playback = sceneRef.current?.getPlaybackStatus()
+      const scene = sceneRef.current
+      const playback = scene?.getPlaybackStatus()
       if (!playback) return
+      // A held one-shot finished: release behavior so it settles into the
+      // current state. A dance started from settings also flips the toggle on.
+      if (previewHoldRef.current && !sceneRef.current?.isBusy()) endPreviewHold()
+      if (playback.dancing) setDancing(previous => previous ? previous : true)
       const state = resolvePetState({ dancing: playback.dancing, working, music: musicEnabled && musicPlaying })
       setPetState(previous => (previous === state ? previous : state))
       const key = JSON.stringify([state, playback.actionId, playback.danceId, playback.working, playback.sipping])
@@ -242,11 +274,28 @@ export default function App() {
     return () => clearInterval(timer)
   }, [working, musicEnabled, musicPlaying])
 
+  const endPreviewHold = useCallback(() => {
+    if (previewWatchdogRef.current) { clearTimeout(previewWatchdogRef.current); previewWatchdogRef.current = null }
+    if (!previewHoldRef.current) return
+    previewHoldRef.current = false
+    setPreviewHold(false)
+    // Apply the latest working state that arrived while held.
+    sceneRef.current?.setWorking(workingRef.current)
+  }, [])
+  const beginPreviewHold = useCallback(() => {
+    previewHoldRef.current = true
+    setPreviewHold(true)
+    if (previewWatchdogRef.current) clearTimeout(previewWatchdogRef.current)
+    // Safety net: never hold behavior hostage if the clip end is missed.
+    previewWatchdogRef.current = setTimeout(() => endPreviewHold(), 30_000)
+  }, [endPreviewHold])
+  useEffect(() => () => { if (previewWatchdogRef.current) clearTimeout(previewWatchdogRef.current) }, [])
+
   useBehaviorEngine({
     enabled: behaviorSettings.enabled,
     profile: behaviorSettings.current,
     state: petState,
-    paused: reactionActive,
+    paused: reactionActive || previewHold,
     getScene: () => sceneRef.current,
   })
 
@@ -313,10 +362,11 @@ export default function App() {
     if (msg.demoReset) sceneRef.current?.resetPose()
     if (msg.sipCoffee) sceneRef.current?.requestCoffeeSip()
     if (msg.working !== undefined) {
-      // During a reaction only record the state; endReaction applies it.
+      // During a reaction or one-shot preview only record the state;
+      // endReaction / endPreviewHold applies it so typing can't cut the clip.
       workingRef.current = msg.working
       setWorkingState(msg.working)
-      if (!reactionRef.current) sceneRef.current?.setWorking(msg.working)
+      if (!reactionRef.current && !previewHoldRef.current) sceneRef.current?.setWorking(msg.working)
     }
     if (msg.playAction) sceneRef.current?.playAction(msg.playAction, msg.hold ?? false)
     if (msg.emotion && sceneRef.current) {
@@ -560,7 +610,7 @@ export default function App() {
       {modelError && <div role="alert" data-no-passthrough style={{ position: 'absolute', top: 20, left: 16, right: 16, zIndex: 1000, background: '#402020', color: 'white', padding: 12, borderRadius: 8 }}>
         {modelError}<button onClick={() => { setModelError(''); setModelPath(DEFAULT_MODEL); saveSettings({ modelPath: DEFAULT_MODEL }) }}>Use default model</button>
       </div>}
-      <VRMScene animationSettings={animationSettings} ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
+      <VRMScene animationSettings={animationSettings} ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} gazeGain={gazeGain} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
       <div style={hoverControlsStyle}>{!hideMood && <MoodIndicator uiAlign={uiAlign} />}</div>
       <TextBubble onMessage={handleVrmMessageWithActivity} enabled={showText} ttsEnabled={ttsEnabled} bubble={bubbleSettings} />
       <div style={hoverControlsStyle}>{!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}</div>
@@ -670,20 +720,43 @@ export default function App() {
                 sceneRef.current?.reset()
                 setDancing(false)
               } else {
-                const label = currentDance.startsWith('custom:') && customDancePreset
-                  ? customDancePreset.label
-                  : dancePresets[currentDance]?.label ?? currentDance
-                if (currentDance.startsWith('custom:') && customDancePreset) {
-                  sceneRef.current?.playDance(customDancePreset, `dance:${currentDance}`)
-                } else {
-                  sceneRef.current?.playDance(currentDance)
+                // Weighted pick from the dancing Main rotation (default: the 3
+                // dances, equal chance). Falls back to the selected dance.
+                const pick = pickWeightedEntry(behaviorSettings.current.states.dancing.mains)
+                let danceId = currentDance
+                let dancePreset = customDancePreset
+                if (pick?.animation.startsWith('dance:custom:') && pick.preset) {
+                  danceId = `custom:${pick.animation.slice('dance:custom:'.length)}`
+                  dancePreset = pick.preset
+                } else if (pick?.animation.startsWith('dance:')) {
+                  danceId = pick.animation.slice(6)
+                  dancePreset = undefined
                 }
+                if (danceId.startsWith('custom:') && dancePreset) {
+                  sceneRef.current?.playDance(dancePreset, `dance:${danceId}`)
+                } else if (dancePresets[danceId]) {
+                  sceneRef.current?.playDance(danceId)
+                } else {
+                  danceId = currentDance
+                  dancePreset = customDancePreset
+                  if (danceId.startsWith('custom:') && dancePreset) {
+                    sceneRef.current?.playDance(dancePreset, `dance:${danceId}`)
+                  } else {
+                    sceneRef.current?.playDance(danceId)
+                  }
+                }
+                setCurrentDance(danceId)
+                setCustomDancePreset(dancePreset || undefined)
+                const preset = dancePresets[danceId]
+                const label = danceId.startsWith('custom:') && dancePreset
+                  ? dancePreset.label
+                  : preset ? localizedPresetLabel(preset, language) : danceId
                 setDancing(true)
                 // Record dance event in session history (no LLM reply)
                 fetch(petUrl("/session/memo"), {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ text: `[用户邀请你跳了一支舞:${label}]` }),
+                  body: JSON.stringify({ text: language === 'en' ? `[User invited you to dance: ${label}]` : `[用户邀请你跳了一支舞:${label}]` }),
                 }).catch(() => {})
               }
             }}

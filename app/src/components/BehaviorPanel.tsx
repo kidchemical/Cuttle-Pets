@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Play, Repeat, Square, Plus, Trash2, Download, Upload, Save, FlaskConical } from 'lucide-react'
 import {
-  BEHAVIOR_STATES, EMOTION_OPTIONS, RANDOM_ACTION, RANDOM_EMOTION, animationCatalog,
+  BEHAVIOR_STATES, EMOTION_OPTIONS, RANDOM_ACTION, RANDOM_EMOTION, MAX_MAINS, animationCatalog,
   normalizeProfile, normalizeReaction, defaultBehaviorProfile, exampleReaction,
   slugifyReactionId, editReactionId, isValidReactionParamName, describeReaction, reactionCliExample,
   type AnimationOption, type BehaviorEntry, type BehaviorSettings, type BehaviorStateId,
-  type CustomReaction, type OccasionalEntry, type ReactionParam, type StateBehavior,
+  type CustomReaction, type OccasionalEntry, type ReactionParam, type StateBehavior, type WeightedEntry,
 } from '../behavior'
 import type { DancePreset } from '../motion-controller'
 import type { PreviewMode } from './AnimationSettingsPanel'
@@ -14,10 +14,11 @@ import { petUrl } from '../config'
 interface Props {
   settings: BehaviorSettings
   onChange: (value: BehaviorSettings) => void
-  customDances: { id: string; label: string; vmdUrl: string; bgmUrl?: string }[]
+  customDances: { id: string; label: string; vmdUrl: string; bgmUrl?: string; type?: 'vmd' | 'vrma' | 'fbx' }[]
   statusText: string | null
   onPreview?: (id: string, preset?: DancePreset, mode?: PreviewMode) => void
   onStop?: () => void
+  language?: 'zh' | 'en'
 }
 
 /** Plain-data clone (profiles are JSON; avoids webview structuredClone gaps). */
@@ -53,6 +54,15 @@ function AnimationSelect({ value, catalog, allowLeaveAlone, onPick }: {
   </select>
 }
 
+/** Resulting pick chances from Main weights, e.g. "Gokuraku Jodo 33% · Love Circulation 33% · …". */
+function MainChanceSummary({ mains, catalog }: { mains: WeightedEntry[]; catalog: AnimationOption[] }) {
+  if (mains.length < 2) return null
+  const total = mains.reduce((sum, e) => sum + Math.max(0, e.weight), 0)
+  if (total <= 0) return <span style={muted}>All weights are zero — nothing will be picked.</span>
+  const labelOf = (id: string) => catalog.find(o => o.id === id)?.label ?? id
+  return <span style={muted}>{mains.map(e => `${labelOf(e.animation)} ${Math.round((Math.max(0, e.weight) / total) * 100)}%`).join(' · ')}</span>
+}
+
 function EmotionSelect({ value, onPick }: { value: string; onPick: (emotion: string) => void }) {
   return <select aria-label="Emotion" value={value || ''} onChange={e => onPick(e.target.value)} style={{ flex: '0 1 130px', minWidth: 0 }}>
     <option value="">No emotion</option>
@@ -61,8 +71,8 @@ function EmotionSelect({ value, onPick }: { value: string; onPick: (emotion: str
   </select>
 }
 
-export function BehaviorPanel({ settings, onChange, customDances, statusText, onPreview, onStop }: Props) {
-  const catalog = animationCatalog(customDances)
+export function BehaviorPanel({ settings, onChange, customDances, statusText, onPreview, onStop, language = 'zh' }: Props) {
+  const catalog = animationCatalog(customDances, language)
   const current = settings.current
   const reactions = settings.reactions ?? []
   const [importError, setImportError] = useState('')
@@ -131,9 +141,23 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
     return { animation: id, preset: option?.preset }
   }
 
-  const setBase = (id: BehaviorStateId, animationId: string) => {
-    const picked = pickAnimation(animationId)
-    patchState(id, state => { state.base = { animation: picked.animation, preset: picked.preset } })
+  /** Keep legacy `base` in sync: first Main entry, or empty for leave-as-is. */
+  const syncBase = (state: StateBehavior) => {
+    const first = state.mains[0]
+    state.base = first ? { animation: first.animation, preset: first.preset } : { animation: '' }
+  }
+  const setMains = (id: BehaviorStateId, mains: WeightedEntry[]) => {
+    patchState(id, state => { state.mains = mains; syncBase(state) })
+  }
+  const setMainEntry = (id: BehaviorStateId, index: number, patch: Partial<WeightedEntry>) => {
+    patchState(id, state => {
+      state.mains[index] = { ...state.mains[index], ...patch }
+      if (patch.animation !== undefined) {
+        const option = catalog.find(o => o.id === patch.animation)
+        state.mains[index].preset = option?.preset
+      }
+      syncBase(state)
+    })
   }
   const addStart = (id: BehaviorStateId) => patchState(id, state => {
     if (state.start.length < 5) state.start.push({ animation: 'idle' })
@@ -318,10 +342,30 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
           <div><button style={smallButton} onClick={() => addStart(id)}><Plus size={12} style={{ verticalAlign: -2 }} /> Add entry animation</button></div>
         </div>
         <div style={{ display: 'grid', gap: 6 }}>
-          <span style={muted}>Main — the sustaining base loop:</span>
+          <span style={muted}>Main — the sustaining loop{cfg.mains.length > 1 ? ', picked by relative chance each time' : ''}:</span>
+          {cfg.mains.length === 0 && <span style={muted}>
+            {id === 'dancing'
+              ? 'Leave playing as-is — a dance started elsewhere keeps playing.'
+              : `Nothing listed — falls back to ${cfg.base.animation || 'idle'}.`}
+          </span>}
+          {cfg.mains.map((entry, index) => <div key={index} style={row}>
+            <AnimationSelect value={entry.animation} catalog={catalog} allowLeaveAlone={id === 'dancing'} onPick={animationId => {
+              const option = catalog.find(o => o.id === animationId)
+              setMainEntry(id, index, { animation: animationId, preset: option?.preset })
+            }} />
+            <label style={{ ...muted, display: 'flex', gap: 4, alignItems: 'center' }} title="Relative chance this one is picked">
+              ×<input aria-label="Pick weight" type="number" min={0} max={99} value={entry.weight}
+                onChange={e => setMainEntry(id, index, { weight: Math.max(0, Math.min(99, Math.round(Number(e.target.value) || 0))) })}
+                style={{ width: 52 }} />
+            </label>
+            <button style={smallButton} onClick={() => onPreview?.(entry.animation, entry.preset, 'loop')} title="Try looped"><Repeat size={12} /></button>
+            <button style={smallButton} onClick={() => setMains(id, cfg.mains.filter((_, i) => i !== index))} title="Remove" aria-label="Remove main entry"><Trash2 size={12} /></button>
+          </div>)}
+          <MainChanceSummary mains={cfg.mains} catalog={catalog} />
           <div style={row}>
-            <AnimationSelect value={cfg.base.animation} catalog={catalog} allowLeaveAlone={id === 'dancing'} onPick={animationId => setBase(id, animationId)} />
-            <button style={smallButton} onClick={() => onPreview?.(cfg.base.animation, cfg.base.preset, 'loop')} title="Try base looped"><Repeat size={12} /></button>
+            <button style={smallButton} onClick={() => {
+              if (cfg.mains.length < MAX_MAINS) setMains(id, [...cfg.mains, { animation: 'idle', weight: 1 }])
+            }} disabled={cfg.mains.length >= MAX_MAINS} title={`Add another loop (max ${MAX_MAINS})`}><Plus size={12} style={{ verticalAlign: -2 }} /> Add loop</button>
             <button style={smallButton} onClick={() => onStop?.()} title="Stop"><Square size={12} /></button>
           </div>
         </div>

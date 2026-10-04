@@ -115,7 +115,7 @@ async fn pick_vrm_file() -> Result<Option<String>, String> {
 #[tauri::command]
 async fn pick_dance_file() -> Result<Option<String>, String> {
     let file = rfd::AsyncFileDialog::new()
-        .add_filter("VMD Motion", &["vmd"])
+        .add_filter("Motion", &["vmd", "vrma", "fbx"])
         .pick_file()
         .await;
     Ok(file.map(|f| f.path().to_string_lossy().to_string()))
@@ -329,7 +329,11 @@ struct TrayModel { name: String, url: String }
 #[derive(serde::Deserialize)]
 struct TrayAnimation { name: String, id: String }
 
-fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music_enabled: bool, animations: &[TrayAnimation], quality: &str) -> tauri::Result<Menu<tauri::Wry>> {
+/// Native tray submenus don't paginate: cap the entries and spill the rest
+/// into the settings window (a scrollable breakout) via a tail item.
+const TRAY_SUBMENU_PAGE_SIZE: usize = 25;
+
+fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music_enabled: bool, animations: &[TrayAnimation], quality: &str, text_enabled: bool) -> tauri::Result<Menu<tauri::Wry>> {
     let show = MenuItem::with_id(app, "show", "Show / Hide", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let quality_labels = [("low", "Low"), ("mid", "Mid"), ("high", "High"), ("ultra", "Ultra")];
@@ -338,18 +342,30 @@ fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music
     ).collect::<tauri::Result<_>>()?;
     let quality_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = quality_items.iter().map(|item| item as &dyn IsMenuItem<tauri::Wry>).collect();
     let quality_menu = Submenu::with_items(app, "Quality", true, &quality_refs)?;
-    let models_items: Vec<CheckMenuItem<tauri::Wry>> = models.iter().map(|model|
+    let paged_models = models.len() > TRAY_SUBMENU_PAGE_SIZE;
+    let models_items: Vec<CheckMenuItem<tauri::Wry>> = models.iter().take(TRAY_SUBMENU_PAGE_SIZE).map(|model|
         CheckMenuItem::with_id(app, format!("model:{}", model.url), &model.name, true, model.url == selected, None::<&str>)
     ).collect::<tauri::Result<_>>()?;
-    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = models_items.iter().map(|item| item as &dyn IsMenuItem<tauri::Wry>).collect();
+    let mut refs: Vec<&dyn IsMenuItem<tauri::Wry>> = models_items.iter().map(|item| item as &dyn IsMenuItem<tauri::Wry>).collect();
+    let more_models;
+    if paged_models {
+        more_models = Some(MenuItem::with_id(app, "more-models", &format!("More models ({} more)…", models.len() - TRAY_SUBMENU_PAGE_SIZE), true, None::<&str>)?);
+        refs.push(more_models.as_ref().unwrap() as &dyn IsMenuItem<tauri::Wry>);
+    }
     let models_menu = Submenu::with_items(app, "Character model", true, &refs)?;
-    let animation_items: Vec<MenuItem<tauri::Wry>> = animations.iter().map(|animation|
+    let paged_animations = animations.len() > TRAY_SUBMENU_PAGE_SIZE;
+    let animation_items: Vec<MenuItem<tauri::Wry>> = animations.iter().take(TRAY_SUBMENU_PAGE_SIZE).map(|animation|
         MenuItem::with_id(app, format!("animation:{}", animation.id), &animation.name, true, None::<&str>)
     ).collect::<tauri::Result<_>>()?;
-    let animation_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = animation_items.iter().map(|item| item as &dyn IsMenuItem<tauri::Wry>).collect();
+    let mut animation_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = animation_items.iter().map(|item| item as &dyn IsMenuItem<tauri::Wry>).collect();
+    let more_animations;
+    if paged_animations {
+        more_animations = Some(MenuItem::with_id(app, "more-animations", &format!("More animations ({} more)…", animations.len() - TRAY_SUBMENU_PAGE_SIZE), true, None::<&str>)?);
+        animation_refs.push(more_animations.as_ref().unwrap() as &dyn IsMenuItem<tauri::Wry>);
+    }
     let animation_menu = Submenu::with_items(app, "Animation", !animations.is_empty(), &animation_refs)?;
     let music = CheckMenuItem::with_id(app, "music", "React to music", true, music_enabled, None::<&str>)?;
-    let text = MenuItem::with_id(app, "text", "Toggle text bubbles", true, None::<&str>)?;
+    let text = CheckMenuItem::with_id(app, "text", "Show text bubbles", true, text_enabled, None::<&str>)?;
     let camera = MenuItem::with_id(app, "camera", "Reset camera", true, None::<&str>)?;
     let pose = MenuItem::with_id(app, "pose", "Stop animation", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
@@ -358,14 +374,14 @@ fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music
 }
 
 #[tauri::command]
-fn update_tray_models(app: tauri::AppHandle, models: Vec<TrayModel>, selected: String, music_enabled: bool, animations: Vec<TrayAnimation>, quality: String) -> Result<(), String> {
-    let menu = tray_menu(&app, &models, &selected, music_enabled, &animations, &quality).map_err(|e| e.to_string())?;
+fn update_tray_models(app: tauri::AppHandle, models: Vec<TrayModel>, selected: String, music_enabled: bool, animations: Vec<TrayAnimation>, quality: String, text_enabled: bool) -> Result<(), String> {
+    let menu = tray_menu(&app, &models, &selected, music_enabled, &animations, &quality, text_enabled).map_err(|e| e.to_string())?;
     if let Some(tray) = app.tray_by_id("cuttle-pet") { tray.set_menu(Some(menu)).map_err(|e| e.to_string())?; }
     Ok(())
 }
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let menu = tray_menu(app.handle(), &[TrayModel { name: "Default character".into(), url: "/model1.vrm".into() }], "/model1.vrm", true, &[], "high")?;
+    let menu = tray_menu(app.handle(), &[TrayModel { name: "Default character".into(), url: "/model1.vrm".into() }], "/model1.vrm", true, &[], "high", true)?;
 
     TrayIconBuilder::with_id("cuttle-pet")
         .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))?)
@@ -398,7 +414,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                         let _ = window.set_focus();
                     }
                 }
-                "settings" => { let _ = open_settings_window(app.clone()); }
+                "settings" | "more-models" | "more-animations" => { let _ = open_settings_window(app.clone()); }
                 "quit" => {
                     app.exit(0);
                 }

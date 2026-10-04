@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {
   EMOTION_OPTIONS, RANDOM_ACTION, animationLabel, applyBaseById, applyEmotion,
   defaultBehaviorProfile, describeStatus, normalizeBehaviorSettings, normalizeProfile,
-  pickRandomAction, pickRandomEmotion, playOnceById, resolvePetState,
+  pickRandomAction, pickRandomEmotion, pickWeightedEntry, playOnceById, resolveMain, resolvePetState,
   type BehaviorScene,
 } from '../app/src/behavior'
 
@@ -122,6 +122,36 @@ async function main() {
   const roundTrip = normalizeProfile(JSON.parse(JSON.stringify(defaultBehaviorProfile())), 'fb')
   assert.deepEqual(roundTrip, defaultBehaviorProfile())
 
-  console.log('Behavior passed: defaults, validation, state priority, labels, once/base mapping, emotions, profile round-trip.')
+  // Weighted Main rotation: dancing ships with the 3 dances at equal chance.
+  const danceMains = defaults.current.states.dancing.mains
+  assert.deepEqual(danceMains.map(e => e.animation), ['dance:jile', 'dance:love', 'dance:ualDance'])
+  assert.deepEqual(danceMains.map(e => e.weight), [1, 1, 1])
+  assert.deepEqual(defaults.current.states.working.mains, [{ animation: 'typing', weight: 1 }])
+  // Weighted picks: first/second/third third of the roll, zero weights never play.
+  const rotation = [
+    { animation: 'dance:jile', weight: 1 },
+    { animation: 'dance:love', weight: 2 },
+    { animation: 'dance:ualDance', weight: 0 },
+  ]
+  assert.equal(pickWeightedEntry(rotation, () => 0).animation, 'dance:jile')
+  assert.equal(pickWeightedEntry(rotation, () => 0.5).animation, 'dance:love')
+  assert.equal(pickWeightedEntry(rotation, () => 0.99).animation, 'dance:love')
+  assert.equal(pickWeightedEntry([], () => 0), null)
+  assert.equal(pickWeightedEntry([{ animation: 'idle', weight: 0 }], () => 0), null)
+  // resolveMain prefers the rotation, then base, then leave-as-is.
+  assert.equal(resolveMain(defaults.current.states.dancing, () => 0).animation, 'dance:jile')
+  assert.equal(resolveMain({ start: [], base: { animation: 'typing' }, mains: [], occasionals: [], end: [] }).animation, 'typing')
+  assert.equal(resolveMain({ start: [], base: { animation: '' }, mains: [], occasionals: [], end: [] }), null)
+  // Legacy profiles without mains migrate from their explicit base.
+  const migrated = normalizeProfile({ name: 'old', states: { working: { base: 'typing', start: [], occasionals: [], end: [] } } }, 'fb')
+  assert.deepEqual(migrated.states.working.mains, [{ animation: 'typing', weight: 1 }])
+  const migratedDance = normalizeProfile({ name: 'old', states: { dancing: { base: '', start: [], occasionals: [], end: [] } } }, 'fb')
+  assert.deepEqual(migratedDance.states.dancing.mains, [])
+  // Mains weights are cleaned (clamped, capped, unknown animations dropped).
+  const messy = normalizeProfile({ name: 'm', states: { idle: { base: 'idle', mains: [{ animation: 'idle', weight: 500 }, { animation: 'nope', weight: 1 }, { animation: 'action:happy' }], start: [], occasionals: [], end: [] } } }, 'fb')
+  assert.deepEqual(messy.states.idle.mains, [{ animation: 'idle', weight: 99 }, { animation: 'action:happy', weight: 1 }])
+  assert.equal(messy.states.idle.base.animation, 'idle', 'Base is preserved for older clients')
+
+  console.log('Behavior passed: defaults, validation, state priority, labels, once/base mapping, emotions, profile round-trip, weighted mains.')
 }
 main().catch(error => { console.error(error); process.exit(1) })

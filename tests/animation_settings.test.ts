@@ -10,6 +10,12 @@ async function main() {
   assert.equal(imported.id, 'My Dance.vmd')
   assert.equal(imported.label, 'My Dance')
   assert.equal(imported.vmdUrl, 'http://127.0.0.1:8790/dance/serve/My Dance.vmd')
+  assert.equal(imported.type, 'vmd')
+  // Motion type follows the file extension; explicit types pass through.
+  assert.equal(normalizeCustomDances([{ name: 'spin.vrma', url: '/dance/serve/spin.vrma' }])[0].type, 'vrma')
+  assert.equal(normalizeCustomDances([{ name: 'groove.fbx', url: '/dance/serve/groove.fbx' }])[0].type, 'fbx')
+  assert.equal(normalizeCustomDances([{ name: 'Groove.FBX', url: '/dance/serve/Groove.FBX' }])[0].label, 'Groove')
+  assert.equal(normalizeCustomDances([{ name: 'x', url: '/dance/serve/x', type: 'vrma' }])[0].type, 'vrma')
   assert.deepEqual(normalizeAnimations(null), { speed: 1, overrides: {} })
   const settings = normalizeAnimations({ speed: 2, overrides: { 'action:happy': { speed: .5, transition: 9, hold: -5 }, bad: null } })
   assert.equal(animationSpeed(settings, 'action:happy'), 1)

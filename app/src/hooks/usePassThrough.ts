@@ -44,7 +44,10 @@ export function usePassThrough(enabled: boolean, onHover?: (inside: boolean) => 
       if (!supported || disposed) return
       active.current = false
       clearTimeout(startDelay)
-      void invoke('stop_cursor_monitor')
+      // Silhouette regions own click-through here, but keep the global cursor
+      // feed alive: eye tracking listens to cursor-position events, and DOM
+      // mousemove never fires where the region passes input through.
+      void invoke('start_cursor_monitor').catch(console.error)
       void win.setIgnoreCursorEvents(false)
       ;(window as any).__clawInputRegionsEnabled = true
       const publish = () => {

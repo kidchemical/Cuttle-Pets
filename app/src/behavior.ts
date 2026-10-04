@@ -1,4 +1,5 @@
-import { actionPresets, dancePresets, type DancePreset } from './motion-controller'
+import { actionPresets, dancePresets, localizedPresetLabel, type DancePreset } from './motion-controller'
+import type { CustomMotionType } from './custom-dances'
 import { proceduralAnimations } from './animation-settings'
 
 // ── Behavior profiles ────────────────────────────────────────────────────────
@@ -43,10 +44,21 @@ export interface OccasionalEntry extends BehaviorEntry {
   chance: number
 }
 
+export interface WeightedEntry extends BehaviorEntry {
+  /** Relative pick chance each time the state needs its sustaining loop. */
+  weight: number
+}
+
 export interface StateBehavior {
   start: BehaviorEntry[]
   /** Sustained loop; animation '' means "leave whatever is playing alone". */
   base: BehaviorEntry
+  /**
+   * Weighted rotation for the sustaining loop. When non-empty, entering the
+   * state plays a weighted pick instead of `base`. Empty means `base` (or
+   * leave-as-is when `base` is also empty, as with dancing).
+   */
+  mains: WeightedEntry[]
   occasionals: OccasionalEntry[]
   end: BehaviorEntry[]
 }
@@ -151,7 +163,7 @@ function cleanEntry(value: unknown): BehaviorEntry | null {
   if (animation.startsWith('dance:custom:') && item.preset && typeof item.preset === 'object') {
     const preset = item.preset as Partial<DancePreset>
     if (typeof preset.url === 'string' && typeof preset.label === 'string') {
-      entry.preset = { label: preset.label, type: 'vmd', url: preset.url, bgm: typeof preset.bgm === 'string' ? preset.bgm : undefined }
+      entry.preset = { label: preset.label, type: motionType(preset.type), url: preset.url, bgm: typeof preset.bgm === 'string' ? preset.bgm : undefined }
     }
   }
   return entry
@@ -170,15 +182,32 @@ function cleanOccasional(value: unknown): OccasionalEntry | null {
   }
 }
 
-function cleanState(value: unknown, fallbackBase: BehaviorEntry): StateBehavior {
+export const MAX_MAINS = 8
+
+function cleanWeightedEntry(value: unknown): WeightedEntry | null {
+  const entry = cleanEntry(value)
+  if (!entry) return null
+  const weight = (value as Record<string, unknown>)?.weight
+  return { ...entry, weight: bounded(weight, 1, 0, 99) }
+}
+
+function cleanState(value: unknown, fallback: StateBehavior): StateBehavior {
   const source = value && typeof value === 'object' ? value as Record<string, unknown> : {}
   const start = Array.isArray(source.start) ? source.start.map(cleanEntry).filter((e): e is BehaviorEntry => e !== null).slice(0, 5) : []
   const occasionals = Array.isArray(source.occasionals) ? source.occasionals.map(cleanOccasional).filter((e): e is OccasionalEntry => e !== null).slice(0, 8) : []
   const end = Array.isArray(source.end) ? source.end.map(cleanEntry).filter((e): e is BehaviorEntry => e !== null).slice(0, 5) : []
   // Accept a bare id string for hand-written profiles ("base": "typing").
   const baseSource = typeof source.base === 'string' ? { animation: source.base } : source.base
-  const base = cleanEntry(baseSource) ?? { ...fallbackBase }
-  return { start, base, occasionals, end }
+  const base = cleanEntry(baseSource) ?? { ...fallback.base }
+  // Older profiles predate mains: an explicit base migrates to a single
+  // weighted entry so Main always shows what actually plays. A state with no
+  // base info at all inherits the default rotation (the 3 dances for dancing).
+  const mains = Array.isArray(source.mains)
+    ? source.mains.map(cleanWeightedEntry).filter((e): e is WeightedEntry => e !== null).slice(0, MAX_MAINS)
+    : source.base !== undefined
+      ? base.animation ? [{ ...base, weight: 1 }] : []
+      : fallback.mains.map(m => ({ ...m }))
+  return { start, base, mains, occasionals, end }
 }
 
 export function normalizeProfile(value: unknown, fallbackName: string): BehaviorProfile {
@@ -188,7 +217,7 @@ export function normalizeProfile(value: unknown, fallbackName: string): Behavior
   const out = {} as Record<BehaviorStateId, StateBehavior>
   // A missing state restores the full default (base + occasionals), not an
   // empty shell — otherwise a fresh install would lose the built-in behavior.
-  for (const { id } of BEHAVIOR_STATES) out[id] = cleanState(states[id] ?? fallback[id], fallback[id].base)
+  for (const { id } of BEHAVIOR_STATES) out[id] = cleanState(states[id] ?? fallback[id], fallback[id])
   const name = cleanId(source.name).slice(0, 60)
   return { name: name || fallbackName, states: out }
 }
@@ -198,17 +227,29 @@ function defaultProfileStates(): Record<BehaviorStateId, StateBehavior> {
     idle: {
       start: [],
       base: { animation: 'idle' },
+      mains: [{ animation: 'idle', weight: 1 }],
       occasionals: [{ animation: RANDOM_ACTION, emotion: RANDOM_EMOTION, everyMin: 45, everyMax: 75, chance: 0.5 }],
       end: [],
     },
     working: {
       start: [],
       base: { animation: 'typing' },
+      mains: [{ animation: 'typing', weight: 1 }],
       occasionals: [{ animation: 'sip', everyMin: 40, everyMax: 90, chance: 1 }],
       end: [],
     },
-    music: { start: [], base: { animation: 'music' }, occasionals: [], end: [] },
-    dancing: { start: [], base: { animation: '' }, occasionals: [], end: [] },
+    music: { start: [], base: { animation: 'music' }, mains: [{ animation: 'music', weight: 1 }], occasionals: [], end: [] },
+    dancing: {
+      start: [],
+      base: { animation: '' },
+      mains: [
+        { animation: 'dance:jile', weight: 1 },
+        { animation: 'dance:love', weight: 1 },
+        { animation: 'dance:ualDance', weight: 1 },
+      ],
+      occasionals: [],
+      end: [],
+    },
   }
 }
 
@@ -247,6 +288,11 @@ export function slugifyReactionId(value: unknown, fallback: string): string {
     .slice(0, 40)
   if (slug && REACTION_ID_RE.test(slug)) return slug
   return fallback
+}
+
+/** Validated motion-file type for imported dances (anything else is VMD). */
+function motionType(value: unknown): 'vmd' | 'vrma' | 'fbx' {
+  return value === 'vrma' || value === 'fbx' ? value : 'vmd'
 }
 
 /**
@@ -297,7 +343,7 @@ function cleanReactionStep(value: unknown): ReactionStep | null {
     // Imported dances are only playable through their preset (file URL).
     const preset = (item.preset && typeof item.preset === 'object' ? item.preset : {}) as Partial<DancePreset>
     if (typeof preset.url !== 'string' || typeof preset.label !== 'string') return null
-    step.preset = { label: preset.label, type: 'vmd', url: preset.url, bgm: typeof preset.bgm === 'string' ? preset.bgm : undefined }
+    step.preset = { label: preset.label, type: motionType(preset.type), url: preset.url, bgm: typeof preset.bgm === 'string' ? preset.bgm : undefined }
   }
   const rawProps = item.props && typeof item.props === 'object' ? item.props as Record<string, unknown> : null
   if (rawProps && (rawProps.working === true || rawProps.sip === true)) {
@@ -444,37 +490,65 @@ export interface AnimationOption {
   preset?: DancePreset
 }
 
-export function animationCatalog(customDances: { id: string; label: string; vmdUrl: string; bgmUrl?: string }[]): AnimationOption[] {
+export function animationCatalog(customDances: { id: string; label: string; vmdUrl: string; bgmUrl?: string; type?: CustomMotionType }[], language: 'zh' | 'en' = 'zh'): AnimationOption[] {
   return [
     { id: 'idle', label: 'Idle loop', group: 'Idle', procedural: false },
-    ...Object.entries(actionPresets).map(([id, preset]) => ({ id: `action:${id}`, label: preset.label, group: 'Actions', procedural: false as const })),
-    ...Object.entries(dancePresets).map(([id, preset]) => ({ id: `dance:${id}`, label: preset.label, group: 'Dances', procedural: false as const })),
-    ...customDances.map(dance => ({ id: `dance:custom:${dance.id}`, label: dance.label, group: 'Imported dances', procedural: false as const, preset: { label: dance.label, type: 'vmd' as const, url: dance.vmdUrl, bgm: dance.bgmUrl } })),
+    ...Object.entries(actionPresets).map(([id, preset]) => ({ id: `action:${id}`, label: localizedPresetLabel(preset, language), group: 'Actions', procedural: false as const })),
+    ...Object.entries(dancePresets).map(([id, preset]) => ({ id: `dance:${id}`, label: localizedPresetLabel(preset, language), group: 'Dances', procedural: false as const })),
+    ...customDances.map(dance => ({ id: `dance:custom:${dance.id}`, label: dance.label, group: 'Imported dances', procedural: false as const, preset: { label: dance.label, type: dance.type ?? 'vmd', url: dance.vmdUrl, bgm: dance.bgmUrl } })),
     { id: RANDOM_ACTION, label: 'Surprise me (random action)', group: 'Actions', procedural: false },
     ...proceduralAnimations.map(item => ({ ...item, group: 'Procedural', procedural: true as const })),
   ]
 }
 
-export function animationLabel(id: string | null, customDances: { id: string; label: string }[] = []): string {
+export function animationLabel(id: string | null, customDances: { id: string; label: string }[] = [], language: 'zh' | 'en' = 'zh'): string {
   if (!id) return ''
   if (id === 'idle') return 'Idle loop'
   if (id === RANDOM_ACTION) return 'Surprise action'
   if (id === 'typing') return 'Working / typing'
   if (id === 'sip') return 'Coffee sip'
   if (id === 'music') return 'Music nod / sway'
-  if (id.startsWith('action:')) return actionPresets[id.slice(7)]?.label ?? id
+  if (id.startsWith('action:')) {
+    const preset = actionPresets[id.slice(7)]
+    return preset ? localizedPresetLabel(preset, language) : id
+  }
   if (id.startsWith('dance:custom:')) return customDances.find(d => `dance:custom:${d.id}` === id)?.label ?? id
-  if (id.startsWith('dance:')) return dancePresets[id.slice(6)]?.label ?? id
+  if (id.startsWith('dance:')) {
+    const preset = dancePresets[id.slice(6)]
+    return preset ? localizedPresetLabel(preset, language) : id
+  }
   const procedural = proceduralAnimations.find(p => p.id === id)
   return procedural?.label ?? id
 }
 
+/**
+ * Weighted pick from a state's Main rotation. Zero-weight entries never play;
+ * when nothing is eligible (or the list is empty) returns null so the caller
+ * falls back to `base` / leave-as-is.
+ */
+export function pickWeightedEntry(entries: WeightedEntry[], rand: () => number = Math.random): WeightedEntry | null {
+  const eligible = entries.filter(e => e.weight > 0)
+  const total = eligible.reduce((sum, e) => sum + e.weight, 0)
+  if (total <= 0) return null
+  let roll = rand() * total
+  for (const entry of eligible) {
+    roll -= entry.weight
+    if (roll < 0) return entry
+  }
+  return eligible[eligible.length - 1]
+}
+
+/** The sustaining loop a state should play: weighted Main pick, else base, else null (leave as-is). */
+export function resolveMain(state: StateBehavior, rand: () => number = Math.random): BehaviorEntry | null {
+  return pickWeightedEntry(state.mains, rand) ?? (state.base.animation ? state.base : null)
+}
+
 /** One-line "Working — typing · sipping coffee" summary for the settings banner. */
-export function describeStatus(status: PetStatus, customDances: { id: string; label: string }[] = []): string {
+export function describeStatus(status: PetStatus, customDances: { id: string; label: string }[] = [], language: 'zh' | 'en' = 'zh'): string {
   const stateLabel = { idle: 'Idle', working: 'Working', music: 'Listening to music', dancing: 'Dancing' }[status.state]
   const bits: string[] = []
-  if (status.danceId) bits.push(animationLabel(status.danceId, customDances))
-  else if (status.actionId && status.actionId !== 'idle') bits.push(animationLabel(status.actionId, customDances))
+  if (status.danceId) bits.push(animationLabel(status.danceId, customDances, language))
+  else if (status.actionId && status.actionId !== 'idle') bits.push(animationLabel(status.actionId, customDances, language))
   if (status.working) bits.push(status.sipping ? 'typing · sipping coffee' : 'typing')
   return bits.length ? `${stateLabel} — ${bits.join(' · ')}` : stateLabel
 }

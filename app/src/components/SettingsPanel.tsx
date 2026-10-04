@@ -2,6 +2,7 @@ import './settings.css'
 import { normalizeCustomDances } from '../custom-dances'
 import { AnimationSettingsPanel } from './AnimationSettingsPanel'
 import type { AnimationSettings } from '../animation-settings'
+import { MAX_GAZE_GAIN, normalizeGazeGain } from '../cursor-gaze'
 import { MusicSettingsPanel } from './MusicSettingsPanel'
 import type { MusicSettings, HeadphoneFit } from '../music-settings'
 import { CuttleConnection } from './CuttleConnection'
@@ -13,7 +14,7 @@ import { describeStatus, type BehaviorSettings, type BehaviorStateId } from '../
 import { subscribeWindowEvent, type PetStatusPayload } from '../window-sync'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isTauri, invoke } from '@tauri-apps/api/core'
-import { dancePresets, type DancePreset } from '../motion-controller'
+import { dancePresets, localizedPresetLabel, type DancePreset } from '../motion-controller'
 import { RENDER_QUALITIES, presetSettings, resolvePreset, type QualityDetails, type QualitySettings } from '../render-quality'
 import { BUBBLE_PREVIEW_TEXT, DEFAULT_BUBBLE_SETTINGS, FONT_CHOICES, type BubbleSettings } from '../bubble-settings'
 
@@ -22,6 +23,7 @@ interface DanceItem {
   label: string
   vmdUrl: string
   bgmUrl?: string
+  type: 'vmd' | 'vrma' | 'fbx'
   builtin?: boolean
 }
 
@@ -51,6 +53,8 @@ interface SettingsPanelProps {
   onTtsEnabledChange: (v: boolean) => void
   tracking: 'mouse' | 'camera'
   onTrackingChange: (v: 'mouse' | 'camera') => void
+  gazeGain: number
+  onGazeGainChange: (v: number) => void
   qualitySettings: QualitySettings
   onQualitySettingsChange: (v: QualitySettings) => void
   volume: number
@@ -79,7 +83,7 @@ interface SettingsPanelProps {
   onBehaviorSettingsChange: (v: BehaviorSettings) => void
 }
 
-type Tab = 'animations' | 'behavior' | 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'dance' | 'quality' | 'display'
+type Tab = 'animations' | 'behavior' | 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'quality' | 'display'
 
 const BUILTIN_MODELS = ['/model1.vrm', '/model2.vrm', '/model3.vrm', '/model4.vrm', '/model5.vrm']
 
@@ -135,6 +139,7 @@ export function SettingsPanel({
   showText, onShowTextChange,
   ttsEnabled, onTtsEnabledChange,
   tracking, onTrackingChange,
+  gazeGain, onGazeGainChange,
   qualitySettings, onQualitySettingsChange,
   volume, onVolumeChange,
   uiAlign, onUiAlignChange,
@@ -188,7 +193,7 @@ export function SettingsPanel({
     ? describeStatus({
       state: (['idle', 'working', 'music', 'dancing'] as string[]).includes(petStatus.state) ? petStatus.state as BehaviorStateId : 'idle',
       actionId: petStatus.actionId, danceId: petStatus.danceId, working: petStatus.working, sipping: petStatus.sipping,
-    }, customDances)
+    }, customDances, language)
     : null
 
 
@@ -270,7 +275,7 @@ export function SettingsPanel({
   }, [])
 
   useEffect(() => {
-    if (!visible || (tab !== 'dance' && tab !== 'animations')) return
+    if (!visible || tab !== 'animations') return
     fetchCustomDances()
   }, [visible, tab, fetchCustomDances])
 
@@ -407,24 +412,180 @@ export function SettingsPanel({
 
         {/* Tabs */}
         <nav className="settings-tabs" aria-label="Settings sections" style={tabBarStyle}>
-          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'dance', 'animations', 'behavior', 'quality', 'display'] as const).map((tb) => (
+          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'animations', 'behavior', 'quality', 'display'] as const).map((tb) => (
             <button
               key={tb}
               className="settings-tab" aria-current={tab === tb ? "page" : undefined}
               onClick={() => setTab(tb)}
               style={{ ...tabStyle, ...(tab === tb ? activeTabStyle : {}) }}
             >
-              {{ animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tb]}
+              {{ animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tb]}
             </button>
           ))}
         </nav>
 
         {/* Tab content */}
         <div className="settings-content" style={{ ...contentStyle, maxHeight: standalone ? undefined : tab === 'music' && musicPreview ? '32vh' : '60vh', ...(standalone ? { flex: 1, minHeight: 0 } : {}), overflowY: 'auto', paddingRight: 4 }}>
-          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), dance: t('舞蹈', 'Dance'), animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tab]}</h2><p>{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</p></div>}
+          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tab]}</h2><p>{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</p></div>}
           {tab === 'music'  && <MusicSettingsPanel fit={headphoneFit} music={musicSettings} enabled={musicEnabled} onFitChange={onHeadphoneFitChange} onMusicChange={onMusicSettingsChange} onEnabledChange={onMusicEnabledChange} onPreview={handlePreview} />}
-          {tab === 'animations' && <AnimationSettingsPanel settings={animationSettings} onChange={onAnimationSettingsChange} customDances={customDances} onPreview={onAnimationPreview} onStop={onAnimationStop} statusText={petStatusText} />}
-          {tab === 'behavior' && <BehaviorPanel settings={behaviorSettings} onChange={onBehaviorSettingsChange} customDances={customDances} statusText={petStatusText} onPreview={onAnimationPreview} onStop={onAnimationStop} />}
+          {tab === 'animations' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={sectionStyle}>
+                  <div style={labelStyle}>{t('内置舞蹈', 'Built-in Dances')}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {Object.entries(dancePresets).map(([id, preset]) => (
+                      <div
+                        key={id}
+                        onClick={() => { onDanceChange(id); onAnimationPreview?.(`dance:${id}`, undefined, 'loop') }}
+                        title={t('点击播放', 'Click to play')}
+                        style={{
+                          ...modelBtnStyle,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '8px 12px',
+                          fontSize: 13,
+                          background: currentDance === id ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                          borderColor: currentDance === id ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Music size={14} style={{ opacity: 0.6 }} />
+                          <span>{localizedPresetLabel(preset, language)}</span>
+                        </div>
+                        {preset.bgm && (
+                          <span style={{ fontSize: 11, color: '#aebbd0' }}>{t('含BGM', 'w/ BGM')}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {customDances.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={labelStyle}>{t('自定义舞蹈', 'Custom Dances')}</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {customDances.map((dance) => (
+                          <div
+                            key={dance.id}
+                            onClick={() => {
+                              const preset = {
+                                label: dance.label,
+                                type: dance.type,
+                                url: dance.vmdUrl,
+                                bgm: dance.bgmUrl,
+                              }
+                              onDanceChange(`custom:${dance.id}`, preset)
+                              onAnimationPreview?.(`dance:custom:${dance.id}`, preset, 'loop')
+                            }}
+                            title={t('点击播放', 'Click to play')}
+                            style={{
+                              ...modelBtnStyle,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '8px 10px',
+                              fontSize: 13,
+                              background: currentDance === `custom:${dance.id}` ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                              borderColor: currentDance === `custom:${dance.id}` ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <Music size={14} style={{ opacity: 0.6 }} />
+                              <div>
+                                <div>{dance.label}</div>
+                                {dance.bgmUrl && (
+                                  <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 1 }}>{t('含BGM', 'w/ BGM')}</div>
+                                )}
+                              </div>
+                            </div>
+                            <div
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                fetch(petUrl("/dance/delete"), {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ name: dance.id }),
+                                })
+                                  .then(() => {
+                                    fetchCustomDances()
+                                    if (currentDance === `custom:${dance.id}`) onDanceChange('love')
+                                  })
+                                  .catch(() => {})
+                              }}
+                              style={{
+                                width: 28,
+                                height: 28,
+                                borderRadius: 6,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                background: 'rgba(255, 255, 255, 0.08)',
+                                cursor: 'pointer',
+                                flexShrink: 0,
+                                opacity: 0.5,
+                              }}
+                              title={t('删除', 'Delete')}
+                            >
+                              <Trash2 size={13} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ marginTop: 12 }}>
+                    <div style={labelStyle}>{t('导入自定义动作', 'Import Custom Motion')}</div>
+                    <button
+                      disabled={importingDance}
+                      onClick={async () => {
+                        setImportingDance(true)
+                        try {
+                          // Pick motion file (.vmd/.vrma/.fbx)
+                          const vmdPath = await invoke<string | null>('pick_dance_file')
+                          if (!vmdPath) { setImportingDance(false); return }
+
+                          // Import motion file
+                          const vmdRes = await fetch(petUrl("/dance/import"), {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path: vmdPath }),
+                          })
+                          const vmdData = await vmdRes.json()
+                          if (!vmdData.ok) throw new Error(vmdData.error)
+
+                          // Ask for optional BGM
+                          const mp3Path = await invoke<string | null>('pick_music_file')
+                          if (mp3Path) {
+                            await fetch(petUrl("/dance/import"), {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ path: mp3Path }),
+                            })
+                          }
+
+                          fetchCustomDances()
+                        } catch (err) {
+                          console.warn('Import dance failed:', err)
+                        }
+                        setImportingDance(false)
+                      }}
+                      style={{ ...applyBtnStyle, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                    >
+                      {importingDance
+                        ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                        : <Upload size={14} />}
+                      {importingDance ? t('导入中…', 'Importing…') : t('选择动作文件… (.vmd/.vrma/.fbx)', 'Select motion file… (.vmd/.vrma/.fbx)')}
+                    </button>
+                    <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 4 }}>
+                      {t('选择动作文件后，可选择配套 .mp3 音乐文件', 'Select a motion file, then optionally pick a matching .mp3')}
+                    </div>
+                  </div>
+              </div>
+              <AnimationSettingsPanel settings={animationSettings} onChange={onAnimationSettingsChange} customDances={customDances} onPreview={onAnimationPreview} onStop={onAnimationStop} statusText={petStatusText} language={language} />
+            </div>
+          )}
+          {tab === 'behavior' && <BehaviorPanel settings={behaviorSettings} onChange={onBehaviorSettingsChange} customDances={customDances} statusText={petStatusText} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} />}
           {tab === 'cuttle' && <CuttleConnection />}
           {tab === 'general' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -478,6 +639,21 @@ export function SettingsPanel({
                       {m === 'mouse' ? t('鼠标', 'Mouse') : t('镜头', 'Camera')}
                     </button>
                   ))}
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('视线幅度', 'Gaze strength')}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="range"
+                    min={0}
+                    max={MAX_GAZE_GAIN}
+                    step={0.1}
+                    value={gazeGain}
+                    onChange={(e) => onGazeGainChange(normalizeGazeGain(Number(e.target.value)))}
+                    style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                  />
+                  <span style={{ fontSize: 12, color: '#aebbd0', width: 28, textAlign: 'right' }}>{gazeGain.toFixed(1)}</span>
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -770,154 +946,6 @@ export function SettingsPanel({
             </div>
           )}
 
-          {tab === 'dance' && (
-            <div style={sectionStyle}>
-              <div style={labelStyle}>{t('内置舞蹈', 'Built-in Dances')}</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {Object.entries(dancePresets).map(([id, preset]) => (
-                  <div
-                    key={id}
-                    onClick={() => onDanceChange(id)}
-                    style={{
-                      ...modelBtnStyle,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '8px 12px',
-                      fontSize: 13,
-                      background: currentDance === id ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
-                      borderColor: currentDance === id ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <Music size={14} style={{ opacity: 0.6 }} />
-                      <span>{preset.label}</span>
-                    </div>
-                    {preset.bgm && (
-                      <span style={{ fontSize: 11, color: '#aebbd0' }}>{t('含BGM', 'w/ BGM')}</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {customDances.length > 0 && (
-                <div style={{ marginTop: 12 }}>
-                  <div style={labelStyle}>{t('自定义舞蹈', 'Custom Dances')}</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {customDances.map((dance) => (
-                      <div
-                        key={dance.id}
-                        onClick={() => onDanceChange(`custom:${dance.id}`, {
-                          label: dance.label,
-                          type: 'vmd',
-                          url: dance.vmdUrl,
-                          bgm: dance.bgmUrl,
-                        })}
-                        style={{
-                          ...modelBtnStyle,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '8px 10px',
-                          fontSize: 13,
-                          background: currentDance === `custom:${dance.id}` ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
-                          borderColor: currentDance === `custom:${dance.id}` ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Music size={14} style={{ opacity: 0.6 }} />
-                          <div>
-                            <div>{dance.label}</div>
-                            {dance.bgmUrl && (
-                              <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 1 }}>{t('含BGM', 'w/ BGM')}</div>
-                            )}
-                          </div>
-                        </div>
-                        <div
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            fetch(petUrl("/dance/delete"), {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ name: dance.id }),
-                            })
-                              .then(() => {
-                                fetchCustomDances()
-                                if (currentDance === `custom:${dance.id}`) onDanceChange('love')
-                              })
-                              .catch(() => {})
-                          }}
-                          style={{
-                            width: 28,
-                            height: 28,
-                            borderRadius: 6,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            background: 'rgba(255, 255, 255, 0.08)',
-                            cursor: 'pointer',
-                            flexShrink: 0,
-                            opacity: 0.5,
-                          }}
-                          title={t('删除', 'Delete')}
-                        >
-                          <Trash2 size={13} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div style={{ marginTop: 12 }}>
-                <div style={labelStyle}>{t('导入自定义舞蹈', 'Import Custom Dance')}</div>
-                <button
-                  disabled={importingDance}
-                  onClick={async () => {
-                    setImportingDance(true)
-                    try {
-                      // Pick VMD file
-                      const vmdPath = await invoke<string | null>('pick_dance_file')
-                      if (!vmdPath) { setImportingDance(false); return }
-
-                      // Import VMD
-                      const vmdRes = await fetch(petUrl("/dance/import"), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path: vmdPath }),
-                      })
-                      const vmdData = await vmdRes.json()
-                      if (!vmdData.ok) throw new Error(vmdData.error)
-
-                      // Ask for optional BGM
-                      const mp3Path = await invoke<string | null>('pick_music_file')
-                      if (mp3Path) {
-                        await fetch(petUrl("/dance/import"), {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ path: mp3Path }),
-                        })
-                      }
-
-                      fetchCustomDances()
-                    } catch (err) {
-                      console.warn('Import dance failed:', err)
-                    }
-                    setImportingDance(false)
-                  }}
-                  style={{ ...applyBtnStyle, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-                >
-                  {importingDance
-                    ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                    : <Upload size={14} />}
-                  {importingDance ? t('导入中…', 'Importing…') : t('选择 VMD 舞蹈文件…', 'Select VMD dance file…')}
-                </button>
-                <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 4 }}>
-                  {t('选择 .vmd 舞蹈文件后，可选择配套 .mp3 音乐文件', 'Select a .vmd dance file, then optionally pick a matching .mp3')}
-                </div>
-              </div>
-            </div>
-          )}
           {tab === 'quality' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

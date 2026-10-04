@@ -1,4 +1,5 @@
 import { alphaInputRegions } from '../input-regions'
+import { applyGazeGain, cursorPayloadToClient, DEFAULT_GAZE_GAIN, type CursorPositionPayload } from '../cursor-gaze'
 import { intersectAnimatedModel } from '../mesh-hit-test'
 import { FramePacer } from '../frame-pacer'
 import { DEFAULT_ANIMATIONS, proceduralSpeed, type AnimationSettings } from '../animation-settings'
@@ -6,6 +7,7 @@ import { MusicMotion } from '../music-motion'
 import { prepareLaptop, cupPositions } from '../work-props'
 import { DEFAULT_MUSIC, DEFAULT_FIT, type MusicSettings, type HeadphoneFit } from '../music-settings'
 import { useEffect, useRef, useImperativeHandle, forwardRef, useState, useCallback } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm'
@@ -26,6 +28,7 @@ interface VRMSceneProps {
   modelPath: string
   qualitySettings?: QualitySettings
   idleAnimationPath?: string
+  gazeGain?: number
   onTouch?: (region: TouchRegion) => void
   onModelError?: (message: string) => void
   onModelLoaded?: () => void
@@ -219,6 +222,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   headphoneFit = DEFAULT_FIT,
   qualitySettings,
   idleAnimationPath = '/idle_loop.vrma',
+  gazeGain = DEFAULT_GAZE_GAIN,
   onTouch,
   onModelLoaded,
   onModelError,
@@ -239,6 +243,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   // characters never moves the user's camera.
   const cameraStateRef = useRef<CameraView | null>(null)
   const trackingModeRef = useRef<TrackingMode>('mouse')
+  const gazeGainRef = useRef(gazeGain)
+  gazeGainRef.current = gazeGain
   const motionRef = useRef<MotionController | null>(null)
   const panCameraRef = useRef<((dx: number, dy: number) => void) | null>(null)
   const rotateCameraRef = useRef<((dx: number, dy: number) => void) | null>(null)
@@ -416,7 +422,10 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     },
     setWorking(active: boolean, durationMs = 0) {
       if (active) musicDanceActiveRef.current = false
-      if (active && !workingTargetRef.current) motionRef.current?.resetToIdle()
+      // Never cut a one-shot action: a working frame arriving mid-preview
+      // would reset the mixer and kill the clip (the render loop already
+      // yields the typing layer while an action plays).
+      if (active && !workingTargetRef.current && !motionRef.current?.actionPlaying) motionRef.current?.resetToIdle()
       workingTargetRef.current = active
       if (active && durationMs > 0) {
         const gen = ++workingGenRef.current
@@ -753,35 +762,54 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     const _raycaster = new THREE.Raycaster()
     const _mouseVec = new THREE.Vector2()
 
-    function onMouseMove(e: MouseEvent) {
-      mouse.x = (e.clientX / window.innerWidth) * 2 - 1
-      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1
+    // Shared gaze path: point the eyes at a window client-pixel position.
+    // DOM mousemove only reaches us over the silhouette (click-through /
+    // input regions starve it elsewhere), so the Rust cursor-position feed
+    // below drives the same path with the global cursor position.
+    function updateGazeFromClient(clientX: number, clientY: number) {
+      mouse.x = (clientX / window.innerWidth) * 2 - 1
+      mouse.y = -(clientY / window.innerHeight) * 2 + 1
 
       if (trackingModeRef.current !== 'mouse') return
 
-      // Compute lookAt target like airi's lookAtMouse
+      // Compute lookAt target like airi's lookAtMouse, amplified so small
+      // cursor moves read clearly (VRM eye limits still cap the extremes)
       _mouseVec.set(mouse.x, mouse.y)
       _raycaster.setFromCamera(_mouseVec, camera)
       const camDir = new THREE.Vector3()
       camera.getWorldDirection(camDir)
+      const planeCenter = camera.position.clone().add(camDir)
       const plane = new THREE.Plane()
-      plane.setFromNormalAndCoplanarPoint(
-        camDir,
-        camera.position.clone().add(camDir.multiplyScalar(1)),
-      )
+      plane.setFromNormalAndCoplanarPoint(camDir, planeCenter)
       const intersection = new THREE.Vector3()
       if (_raycaster.ray.intersectPlane(plane, intersection)) {
-        lookAtTarget.x = intersection.x
-        lookAtTarget.y = intersection.y
-        lookAtTarget.z = intersection.z
+        const gained = applyGazeGain(intersection, planeCenter, gazeGainRef.current)
+        lookAtTarget.x = gained.x
+        lookAtTarget.y = gained.y
+        lookAtTarget.z = gained.z
         if (vrm) {
           saccades.instantUpdate(vrm, lookAtTarget)
         }
       }
     }
+    function onMouseMove(e: MouseEvent) {
+      updateGazeFromClient(e.clientX, e.clientY)
+    }
     // Listen on both window and document to handle transparent window cases
     window.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mousemove', onMouseMove)
+    // Global cursor feed from the Rust monitor: keeps the eyes following the
+    // cursor even where the OS delivers no DOM mouse events (click-through /
+    // silhouette input regions). Pass-through ignores these events (its gate
+    // is the input region), so this only moves the gaze.
+    const unlistenGaze = listen<CursorPositionPayload>('cursor-position', (event) => {
+      const { clientX, clientY } = cursorPayloadToClient(
+        event.payload,
+        window.innerWidth,
+        window.innerHeight,
+      )
+      updateGazeFromClient(clientX, clientY)
+    })
 
     // ── Scroll zoom ──────────────────────────────────────────────────────────
     const MIN_RADIUS = 0.8
@@ -1392,7 +1420,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       }
       cancelAnimationFrame(animFrameId)
       window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mousemove', onMouseMove)
+      unlistenGaze.then((fn) => fn())
       canvas.removeEventListener('wheel', onWheel)
       canvas.removeEventListener('pointerdown', onPointerDown)
       canvas.removeEventListener('pointermove', onPointerMove)

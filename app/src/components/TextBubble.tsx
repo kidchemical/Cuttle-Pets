@@ -95,7 +95,8 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
       color: bs.textColor,
       fontSize: bs.fontSize,
       lineHeight: 1.4,
-      wordBreak: 'break-word',
+      wordBreak: 'normal',
+      overflowWrap: 'break-word',
       fontFamily: bs.fontFamily,
       textShadow: bs.textShadow
         ? `-1px -1px 0 ${c}, 1px -1px 0 ${c}, -1px 1px 0 ${c}, 1px 1px 0 ${c}, 0 0 ${bs.textShadowBlur}px ${c}`
@@ -531,11 +532,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
             )}
             {text && (
               <div style={textStyle}>
-                {chars.current.map((ch, i) => (
-                  i < charCount ? (
-                    <span key={i} style={popCharStyle}>{ch === '\n' ? <br /> : ch}</span>
-                  ) : null
-                ))}
+                {renderWords(chars.current, charCount)}
               </div>
             )}
           </div>
@@ -616,6 +613,51 @@ const zoomedImageStyle: React.CSSProperties = {
   boxShadow: '0 0 24px rgba(100, 160, 255, 0.4)',
   objectFit: 'contain' as const,
   display: 'block',
+}
+
+// Words render as unbreakable units so lines wrap at spaces, never mid-word.
+// CJK runs and super-long words stay breakable (CJK has no spaces; a rare
+// full-width word must still fit via the container's overflow-wrap).
+const CJK_WORD_RE = /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\u3040-\u309f\u30a0-\u30ff]/
+const MAX_UNBROKEN_WORD_LEN = 30
+const wordStyle: React.CSSProperties = {
+  display: 'inline-block',
+  whiteSpace: 'nowrap',
+}
+
+function renderWords(chars: string[], charCount: number) {
+  const out: React.ReactNode[] = []
+  let word: { ch: string; i: number }[] = []
+  const flushWord = () => {
+    if (word.length === 0) return
+    const text = word.map((w) => w.ch).join('')
+    const key = word[0].i
+    if (word.length > MAX_UNBROKEN_WORD_LEN || CJK_WORD_RE.test(text)) {
+      for (const w of word) out.push(<span key={w.i} style={popCharStyle}>{w.ch}</span>)
+    } else {
+      out.push(
+        <span key={key} style={wordStyle}>
+          {word.map((w) => <span key={w.i} style={popCharStyle}>{w.ch}</span>)}
+        </span>
+      )
+    }
+    word = []
+  }
+  const n = Math.min(charCount, chars.length)
+  for (let i = 0; i < n; i++) {
+    const ch = chars[i]
+    if (ch === '\n') {
+      flushWord()
+      out.push(<br key={i} />)
+    } else if (ch === ' ' || ch === '\t') {
+      flushWord()
+      out.push(<span key={i}>{ch}</span>)
+    } else {
+      word.push({ ch, i })
+    }
+  }
+  flushWord()
+  return out
 }
 
 const popCharStyle: React.CSSProperties = {

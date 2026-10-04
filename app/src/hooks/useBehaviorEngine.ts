@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import {
-  applyBaseById, applyEmotion, playOnceById,
+  applyBaseById, applyEmotion, playOnceById, resolveMain,
   type BehaviorEntry, type BehaviorProfile, type BehaviorScene, type BehaviorStateId,
   type OccasionalEntry,
 } from '../behavior'
@@ -43,6 +43,8 @@ export function useBehaviorEngine({ enabled, profile, state, paused = false, get
   const handledStateRef = useRef<BehaviorStateId | null>(null)
   const prevStateRef = useRef<BehaviorStateId | null>(null)
   const resumingRef = useRef(false)
+  /** Last Main pick per state, so resume re-applies the same loop (no re-roll). */
+  const lastMainRef = useRef<Partial<Record<BehaviorStateId, BehaviorEntry>>>({})
   const sceneRef = useRef(getScene)
   sceneRef.current = getScene
 
@@ -81,8 +83,11 @@ export function useBehaviorEngine({ enabled, profile, state, paused = false, get
       // A resumed user dance already owns the mixer (see the dancing note below).
       const scene = sceneRef.current()
       if (scene && state !== 'dancing') {
-        const base = profile.states[state].base
-        applyBaseById(scene, base.animation, base.preset)
+        const main = lastMainRef.current[state] ?? resolveMain(profile.states[state])
+        if (main) {
+          lastMainRef.current[state] = main
+          applyBaseById(scene, main.animation, main.preset)
+        }
       }
       return
     }
@@ -116,8 +121,11 @@ export function useBehaviorEngine({ enabled, profile, state, paused = false, get
         scene.resetPose()
         await runSequence(live.states[state].start)
         if (gen !== genRef.current) return
-        const base = live.states[state].base
-        applyBaseById(scene, base.animation, base.preset)
+        const main = resolveMain(live.states[state])
+        if (main) {
+          lastMainRef.current[state] = main
+          applyBaseById(scene, main.animation, main.preset)
+        }
       } else {
         await runSequence(live.states[state].start)
       }

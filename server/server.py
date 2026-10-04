@@ -555,7 +555,10 @@ def _normalize_reaction_step(value: Any) -> dict[str, Any] | None:
         duration = 3000
     step["durationMs"] = max(500, min(30000, duration))
     if animation.startswith("dance:custom:"):
-        step["preset"] = {"label": preset["label"], "type": "vmd", "url": preset["url"],
+        motion_type = preset.get("type")
+        step["preset"] = {"label": preset["label"],
+                          "type": motion_type if motion_type in ("vmd", "vrma", "fbx") else "vmd",
+                          "url": preset["url"],
                           "bgm": preset.get("bgm") if isinstance(preset.get("bgm"), str) else None}
     props = value.get("props")
     if isinstance(props, dict) and (props.get("working") is True or props.get("sip") is True):
@@ -930,7 +933,7 @@ def model_serve(name: str):
 @app.get("/dance/list")
 def dance_list():
     _ensure_dirs()
-    return jsonify({"dances": _list_dir(DANCES_DIR, (".vmd",))})
+    return jsonify({"dances": _list_dir(DANCES_DIR, (".vmd", ".vrma", ".fbx"))})
 
 
 @app.post("/dance/import")
