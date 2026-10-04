@@ -19,3 +19,6 @@ data/
 
 # Local Python environment
 /.venv/
+
+# Benchmarking Assets (mp3s, wavs)
+tests/benchmark refs/
