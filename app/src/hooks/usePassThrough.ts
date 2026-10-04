@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import type { InputRegion } from '../input-regions'
+import { hitTestWithTimeout } from '../hit-test'
 
 interface CursorPosition {
   x: number
@@ -35,6 +37,41 @@ export function usePassThrough(enabled: boolean, onHover?: (inside: boolean) => 
       }
       return
     }
+
+    let disposed = false
+    let regionTimer: ReturnType<typeof setInterval> | undefined
+    void invoke<boolean>('supports_input_regions').then((supported) => {
+      if (!supported || disposed) return
+      active.current = false
+      clearTimeout(startDelay)
+      void invoke('stop_cursor_monitor')
+      void win.setIgnoreCursorEvents(false)
+      ;(window as any).__clawInputRegionsEnabled = true
+      const publish = () => {
+        if (disposed) return
+        const regions = (window as any).__clawInputRegions as InputRegion[] | undefined
+        if ((window as any).__clawDragging || !regions) {
+          void invoke('set_input_regions', { regions: null }).catch(console.error)
+          return
+        }
+        const ui = [...document.querySelectorAll('button, input, textarea, [data-no-passthrough]')]
+          .filter(el => getComputedStyle(el).visibility !== 'hidden')
+          .map(el => el.getBoundingClientRect())
+          .filter(r => r.width > 0 && r.height > 0)
+          .map(r => ({ x: Math.floor(r.x), y: Math.floor(r.y), width: Math.ceil(r.width), height: Math.ceil(r.height) }))
+        void invoke('set_input_regions', { regions: [...regions, ...ui] }).catch(console.error)
+      }
+      publish()
+      regionTimer = setInterval(publish, 100)
+    }).catch(console.error)
+    const onRegionMove = () => {
+      if ((window as any).__clawInputRegionsEnabled) hoverCallback.current?.(true)
+    }
+    const onRegionLeave = () => {
+      if ((window as any).__clawInputRegionsEnabled) hoverCallback.current?.(false)
+    }
+    window.addEventListener('pointermove', onRegionMove)
+    document.documentElement.addEventListener('pointerleave', onRegionLeave)
 
     // Delay enabling pass-through so the window is selectable on startup
     const startDelay = setTimeout(() => {
@@ -105,8 +142,10 @@ export function usePassThrough(enabled: boolean, onHover?: (inside: boolean) => 
       pending.current = true
       try {
         if (!active.current) return
-        const overModel = await hitTest(clientX, clientY)
-        if (!active.current) return
+        // Bounded wait: a hit-test that never resolves (paused render loop,
+        // scene remount) must not freeze click-through state forever.
+        const overModel = await hitTestWithTimeout(hitTest, clientX, clientY)
+        if (!active.current || (window as any).__clawDragging) return
         if (overModel && passingThrough.current) {
           passingThrough.current = false
           win.setIgnoreCursorEvents(false).catch(() => {})
@@ -121,6 +160,12 @@ export function usePassThrough(enabled: boolean, onHover?: (inside: boolean) => 
     })
 
     return () => {
+      disposed = true
+      clearInterval(regionTimer)
+      window.removeEventListener('pointermove', onRegionMove)
+      document.documentElement.removeEventListener('pointerleave', onRegionLeave)
+      ;(window as any).__clawInputRegionsEnabled = false
+      void invoke('set_input_regions', { regions: null }).catch(() => {})
       clearTimeout(startDelay)
       active.current = false
       unlisten.then((fn) => fn())

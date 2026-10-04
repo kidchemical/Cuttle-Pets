@@ -33,6 +33,7 @@ windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32
 # X11 cursor polling for click-through on Xwayland (the launcher forces
 # GDK_BACKEND=x11, so X coords match the window geometry units).
 x11-dl = "2.21"
+gtk = "0.18"
 
 [features]
 devtools = []

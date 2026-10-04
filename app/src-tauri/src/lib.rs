@@ -61,6 +61,48 @@ struct CursorPosition {
     window_h: u32,
 }
 
+#[derive(serde::Deserialize)]
+struct InputRegion {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+#[tauri::command]
+fn supports_input_regions() -> bool {
+    cfg!(target_os = "linux")
+}
+
+/// Keep the silhouette receptive even when Xwayland cannot track the cursor
+/// over native Wayland windows or the desktop. None restores the full region.
+#[tauri::command]
+fn set_input_regions(window: tauri::Window, regions: Option<Vec<InputRegion>>) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let target = window.clone();
+        window.run_on_main_thread(move || {
+            let Ok(gtk_window) = target.gtk_window() else { return };
+            if gtk_window.window().is_some() {
+                let region = regions.map(|rects| {
+                    let region = gtk::cairo::Region::create();
+                    for rect in rects {
+                        if rect.width > 0 && rect.height > 0 {
+                            let _ = region.union_rectangle(&gtk::cairo::RectangleInt::new(rect.x, rect.y, rect.width, rect.height));
+                        }
+                    }
+                    region
+                });
+                gtk_window.input_shape_combine_region(region.as_ref());
+            }
+        }).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (window, regions);
+    Ok(())
+}
+
 #[tauri::command]
 async fn pick_vrm_file() -> Result<Option<String>, String> {
     let file = rfd::AsyncFileDialog::new()
@@ -394,6 +436,8 @@ pub fn run() {
             pick_vrm_file,
             pick_dance_file,
             pick_music_file,
+            supports_input_regions,
+            set_input_regions,
             start_cursor_monitor,
             stop_cursor_monitor,
             start_speech_recognition,

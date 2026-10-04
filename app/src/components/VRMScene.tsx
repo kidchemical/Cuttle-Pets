@@ -1,3 +1,5 @@
+import { alphaInputRegions } from '../input-regions'
+import { intersectAnimatedModel } from '../mesh-hit-test'
 import { FramePacer } from '../frame-pacer'
 import { DEFAULT_ANIMATIONS, proceduralSpeed, type AnimationSettings } from '../animation-settings'
 import { MusicMotion } from '../music-motion'
@@ -796,7 +798,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         -(clientY / window.innerHeight) * 2 + 1,
       )
       touchRaycaster.setFromCamera(touchMouseVec, camera)
-      return touchRaycaster.intersectObject(vrm.scene, true).length > 0
+      return intersectAnimatedModel(touchRaycaster, vrm.scene).length > 0
     }
 
     function onWheel(e: WheelEvent) {
@@ -880,7 +882,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       )
       touchRaycaster.setFromCamera(touchMouseVec, camera)
 
-      const intersects = touchRaycaster.intersectObject(vrm.scene, true)
+      const intersects = intersectAnimatedModel(touchRaycaster, vrm.scene)
       if (intersects.length === 0) return null
 
       const hitPoint = intersects[0].point
@@ -908,12 +910,23 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     const CLICK_MOVE_THRESHOLD = 5  // px
     const CLICK_TIME_THRESHOLD = 300 // ms
 
+    function startWindowDrag() {
+      // Native dragging can consume pointerup; always release our input hold.
+      void getCurrentWindow().startDragging().catch(console.error).finally(() => {
+        ;(window as any).__clawDragging = false
+      })
+    }
+
     function onPointerDown(e: PointerEvent) {
       // Transparent space is click-through: ignore presses that don't start
       // on a mesh so the pet never steals clicks from windows behind it.
       // (When pass-through is engaged the OS won't deliver these at all;
       // this gate covers the transition and pass-through-off states.)
-      if (!pointerOverModel(e.clientX, e.clientY)) return
+      if (e.button > 2 || !pointerOverModel(e.clientX, e.clientY)) return
+      // A gesture is starting on the model: hold click-through off so the
+      // cursor monitor can't enable ignore-cursor-events mid-drag (e.g. the
+      // model rotating out from under the cursor) and deafen the canvas.
+      ;(window as any).__clawDragging = true
       if (e.button === 0) {
         const region = detectTouchRegion(e)
         if (region) {
@@ -922,7 +935,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           return
         }
         // On model but no region (shouldn't happen) — move window
-        getCurrentWindow().startDragging()
+        startWindowDrag()
         return
       } else if (e.button === 1) {
         dragMode = e.shiftKey ? 'pan' : 'dolly'
@@ -944,7 +957,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         const dy = Math.abs(e.clientY - leftDownPos.y)
         if (dx > CLICK_MOVE_THRESHOLD || dy > CLICK_MOVE_THRESHOLD) {
           leftDownPos = null
-          getCurrentWindow().startDragging()
+          startWindowDrag()
           return
         }
       }
@@ -975,8 +988,10 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     }
 
     function onPointerUp(e: PointerEvent) {
+      ;(window as any).__clawDragging = false
       // Confirm touch: short press with no movement on model
       if (leftDownPos && e.button === 0) {
+        ;(window as any).__clawDragging = false
         const elapsed = Date.now() - leftDownPos.time
         const dx = Math.abs(e.clientX - leftDownPos.x)
         const dy = Math.abs(e.clientY - leftDownPos.y)
@@ -1002,8 +1017,16 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       }
       if (dragMode) {
         dragMode = null
-        canvas!.releasePointerCapture(e.pointerId)
+        ;(window as any).__clawDragging = false
+        try { canvas!.releasePointerCapture(e.pointerId) } catch { /* already released */ }
       }
+    }
+
+    function onPointerCancel(e: PointerEvent) {
+      leftDownPos = null
+      dragMode = null
+      ;(window as any).__clawDragging = false
+      try { canvas!.releasePointerCapture(e.pointerId) } catch { /* already released */ }
     }
 
     function onContextMenu(e: Event) {
@@ -1012,7 +1035,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
     canvas.addEventListener('pointerdown', onPointerDown)
     canvas.addEventListener('pointermove', onPointerMove)
-    canvas.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointerup', onPointerUp)
+    canvas.addEventListener('pointercancel', onPointerCancel)
     canvas.addEventListener('contextmenu', onContextMenu)
 
     // ── Resize ────────────────────────────────────────────────────────────────
@@ -1029,6 +1053,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     const hitTarget = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false })
     let pendingHitTest: { x: number; y: number; resolve: (hit: boolean) => void } | null = null
     const hitPixel = new Uint8Array(4)
+    const inputTarget = new THREE.WebGLRenderTarget(1, 1)
+    let lastInputMaskTime = 0
+    let inputPixels = new Uint8Array(4)
 
     // Async hit-test: queues a request, resolved after next frame render
     ;(window as any).__clawHitTest = (clientX: number, clientY: number): Promise<boolean> => {
@@ -1218,6 +1245,30 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
       renderer.render(scene, camera)
 
+      // Linux uses a persistent silhouette input shape, never cursor polling.
+      if (canvas && (window as any).__clawInputRegionsEnabled && performance.now() - lastInputMaskTime >= 100) {
+        lastInputMaskTime = performance.now()
+        if (!vrm) {
+          delete (window as any).__clawInputRegions
+        } else {
+          const width = 128
+          const height = Math.max(1, Math.round(width * canvas.clientHeight / canvas.clientWidth))
+          if (inputTarget.width !== width || inputTarget.height !== height) {
+            inputTarget.setSize(width, height)
+            inputPixels = new Uint8Array(width * height * 4)
+          }
+          try {
+            renderer.setRenderTarget(inputTarget)
+            renderer.clear()
+            renderer.render(scene, camera)
+            renderer.readRenderTargetPixels(inputTarget, 0, 0, width, height, inputPixels)
+            ;(window as any).__clawInputRegions = alphaInputRegions(inputPixels, width, height, canvas.clientWidth, canvas.clientHeight)
+          } finally {
+            renderer.setRenderTarget(null)
+          }
+        }
+      }
+
       // Process pending hit-test after render
       if (pendingHitTest && canvas) {
         const { x, y, resolve } = pendingHitTest
@@ -1321,6 +1372,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
     return () => {
+      // Canvas gestures die with the effect; never leave the cursor monitor
+      // suppressed (or a stale in-flight gesture) behind.
+      ;(window as any).__clawDragging = false
       suspendFnRef.current = () => {}
       document.removeEventListener('visibilitychange', onVisibilityChange)
       // Snapshot the view so a model reload restores it verbatim — but only
@@ -1342,7 +1396,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       canvas.removeEventListener('wheel', onWheel)
       canvas.removeEventListener('pointerdown', onPointerDown)
       canvas.removeEventListener('pointermove', onPointerMove)
-      canvas.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointerup', onPointerUp)
+      canvas.removeEventListener('pointercancel', onPointerCancel)
       canvas.removeEventListener('contextmenu', onContextMenu)
       window.removeEventListener('resize', onResize)
       emote?.dispose()
@@ -1363,6 +1418,14 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       cup = null
       typingCache = null
       hitTarget.dispose()
+      inputTarget.dispose()
+      delete (window as any).__clawInputRegions
+      // Fail open: a cursor hit-test still awaiting its frame must resolve
+      // instead of hanging usePassThrough's pending gate forever.
+      if (pendingHitTest) {
+        pendingHitTest.resolve(true)
+        pendingHitTest = null
+      }
       delete (window as any).__clawHitTest
       for (const timer of previewTimersRef.current) clearTimeout(timer)
       previewTimersRef.current = []
