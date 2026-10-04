@@ -188,6 +188,14 @@ export function applySipPose(cache: TypingPoseCache, time: number, amount: numbe
   const head = cache.head
   if (!upperR || !lowerR || !handR || !head) return
 
+  // Fade out the right-hand key presses as it lifts the cup. The saved
+  // base is the relaxed finger pose before typing; the left hand keeps typing.
+  for (const f of cache.fingers) {
+    if (f.side !== -1) continue
+    const base = cache.bases.get(f.bone)
+    if (base) f.bone.quaternion.slerp(base, amount).normalize()
+  }
+
   // Face-forward from the eye bones (see faceDirection): correct in world
   // space on every rig and convention, and tracks the mouth as the head
   // tilts. Root- and head-axis-derived signs both lie on some imports.
