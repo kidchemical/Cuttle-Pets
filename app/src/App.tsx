@@ -20,6 +20,7 @@ import { dancePresets, actionPresets, localizedPresetLabel } from './motion-cont
 import { LipSync } from './lip-sync'
 import { bindScene } from './api'
 import { checkForUpdates } from './update-check'
+import { APP_VERSION } from './version'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -210,7 +211,7 @@ export default function App() {
         const status = await checkForUpdates().catch(() => null)
         const updateVersion = status && status.state === 'available' ? status.info.latest : ''
         if (active) {
-          await invoke('update_tray_models', { models, selected: modelPath, musicEnabled, animations: Object.entries(actionPresets).map(([id, preset]) => ({ id, name: preset.label })), quality: qualityPreset, textEnabled: showText, updateAvailable: updateVersion !== '', updateVersion })
+          await invoke('update_tray_models', { models, selected: modelPath, musicEnabled, animations: Object.entries(actionPresets).map(([id, preset]) => ({ id, name: preset.label })), quality: qualityPreset, textEnabled: showText, updateAvailable: updateVersion !== '', currentVersion: APP_VERSION, updateVersion })
         }
       } catch (e) { console.warn('Tray model refresh failed', e) }
     }

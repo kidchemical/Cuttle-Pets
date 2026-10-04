@@ -4,7 +4,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { APP_VERSION } from '../version'
 import { cachedUpdateStatus, checkForUpdates, type UpdateStatus } from '../update-check'
 
-async function openExternal(url: string) {
+export async function openExternal(url: string) {
   if (isTauri()) {
     try {
       await open(url)
@@ -88,11 +88,20 @@ export function VersionFooter({ language }: { language: 'zh' | 'en' }) {
           }}
         />
         {status.state === 'available' ? (
-          <button onClick={() => void openExternal(status.info.url)} style={linkStyle}>
-            {t(`有新版本 v${status.info.latest}`, `Update available: v${status.info.latest}`)}
+          <button
+            onClick={() => void openExternal(status.info.url)}
+            style={updateBtnStyle}
+            title={t('打开更新说明', 'Open release notes')}
+          >
+            <span style={{ color: '#aebbd0' }}>{t('有新版本 ', 'Update available ')}</span>
+            <span style={{ color: '#aebbd0' }}>v{status.info.current}</span>
+            <span style={{ color: '#7d8aa0' }}> → </span>
+            <span style={{ color: '#4da3ff', fontWeight: 600 }}>v{status.info.latest}</span>
           </button>
         ) : status.state === 'latest' ? (
-          <span>{t('已是最新版本', 'Up to date')}</span>
+          <span>
+            {t('已是最新版本', 'Up to date')} <span style={{ color: '#7d8aa0' }}>· v{APP_VERSION}</span>
+          </span>
         ) : (
           <span>{checking ? t('正在检查更新…', 'Checking…') : t('未能检查更新', "Couldn't check")}</span>
         )}
@@ -127,10 +136,9 @@ const chipStyle: React.CSSProperties = {
   fontFamily: 'inherit',
 }
 
-const linkStyle: React.CSSProperties = {
+const updateBtnStyle: React.CSSProperties = {
   background: 'transparent',
   border: 'none',
-  color: '#4da3ff',
   fontSize: 12,
   cursor: 'pointer',
   padding: 0,

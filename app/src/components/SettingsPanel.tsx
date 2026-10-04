@@ -8,9 +8,10 @@ import type { MusicSettings, HeadphoneFit } from '../music-settings'
 import { CuttleConnection } from './CuttleConnection'
 import { petUrl } from '../config'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { X, Play, Loader, Sparkles, Trash2, Upload, Music } from 'lucide-react'
+import { X, Play, Loader, Sparkles, Trash2, Upload, Music, Github } from 'lucide-react'
 import { BehaviorPanel } from './BehaviorPanel'
-import { VersionChip, VersionFooter } from './VersionFooter'
+import { VersionChip, VersionFooter, openExternal } from './VersionFooter'
+import { APP_REPO_URL } from '../version'
 import { describeStatus, type BehaviorSettings, type BehaviorStateId } from '../behavior'
 import { subscribeWindowEvent, type PetStatusPayload } from '../window-sync'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -406,9 +407,14 @@ export function SettingsPanel({
       <div className="settings-shell" style={{ ...panelStyle, ...(standalone ? { width: '100%', height: '100%', borderRadius: 0, display: 'flex', flexDirection: 'column' } : { width: panelWidth, maxWidth: '90vw', transform: `translate(${panelPos.x}px, ${panelPos.y}px)` }) }} data-no-passthrough onClick={(e) => e.stopPropagation()}>
         <div className="settings-header" style={headerStyle} onMouseDown={standalone ? undefined : onDragStart}>
           <div><h1 style={{ fontSize: 20, margin: 0 }}>{t('设置', 'Settings')}<VersionChip language={language} /></h1><p className="settings-caption">{t('个性化你的桌面伙伴', 'Make your desktop companion your own')}</p></div>
-          {!standalone && <button aria-label="Close settings" onClick={onClose} style={closeBtnStyle}>
-            <X size={16} />
-          </button>}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button aria-label={t('打开 GitHub 仓库', 'Open GitHub repository')} title={t('GitHub 仓库', 'GitHub repository')} onClick={() => void openExternal(APP_REPO_URL)} style={closeBtnStyle}>
+              <Github size={16} />
+            </button>
+            {!standalone && <button aria-label="Close settings" onClick={onClose} style={closeBtnStyle}>
+              <X size={16} />
+            </button>}
+          </div>
         </div>
 
         {/* Tabs */}

@@ -333,10 +333,10 @@ struct TrayAnimation { name: String, id: String }
 /// into the settings window (a scrollable breakout) via a tail item.
 const TRAY_SUBMENU_PAGE_SIZE: usize = 25;
 
-fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music_enabled: bool, animations: &[TrayAnimation], quality: &str, text_enabled: bool, update_available: bool, update_version: &str) -> tauri::Result<Menu<tauri::Wry>> {
+fn tray_menu(app: &tauri::AppHandle, models: &[TrayModel], selected: &str, music_enabled: bool, animations: &[TrayAnimation], quality: &str, text_enabled: bool, update_available: bool, current_version: &str, update_version: &str) -> tauri::Result<Menu<tauri::Wry>> {
     let show = MenuItem::with_id(app, "show", "Show / Hide", true, None::<&str>)?;
     let update_item = if update_available {
-        Some(MenuItem::with_id(app, "update", &format!("● Update available (v{})", update_version), true, None::<&str>)?)
+        Some(MenuItem::with_id(app, "update", &format!("● Update available: v{} → v{}", current_version, update_version), true, None::<&str>)?)
     } else {
         None
     };
@@ -387,13 +387,13 @@ const TRAY_ICON_UPDATE: &[u8] = include_bytes!("../icons/128x128-update.png");
 
 /// Apply the update badge: blue-dot icon plus tooltip. Never touches user
 /// data — this only changes the tray presentation.
-fn apply_tray_update_state(app: &tauri::AppHandle, update_available: bool, update_version: &str) -> Result<(), String> {
+fn apply_tray_update_state(app: &tauri::AppHandle, update_available: bool, current_version: &str, update_version: &str) -> Result<(), String> {
     if let Some(tray) = app.tray_by_id("cuttle-pet") {
         let icon_bytes = if update_available { TRAY_ICON_UPDATE } else { TRAY_ICON_NORMAL };
         let icon = tauri::image::Image::from_bytes(icon_bytes).map_err(|e| e.to_string())?;
         tray.set_icon(Some(icon)).map_err(|e| e.to_string())?;
         let tooltip = if update_available {
-            format!("Cuttle Pets — update available (v{})", update_version)
+            format!("Cuttle Pets — update available: v{} → v{}", current_version, update_version)
         } else {
             "Cuttle Pets".to_string()
         };
@@ -403,14 +403,14 @@ fn apply_tray_update_state(app: &tauri::AppHandle, update_available: bool, updat
 }
 
 #[tauri::command]
-fn update_tray_models(app: tauri::AppHandle, models: Vec<TrayModel>, selected: String, music_enabled: bool, animations: Vec<TrayAnimation>, quality: String, text_enabled: bool, update_available: bool, update_version: String) -> Result<(), String> {
-    let menu = tray_menu(&app, &models, &selected, music_enabled, &animations, &quality, text_enabled, update_available, &update_version).map_err(|e| e.to_string())?;
+fn update_tray_models(app: tauri::AppHandle, models: Vec<TrayModel>, selected: String, music_enabled: bool, animations: Vec<TrayAnimation>, quality: String, text_enabled: bool, update_available: bool, current_version: String, update_version: String) -> Result<(), String> {
+    let menu = tray_menu(&app, &models, &selected, music_enabled, &animations, &quality, text_enabled, update_available, &current_version, &update_version).map_err(|e| e.to_string())?;
     if let Some(tray) = app.tray_by_id("cuttle-pet") { tray.set_menu(Some(menu)).map_err(|e| e.to_string())?; }
-    apply_tray_update_state(&app, update_available, &update_version)
+    apply_tray_update_state(&app, update_available, &current_version, &update_version)
 }
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let menu = tray_menu(app.handle(), &[TrayModel { name: "Default character".into(), url: "/model1.vrm".into() }], "/model1.vrm", true, &[], "high", true, false, "")?;
+    let menu = tray_menu(app.handle(), &[TrayModel { name: "Default character".into(), url: "/model1.vrm".into() }], "/model1.vrm", true, &[], "high", true, false, "", "")?;
 
     TrayIconBuilder::with_id("cuttle-pet")
         .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))?)
