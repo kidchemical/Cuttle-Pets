@@ -11,7 +11,10 @@ export interface EngineClock {
 }
 const clock: EngineClock = {
   now: Date.now, random: Math.random,
-  setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout,
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  // Browser timer functions require the Window receiver. Calling a stored
+  // clearTimeout as this.time.clearTimeout throws during state changes.
+  clearTimeout: timer => clearTimeout(timer),
 }
 export interface BehaviorPlayback { state: BehaviorStateId | null; owned: boolean; entries?: BehaviorEntryLocation[] }
 interface Input {

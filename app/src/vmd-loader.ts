@@ -16,6 +16,7 @@ import type { VmdFile } from 'mmd-parser'
 import {
   AnimationClip,
   KeyframeTrack,
+  LinearInterpolant,
   MathUtils,
   NumberKeyframeTrack,
   Object3D,
@@ -591,13 +592,39 @@ function toOffset(vrm: VRM): VRMOffsets {
   const leftToe = humanoid.getNormalizedBoneNode(HumanoidBoneName.LeftToes)
   const rightFoot = humanoid.getNormalizedBoneNode(HumanoidBoneName.RightFoot)
   const rightToe = humanoid.getNormalizedBoneNode(HumanoidBoneName.RightToes)
-  humanoid.setNormalizedPose(currentPose)
-  return {
+  const offsets = {
     hipsOffset: calculatePosition(hips, hips),
     leftFootOffset: calculatePosition(hips, leftFoot),
     leftToeOffset: calculatePosition(leftFoot, leftToe),
     rightFootOffset: calculatePosition(hips, rightFoot),
     rightToeOffset: calculatePosition(rightFoot, rightToe),
+  }
+  humanoid.setNormalizedPose(currentPose)
+  return offsets
+}
+
+/** Keep travelling VMD dances in the pet's fixed viewport. Move IK targets
+ * by the same displacement as the hips, so the feet stay with the dancer.
+ * Include both timelines' keys to preserve their linear interpolation. */
+export function anchorVMDMotion(data: VMDAnimationData, hipsOffset: number[] = [0, 1, 0]): VMDAnimationData {
+  const hips = data.timelines.find(t => t.type === 'position' && !t.isIK && t.name === HumanoidBoneName.Hips)
+  if (!hips?.times.length) return data
+  const root = new LinearInterpolant(hips.times, hips.values, 3)
+  const x = hipsOffset[0], z = hipsOffset[2]
+  return {
+    ...data,
+    timelines: data.timelines.map(t => {
+      if (t.type !== 'position' || (t !== hips && !t.isIK)) return t
+      const times = t.isIK ? Array.from(new Set([...t.times, ...hips.times])).sort((a, b) => a - b) : t.times
+      const source = new LinearInterpolant(t.times, t.values, 3)
+      const values: number[] = []
+      for (const time of times) {
+        const position = source.evaluate(time)
+        const displacement = root.evaluate(time)
+        values.push(position[0] - displacement[0] + x, position[1], position[2] - displacement[2] + z)
+      }
+      return { ...t, times, values }
+    }),
   }
 }
 
@@ -651,7 +678,8 @@ function bindToVRM(data: VMDAnimationData, vrm: VRM): AnimationClip {
 export async function parseVMDAnimation(url: string, vrm: VRM): Promise<VMDAnimationData> {
   const res = await fetch(url)
   const buffer = await res.arrayBuffer()
-  return convertVMD(buffer, toOffset(vrm))
+  const offsets = toOffset(vrm)
+  return anchorVMDMotion(convertVMD(buffer, offsets), offsets.hipsOffset)
 }
 
 export function bindVMDToVRM(

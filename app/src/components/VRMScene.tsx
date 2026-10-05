@@ -514,6 +514,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
     // ── State ─────────────────────────────────────────────────────────────────
     let vrm: VRM | null = null
+    let disposed = false
     let motion: MotionController | null = null
     let emote: EmoteController | null = null
     let earMorphSlots: EarMorphSlot[] = []
@@ -541,6 +542,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     loader.load(
       modelPath,
       async (gltf) => {
+        if (disposed) { VRMUtils.deepDispose(gltf.scene); return }
         const loadedVrm = gltf.userData.vrm as VRM
         if (!loadedVrm) {
           console.error('No VRM data found in GLTF')
@@ -664,6 +666,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         new GLTFLoader().load(
           '/laptop.glb',
           (laptopGltf) => {
+            if (disposed) { VRMUtils.deepDispose(laptopGltf.scene); return }
             const left = typingCache?.upperL?.getWorldPosition(new THREE.Vector3())
             const right = typingCache?.upperR?.getWorldPosition(new THREE.Vector3())
             const shoulderSpan = left && right ? Math.abs(left.x - right.x) : 0
@@ -684,6 +687,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           propLoader.load(
             url,
             (gltf) => {
+              if (disposed) { VRMUtils.deepDispose(gltf.scene); return }
               const asset = gltf.scene
               const obj = new THREE.Group()
               obj.add(asset)
@@ -701,6 +705,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
                 set(obj)
               } else {
                 console.warn(`No right-hand bone for prop ${url}`)
+                VRMUtils.deepDispose(obj)
               }
             },
             undefined,
@@ -1377,6 +1382,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
     return () => {
+      disposed = true
       // Canvas gestures die with the effect; never leave the cursor monitor
       // suppressed (or a stale in-flight gesture) behind.
       ;(window as any).__clawDragging = false
@@ -1411,13 +1417,15 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       emoteRef.current = null
       motion?.dispose()
       motionRef.current = null
+      // renderer.dispose() alone does not release loaded mesh geometries,
+      // materials, or textures. Release them on model changes and hot reloads.
+      VRMUtils.deepDispose(scene)
       if (laptop) {
         scene.remove(laptop)
         laptop = null
       }
       if (headphones) {
         headphones.removeFromParent()
-        headphones.traverse(o => { if (o instanceof THREE.Mesh) { o.geometry.dispose(); (o.material as THREE.Material).dispose() } })
       }
       phone?.removeFromParent()
       phone = null

@@ -71,10 +71,13 @@ with sync_playwright() as p:
     page.wait_for_function("document.querySelector('[data-animation=\"music\"]')?.dataset.active === 'true'")
     assert page.locator('[data-animation="idle"]').get_attribute('data-active') == 'false'
     music.scroll_into_view_if_needed()
-    assert music.evaluate("e => getComputedStyle(e).animationName") == 'playback-glow'
+    # Static highlight: no infinite repaint animations (a second webview
+    # animating on a timer competes with the pet renderer for the GPU).
+    assert music.evaluate("e => getComputedStyle(e).animationName") == 'none'
     page.screenshot(path=str(scratch / 'animation-playing.png'))
     page.emulate_media(reduced_motion='reduce')
     assert music.evaluate("e => getComputedStyle(e).animationName") == 'none'
+    assert 'Playing' in music.inner_text()
     page.emulate_media(reduced_motion='no-preference')
     peer.evaluate("""() => bus.postMessage({name:'pet-status',payload:{state:'dancing',actionId:null,danceId:'dance:jile',working:false,sipping:false,musicMotion:false,behaviorEntries:[{state:'music',phase:'occasionals',index:0},{state:'dancing',phase:'mains',index:0}]}})""")
     page.wait_for_function("document.querySelector('[data-animation=\"dance:jile\"]')?.dataset.active === 'true'")

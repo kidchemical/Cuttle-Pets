@@ -77,6 +77,13 @@ bash start_pet.sh                     # Linux
 powershell -ExecutionPolicy Bypass -File .\start_pet.ps1   # Windows
 ```
 
+On Linux with the NVIDIA driver loaded, the app defaults to WebKitGTK's
+DMA-BUF compatibility fallback to avoid a known graphics-driver crash path.
+This applies to direct binary launches too. An explicit
+`WEBKIT_DISABLE_DMABUF_RENDERER` environment value overrides the default
+(`0` opts back into DMA-BUF). The fallback can affect rendering performance
+and transparency; see [Tauri's NVIDIA compatibility report](https://github.com/tauri-apps/tauri/issues/9394).
+
 ### Try it
 
 ```bash

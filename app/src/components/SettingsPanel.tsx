@@ -230,15 +230,17 @@ export function SettingsPanel({
     if (visible) setPanelPos({ x: 0, y: 0 })
   }, [visible])
 
-  // Force disable pass-through when panel is visible
+  // Force disable pass-through when the embedded overlay panel is visible.
+  // The standalone settings window is a separate ordinary window: it has no
+  // click-through to fight, so skip the 5Hz native IPC loop entirely.
   useEffect(() => {
-    if (!visible || !isTauri()) return
+    if (!visible || standalone || !isTauri()) return
     const win = getCurrentWindow()
     win.setIgnoreCursorEvents(false)
     // Keep forcing it in case of race conditions with cursor monitor
     const interval = setInterval(() => win.setIgnoreCursorEvents(false), 200)
     return () => clearInterval(interval)
-  }, [visible])
+  }, [visible, standalone])
 
   useEffect(() => {
     if (!visible) return
