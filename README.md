@@ -136,7 +136,7 @@ flowchart LR
 | `server/server.py` | Flask control server — the only thing the pet window talks to |
 | `cli/cuttle_pet.py` | `emote` / `action` / `say` / `event` / `click-through` / model import |
 | `bridge/` | Polls Cuttle live-status and drives pet reactions |
-| `models/` | Your `.vrm` files (gitignored — never shipped) |
+| `~/.cuttle-pet/` | Your data (never shipped): `models/` (`.vrm` library), `pets/` + `props/` (imported GLBs), `settings.json` |
 | `scripts/autostart.py` | Linux desktop-login autostart |
 
 ## Cuttle bridge
@@ -201,6 +201,19 @@ Enable login autostart (Linux) with `python3 scripts/autostart.py enable`.
 Open **Settings** from the pet toolbar, tray menu, or **F4**. Settings opens in a
 separate, resizable desktop window, independent of the pet viewport. Changes apply
 live and are saved locally and to the control server.
+
+Opening Settings again restores and raises the existing window, keeping its
+position. New settings windows start centered. In the desktop app, drop files
+anywhere on **Model**, **Animations**, **Pets**, or **Props** to import into that
+page's library; the file-picker buttons use the same import paths. Model accepts
+VRM, Animations accepts VMD/VRMA/FBX and matching MP3 music, and Pets/Props accept
+GLB/glTF/FBX/DAE (converted to GLB when needed).
+
+The **Pets** page includes **Lighting fill**, **Limb motion**, and **Follow lag**.
+Higher follow lag lets a companion trail more loosely behind its anchor. Float
+idle adds gentle sideways/depth drift and rotation; supported arm and foot bones
+relax and move procedurally when no authored animation clip is playing. Set limb
+motion to zero to keep the imported bind pose.
 
 **Quality → Frame rate limit** controls the FPS cap separately from visual presets.
 Choose a cap from 15–240 FPS or **Uncapped**; saved custom caps are also preserved.
@@ -314,10 +327,12 @@ Animation regression tests (from the repository root):
 ```bash
 app/node_modules/.bin/tsx tests/animation_settings.test.ts
 app/node_modules/.bin/tsx tests/preferences.test.ts
+app/node_modules/.bin/tsx tests/companion_runtime.test.ts
 # Optional browser smoke test; install Playwright + Chromium, and start Vite first:
 npm --prefix app run dev -- --port 1431
 # In another terminal:
 python tests/browser/settings_window.py --base-url http://127.0.0.1:1431
+python tests/browser/settings_imports.py --base-url http://127.0.0.1:1431
 ```
 
 The browser smoke test mocks all pet-server calls, checks persistence and live

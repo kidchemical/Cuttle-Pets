@@ -1,5 +1,5 @@
 import {
-  applyBaseById, applyEmotion, behaviorTarget, playOnceById, resolveMain,
+  applyBaseById, applyCompanions, applyEmotion, behaviorTarget, playOnceById, resolveMain,
   type BehaviorEntry, type BehaviorEntryLocation, type BehaviorProfile, type BehaviorScene, type BehaviorStateId,
 } from './behavior'
 
@@ -157,6 +157,7 @@ export class BehaviorEngine {
         this.setActive(target)
         scene.resetPose()
         applyEmotion(scene, entry.emotion, () => this.time.random())
+        applyCompanions(scene, entry.companions)
         const cfg = profile.states[target]
         await this.sequence(cfg.start, gen, nested, profile, target, 'start')
         if (!this.live(gen)) return
@@ -167,8 +168,16 @@ export class BehaviorEngine {
         if (this.live(gen)) { scene.resetPose(); this.setActive(parent) }
         return
       }
+      if (!entry.animation) {
+        // Pet/prop-only entry: leave the character's motion alone.
+        applyEmotion(scene, entry.emotion, () => this.time.random())
+        applyCompanions(scene, entry.companions)
+        if (entry.durationMs) await this.delay(entry.durationMs)
+        return
+      }
       scene.resetPose()
       applyEmotion(scene, entry.emotion, () => this.time.random())
+      applyCompanions(scene, entry.companions)
       await playOnceById(scene, entry.animation, entry.preset, entry.durationMs ?? 5000)
       if (!this.live(gen)) return
       // Procedural motions have no clip-finished event; their one-shot hold is
@@ -202,6 +211,7 @@ export class BehaviorEngine {
     if (source) this.entries = [...this.entries, source]
     this.setActive(state)
     const target = main && behaviorTarget(main.animation)
+    if (main) applyCompanions(scene, main.companions)
     if (target) {
       this.playing = true
       void (async () => {
@@ -227,13 +237,23 @@ export class BehaviorEngine {
           this.entries = []
           await this.once(entry, gen, nested, profile, { state, phase: 'occasionals', index })
           if (!this.live(gen)) return
-          scene.resetPose()
           this.playing = false
+          // A pet/prop-only occasional never interrupted the sustained motion.
+          if (!entry.animation) { this.restoreEntries(state, profile); continue }
+          scene.resetPose()
           this.restore(state, gen, new Set(), profile)
         }
       })().catch(error => this.fail(gen, error))
     }
   }
+  /** Playback highlights for the sustained state, without touching the pose. */
+  private restoreEntries(state: BehaviorStateId, profile: BehaviorProfile) {
+    const main = this.mains.get(state)
+    const source = main && this.mainSource(state, main, profile)
+    this.entries = [...(this.previewSource ? [this.previewSource] : []), ...(source ? [source] : [])]
+    this.setActive(state)
+  }
+
   private restore(state: BehaviorStateId, gen: number, path: Set<BehaviorStateId>, profile: BehaviorProfile) {
     if (!this.live(gen) || path.has(state)) return
     if (!path.size) this.entries = this.previewSource ? [this.previewSource] : []
@@ -269,6 +289,7 @@ export class BehaviorEngine {
         this.input!.scene!.resetPose()
         this.entries = source ? [source] : []
         this.setActive(this.active)
+        applyCompanions(this.input!.scene!, entry.companions)
         applyBaseById(this.input!.scene!, entry.animation, entry.preset)
         this.playing = false
       } else {
@@ -288,5 +309,15 @@ export class BehaviorEngine {
     this.input = null
     input.scene?.resetPose()
     this.update(input)
+  }
+  /**
+   * Re-apply the current state's sustained base after an external pose reset
+   * (Stop preview button, tray pose reset) cleared it. Never interrupts an
+   * in-flight sequence, occasional, preview, or paused/disabled engine.
+   */
+  resync() {
+    const input = this.input
+    if (!input || !input.enabled || input.paused || !input.scene || this.preview || this.playing) return
+    this.restore(input.state, this.generation, new Set(), input.profile)
   }
 }

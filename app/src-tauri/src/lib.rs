@@ -11,17 +11,36 @@ mod speech_macos;
 static MONITORING: AtomicBool = AtomicBool::new(false);
 static PINNED: AtomicBool = AtomicBool::new(true);
 
+fn raise_settings_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    // Queue unminimize/show before focus: the Linux backend can otherwise
+    // discard focus while its cached minimized/visible flags are still stale.
+    window.unminimize().map_err(|e| e.to_string())?;
+    window.show().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let target = window.clone();
+        window.run_on_main_thread(move || {
+            if let Ok(native) = target.gtk_window() {
+                // Present raises as well as focuses an existing GTK window.
+                native.present_with_time(gtk::gdk::ffi::GDK_CURRENT_TIME as u32);
+                if let Some(surface) = native.window() {
+                    surface.raise();
+                }
+            }
+        }).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    window.set_focus().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     // Ordinary window: raise it on open so it doesn't land behind other
     // windows, but never pin it topmost.
     if let Some(window) = app.get_webview_window("settings") {
-        if window.is_minimized().unwrap_or(false) {
-            window.unminimize().map_err(|e| e.to_string())?;
-        }
-        window.show().map_err(|e| e.to_string())?;
-        window.set_focus().map_err(|e| e.to_string())?;
-        return Ok(());
+        return raise_settings_window(&window);
     }
     let window = tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App("index.html?settings".into()))
         .title("Cuttle Pets — Settings")
@@ -30,10 +49,10 @@ fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
         .resizable(true)
         .decorations(true)
         .transparent(false)
+        .center()
         .focused(true)
         .build().map_err(|e| e.to_string())?;
-    let _ = window.set_focus();
-    Ok(())
+    raise_settings_window(&window)
 }
 
 #[tauri::command]
@@ -125,6 +144,15 @@ async fn pick_dance_file() -> Result<Option<String>, String> {
 async fn pick_music_file() -> Result<Option<String>, String> {
     let file = rfd::AsyncFileDialog::new()
         .add_filter("Music", &["mp3", "wav", "ogg"])
+        .pick_file()
+        .await;
+    Ok(file.map(|f| f.path().to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+async fn pick_companion_file() -> Result<Option<String>, String> {
+    let file = rfd::AsyncFileDialog::new()
+        .add_filter("3D Model (GLB converts fastest)", &["glb", "gltf", "fbx", "dae"])
         .pick_file()
         .await;
     Ok(file.map(|f| f.path().to_string_lossy().to_string()))
@@ -492,6 +520,7 @@ pub fn run() {
             pick_vrm_file,
             pick_dance_file,
             pick_music_file,
+            pick_companion_file,
             supports_input_regions,
             set_input_regions,
             start_cursor_monitor,

@@ -2,9 +2,11 @@ import { isTauri, invoke } from '@tauri-apps/api/core'
 import { emit, emitTo, listen } from '@tauri-apps/api/event'
 import type { BehaviorEntryLocation } from './behavior'
 import type { DancePreset } from './motion-controller'
+import type { CompanionAction } from './companions'
 
 export type PetCommand =
-  | { type: 'animation'; id: string; preset?: DancePreset; mode?: 'once' | 'loop'; durationMs?: number; source?: BehaviorEntryLocation }
+  | { type: 'animation'; id: string; preset?: DancePreset; mode?: 'once' | 'loop'; durationMs?: number; source?: BehaviorEntryLocation; companions?: CompanionAction[] }
+  | { type: 'companion'; action: CompanionAction }
   | { type: 'stop' }
   | { type: 'status' }
   | { type: 'music-preview'; active: boolean }

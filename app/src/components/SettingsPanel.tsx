@@ -1,3 +1,5 @@
+import { useFileDrop, singleModelPath } from '../hooks/useFileDrop'
+import { FileDropHint } from './FileDropHint'
 import './settings.css'
 import { normalizeCustomDances } from '../custom-dances'
 import { AnimationSettingsPanel } from './AnimationSettingsPanel'
@@ -10,6 +12,9 @@ import { petUrl } from '../config'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, Play, Loader, Sparkles, Trash2, Upload, Music, Github } from 'lucide-react'
 import { BehaviorPanel } from './BehaviorPanel'
+import { PetsPanel } from './PetsPanel'
+import { PropsPanel } from './PropsPanel'
+import type { CompanionAction, PetSettings, PropSettings } from '../companions'
 import { VersionChip, VersionFooter, openExternal } from './VersionFooter'
 import { APP_REPO_URL } from '../version'
 import { describeStatus, type BehaviorEntryLocation, type BehaviorSettings, type BehaviorStateId } from '../behavior'
@@ -83,9 +88,13 @@ interface SettingsPanelProps {
   onPinnedChange: (v: boolean) => void
   behaviorSettings: BehaviorSettings
   onBehaviorSettingsChange: (v: BehaviorSettings) => void
+  petSettings: PetSettings
+  onPetSettingsChange: (v: PetSettings) => void
+  propSettings: PropSettings
+  onPropSettingsChange: (v: PropSettings) => void
 }
 
-type Tab = 'animations' | 'behavior' | 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'quality' | 'display'
+type Tab = 'animations' | 'behavior' | 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'quality' | 'display' | 'pets' | 'props'
 
 const BUILTIN_MODELS = ['/model1.vrm', '/model2.vrm', '/model3.vrm', '/model4.vrm', '/model5.vrm']
 
@@ -155,7 +164,10 @@ export function SettingsPanel({
   panelWidth, onPanelWidthChange,
   pinned, onPinnedChange,
   behaviorSettings, onBehaviorSettingsChange,
+  petSettings, onPetSettingsChange,
+  propSettings, onPropSettingsChange,
 }: SettingsPanelProps) {
+  const testCompanion = (action: CompanionAction) => sendPetCommand({ type: 'companion', action })
   const t = (zh: string, en: string) => language === 'en' ? en : zh
 
   const [tab, setTab] = useState<Tab>('general')
@@ -186,6 +198,9 @@ export function SettingsPanel({
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [customDances, setCustomDances] = useState<DanceItem[]>([])
   const [importingDance, setImportingDance] = useState(false)
+  const [danceImportError, setDanceImportError] = useState('')
+  const [importingModel, setImportingModel] = useState(false)
+  const importBusy = useRef(false)
   const [petStatus, setPetStatus] = useState<PetStatusPayload | null>(getLastPetStatus)
   useEffect(() => {
     if (!visible) return
@@ -284,6 +299,69 @@ export function SettingsPanel({
     if (!visible || tab !== 'animations') return
     fetchCustomDances()
   }, [visible, tab, fetchCustomDances])
+
+  const importModel = async (path: string) => {
+    if (importBusy.current) return
+    importBusy.current = true
+    setImportingModel(true)
+    setModelImportError('')
+    try {
+      singleModelPath([path], ['vrm'])
+      const res = await fetch(petUrl('/model/import'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Model import failed')
+      const list = await fetch(petUrl('/model/list')).then(r => r.json())
+      if (list.models) setModels(list.models.map((m: { name: string; url: string }) => ({ ...m, url: petUrl(m.url) })))
+      if (data.url) onModelChange(petUrl(data.url))
+    } catch (error) {
+      setModelImportError(error instanceof Error ? error.message : String(error))
+    } finally {
+      importBusy.current = false
+      setImportingModel(false)
+    }
+  }
+
+  const importMotion = async (paths: string[], pickMusic = false) => {
+    if (importBusy.current) return
+    importBusy.current = true
+    setImportingDance(true)
+    setDanceImportError('')
+    try {
+      if (!paths.length || paths.some(path => !/\.(vmd|vrma|fbx|mp3)$/i.test(path))) {
+        throw new Error('Supported files: .vmd, .vrma, .fbx, .mp3')
+      }
+      for (const path of paths) {
+        const res = await fetch(petUrl('/dance/import'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }),
+        })
+        const data = await res.json()
+        if (!res.ok || !data.ok) throw new Error(data.error || 'Motion import failed')
+      }
+      if (pickMusic) {
+        const path = await invoke<string | null>('pick_music_file')
+        if (path) {
+          const res = await fetch(petUrl('/dance/import'), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }),
+          })
+          const data = await res.json()
+          if (!res.ok || !data.ok) throw new Error(data.error || 'Music import failed')
+        }
+      }
+    } catch (error) {
+      setDanceImportError(error instanceof Error ? error.message : String(error))
+    } finally {
+      fetchCustomDances()
+      importBusy.current = false
+      setImportingDance(false)
+    }
+  }
+
+  const fileDragging = useFileDrop(visible && (tab === 'model' || tab === 'animations'), async paths => {
+    if (tab === 'model') await importModel(singleModelPath(paths, ['vrm']))
+    else await importMotion(paths)
+  }, message => tab === 'model' ? setModelImportError(message) : setDanceImportError(message))
 
   const savePersona = useCallback(() => {
     setPersonaSaving(true)
@@ -423,21 +501,21 @@ export function SettingsPanel({
 
         {/* Tabs */}
         <nav className="settings-tabs" aria-label="Settings sections" style={tabBarStyle}>
-          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'animations', 'behavior', 'quality', 'display'] as const).map((tb) => (
+          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'animations', 'behavior', 'pets', 'props', 'quality', 'display'] as const).map((tb) => (
             <button
               key={tb}
               className="settings-tab" aria-current={tab === tb ? "page" : undefined}
               onClick={() => setTab(tb)}
               style={{ ...tabStyle, ...(tab === tb ? activeTabStyle : {}) }}
             >
-              {{ animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tb]}
+              {{ animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), quality: t('画质', 'Quality'), display: t('显示', 'Display'), pets: t('宠物', 'Pets'), props: t('道具', 'Props') }[tb]}
             </button>
           ))}
         </nav>
 
         {/* Tab content */}
         <div className="settings-content" style={{ ...contentStyle, maxHeight: standalone ? undefined : tab === 'music' && musicPreview ? '32vh' : '60vh', ...(standalone ? { flex: 1, minHeight: 0 } : {}), overflowY: 'auto', paddingRight: 4 }}>
-          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tab]}</h2><p>{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</p></div>}
+          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), pets: t('宠物', 'Pets'), props: t('道具', 'Props'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tab]}</h2><p>{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</p></div>}
           {tab === 'music'  && <MusicSettingsPanel fit={headphoneFit} music={musicSettings} enabled={musicEnabled} onFitChange={onHeadphoneFitChange} onMusicChange={onMusicSettingsChange} onEnabledChange={onMusicEnabledChange} onPreview={handlePreview} />}
           {tab === 'animations' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -526,39 +604,17 @@ export function SettingsPanel({
 
                   <div style={{ marginTop: 12 }}>
                     <div style={labelStyle}>{t('导入自定义动作', 'Import Custom Motion')}</div>
+                    <FileDropHint dragging={fileDragging}>{t('拖放动作文件和配套 .mp3 到此页面导入', 'Drop motion files and matching .mp3 music anywhere on this page to import.')}</FileDropHint>
+                    {danceImportError && <div role="alert" style={{ color: '#ffaaaa' }}>{danceImportError}</div>}
                     <button
                       disabled={importingDance}
                       onClick={async () => {
-                        setImportingDance(true)
                         try {
-                          // Pick motion file (.vmd/.vrma/.fbx)
-                          const vmdPath = await invoke<string | null>('pick_dance_file')
-                          if (!vmdPath) { setImportingDance(false); return }
-
-                          // Import motion file
-                          const vmdRes = await fetch(petUrl("/dance/import"), {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ path: vmdPath }),
-                          })
-                          const vmdData = await vmdRes.json()
-                          if (!vmdData.ok) throw new Error(vmdData.error)
-
-                          // Ask for optional BGM
-                          const mp3Path = await invoke<string | null>('pick_music_file')
-                          if (mp3Path) {
-                            await fetch(petUrl("/dance/import"), {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ path: mp3Path }),
-                            })
-                          }
-
-                          fetchCustomDances()
-                        } catch (err) {
-                          console.warn('Import dance failed:', err)
+                          const path = await invoke<string | null>('pick_dance_file')
+                          if (path) await importMotion([path], true)
+                        } catch (error) {
+                          setDanceImportError(error instanceof Error ? error.message : String(error))
                         }
-                        setImportingDance(false)
                       }}
                       style={{ ...applyBtnStyle, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
                     >
@@ -575,7 +631,9 @@ export function SettingsPanel({
               <AnimationSettingsPanel status={petStatus} settings={animationSettings} onChange={onAnimationSettingsChange} customDances={customDances} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} />
             </div>
           )}
-          {tab === 'behavior' && <BehaviorPanel status={petStatus} settings={behaviorSettings} onChange={onBehaviorSettingsChange} customDances={customDances} statusText={petStatusText} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} />}
+          {tab === 'behavior' && <BehaviorPanel status={petStatus} settings={behaviorSettings} onChange={onBehaviorSettingsChange} customDances={customDances} statusText={petStatusText} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} pets={petSettings.pets} props={propSettings.props} onCompanionTest={testCompanion} />}
+          {tab === 'pets' && <PetsPanel pets={petSettings.pets} onChange={pets => onPetSettingsChange({ ...petSettings, pets })} language={language} onTest={testCompanion} />}
+          {tab === 'props' && <PropsPanel props={propSettings.props} onChange={props => onPropSettingsChange({ ...propSettings, props })} language={language} onTest={testCompanion} />}
           {tab === 'cuttle' && <CuttleConnection />}
           {tab === 'general' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -844,28 +902,15 @@ export function SettingsPanel({
               {modelImportError && <div role="alert" style={{ color: '#ffaaaa' }}>{modelImportError}</div>}
               <div style={{ marginTop: 12 }}>
                 <div style={labelStyle}>{t('导入自定义模型', 'Import Custom Model')}</div>
+                <FileDropHint dragging={fileDragging}>{t('拖放 .vrm 到此页面导入', 'Drop a .vrm anywhere on this page to import.')}</FileDropHint>
                 <button
+                  disabled={importingModel}
                   onClick={async () => {
-                    setModelImportError('')
                     try {
-                      const filePath = await invoke<string | null>('pick_vrm_file')
-                      if (!filePath) return
-                      const res = await fetch(petUrl("/model/import"), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path: filePath }),
-                      })
-                      const data = await res.json()
-                      if (!res.ok || !data.ok) throw new Error(data.error || 'Model import failed')
-                      if (data.url) {
-                        fetch(petUrl("/model/list"))
-                          .then((r) => r.json())
-                          .then((d) => { if (d.models) setModels(d.models.map((m: { name: string; url: string }) => ({ ...m, url: petUrl(m.url) }))) })
-                          .catch(() => {})
-                        onModelChange(petUrl(data.url))
-                      }
-                    } catch (err) {
-                      setModelImportError(err instanceof Error ? err.message : 'Model import failed')
+                      const path = await invoke<string | null>('pick_vrm_file')
+                      if (path) await importModel(path)
+                    } catch (error) {
+                      setModelImportError(error instanceof Error ? error.message : String(error))
                     }
                   }}
                   style={{ ...applyBtnStyle, width: '100%' }}

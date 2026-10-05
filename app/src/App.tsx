@@ -15,6 +15,8 @@ import { openSettingsWindow, subscribeWindowEvent, replyScreenshot, publishStatu
 import { DEFAULT_ANIMATIONS, normalizeAnimations, type AnimationSettings } from './animation-settings'
 import { normalizeBehaviorSettings, resolvePetState, playReactionStep, pickWeightedEntry, type BehaviorSettings, type BehaviorStateId } from './behavior'
 import type { BehaviorPlayback } from './behavior-engine'
+import { normalizePetSettings, normalizePropSettings, type PetSettings, type PropSettings } from './companions'
+import type { CompanionSnapshot } from './companion-runtime'
 import { useBehaviorEngine } from './hooks/useBehaviorEngine'
 import { usePassThrough } from './hooks/usePassThrough'
 import { dancePresets, actionPresets, localizedPresetLabel } from './motion-controller'
@@ -79,6 +81,8 @@ export default function App() {
   const workingRef = useRef(false)
   const [working, setWorkingState] = useState(false)
   const [behaviorSettings, setBehaviorSettings] = useState<BehaviorSettings>(() => normalizeBehaviorSettings(undefined))
+  const [petSettings, setPetSettings] = useState<PetSettings>(() => normalizePetSettings(undefined))
+  const [propSettings, setPropSettings] = useState<PropSettings>(() => normalizePropSettings(undefined))
   const behaviorEnabledRef = useRef(true)
   behaviorEnabledRef.current = behaviorSettings.enabled
   const [pinned, setPinned] = useState(true)
@@ -115,7 +119,7 @@ export default function App() {
   // behavior engine; reactionDone restores the pet's own working/dance state.
   const [reactionActive, setReactionActive] = useState(false)
   const [suspended, setSuspended] = useState(false)
-  const reactionRef = useRef<{ watchdog?: ReturnType<typeof setTimeout>; playing?: { id: string; index: number } } | null>(null)
+  const reactionRef = useRef<{ watchdog?: ReturnType<typeof setTimeout>; playing?: { id: string; index: number }; companions?: CompanionSnapshot | null } | null>(null)
   const [hideMood, setHideMood] = useState(false)
   const [screenObserve, setScreenObserve] = useState(false)
   const [screenObserveInterval, setScreenObserveInterval] = useState(60)
@@ -162,6 +166,8 @@ export default function App() {
       saveSettings({ language: detected })
     }
     if (s.animationSettings) setAnimationSettings(normalizeAnimations(s.animationSettings))
+    if (s.petSettings !== undefined) setPetSettings(normalizePetSettings(s.petSettings))
+    if (s.propSettings !== undefined) setPropSettings(normalizePropSettings(s.propSettings))
     if (s.behaviorSettings || initial) {
       const normalized = normalizeBehaviorSettings(s.behaviorSettings, s.musicSettings)
       setBehaviorSettings(normalized)
@@ -178,9 +184,10 @@ export default function App() {
   useEffect(() => subscribeWindowEvent<PetCommand>('pet-command', command => {
     if (command.type === 'status') { publishCurrentStatus(true); return }
     if (command.type === 'animation') {
-      engineRef.current?.previewEntry({ animation: command.id, preset: command.preset, durationMs: command.durationMs }, command.mode === 'loop', command.source)
+      engineRef.current?.previewEntry({ animation: command.id, preset: command.preset, durationMs: command.durationMs, companions: command.companions }, command.mode === 'loop', command.source)
     }
-    if (command.type === 'stop') { engineRef.current?.stopPreview(); sceneRef.current?.resetPose(); setDancing(false) }
+    if (command.type === 'companion') sceneRef.current?.companion(command.action)
+    if (command.type === 'stop') { engineRef.current?.stopPreview(); sceneRef.current?.resetPose(); engineRef.current?.resync(); setDancing(false) }
     if (command.type === 'music-preview') sceneRef.current?.setMusicPreview(command.active)
     if (command.type === 'bubble-preview') (window as any).__clawPreviewBubble?.('Hello! This is your text bubble preview.')
     if (command.type === 'screenshot') replyScreenshot(command.request, sceneRef.current?.captureScreenshot() ?? null)
@@ -241,7 +248,7 @@ export default function App() {
         if (next) (window as any).__clawPreviewBubble?.('Text bubbles on')
       }
       if (event.payload === 'camera') sceneRef.current?.resetCamera()
-      if (event.payload === 'pose') sceneRef.current?.resetPose()
+      if (event.payload === 'pose') { sceneRef.current?.resetPose(); engineRef.current?.resync() }
     })
     return () => { model.then(f => f()); animation.then(f => f()); controls.then(f => f()) }
   }, [])
@@ -293,6 +300,8 @@ export default function App() {
     reactionRef.current = null
     const scene = sceneRef.current
     if (scene) {
+      // Pets/props the reaction showed or moved go back to how they were.
+      if (active.companions) scene.restoreCompanions(active.companions)
       scene.resetPose()
       scene.setWorking(workingRef.current)
       // Resume a manual dance when automatic behavior is disabled.
@@ -326,7 +335,7 @@ export default function App() {
     if (msg.reactionStep) {
       const scene = sceneRef.current
       if (!reactionRef.current) {
-        reactionRef.current = {}
+        reactionRef.current = { companions: scene?.snapshotCompanions() }
         setReactionActive(true)
       }
       reactionRef.current.playing = msg.reaction && msg.reactionIndex !== undefined ? { id: msg.reaction, index: msg.reactionIndex } : undefined
@@ -340,7 +349,8 @@ export default function App() {
       return
     }
     if (msg.reactionDone) { endReaction(); return }
-    if (msg.demoReset) sceneRef.current?.resetPose()
+    if (msg.companion) { sceneRef.current?.companion(msg.companion); return }
+    if (msg.demoReset) { sceneRef.current?.resetPose(); engineRef.current?.resync() }
     if (msg.sipCoffee) sceneRef.current?.requestCoffeeSip()
     if (msg.working !== undefined) {
       // The engine applies state drivers; previews resume the latest state.
@@ -545,7 +555,7 @@ export default function App() {
       {modelError && <div role="alert" data-no-passthrough style={{ position: 'absolute', top: 20, left: 16, right: 16, zIndex: 1000, background: '#402020', color: 'white', padding: 12, borderRadius: 8 }}>
         {modelError}<button onClick={() => { setModelError(''); setModelPath(DEFAULT_MODEL); saveSettings({ modelPath: DEFAULT_MODEL }) }}>Use default model</button>
       </div>}
-      <VRMScene animationSettings={animationSettings} ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} gazeGain={gazeGain} onTouch={handleTouch} onModelError={message => { setSceneReady(false); setModelError(message) }} onModelLoaded={() => { setSceneReady(true); setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
+      <VRMScene animationSettings={animationSettings} ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} gazeGain={gazeGain} pets={petSettings.pets} props={propSettings.props} onTouch={handleTouch} onModelError={message => { setSceneReady(false); setModelError(message) }} onModelLoaded={() => { setSceneReady(true); setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
       <div style={hoverControlsStyle}>{!hideMood && <MoodIndicator uiAlign={uiAlign} />}</div>
       <TextBubble onMessage={handleVrmMessage} enabled={showText} ttsEnabled={ttsEnabled} bubble={bubbleSettings} />
       <div style={hoverControlsStyle}>{!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}</div>

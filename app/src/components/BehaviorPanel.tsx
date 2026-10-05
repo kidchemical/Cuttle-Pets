@@ -11,6 +11,8 @@ import type { DancePreset } from '../motion-controller'
 import type { PreviewMode } from './AnimationSettingsPanel'
 import type { PetStatusPayload } from '../window-sync'
 import { petUrl } from '../config'
+import { CompanionActionsEditor } from './CompanionActionsEditor'
+import type { CompanionAction, PetConfig, PropConfig } from '../companions'
 
 interface Props {
   settings: BehaviorSettings
@@ -21,6 +23,9 @@ interface Props {
   onPreview?: (id: string, preset?: DancePreset, mode?: PreviewMode, durationMs?: number, source?: BehaviorEntryLocation) => void
   onStop?: () => void
   language?: 'zh' | 'en'
+  pets?: PetConfig[]
+  props?: PropConfig[]
+  onCompanionTest?: (action: CompanionAction) => void
 }
 
 /** Plain-data clone (profiles are JSON; avoids webview structuredClone gaps). */
@@ -82,7 +87,7 @@ function EmotionSelect({ value, onPick }: { value: string; onPick: (emotion: str
   </select>
 }
 
-export function BehaviorPanel({ settings, onChange, customDances, statusText, status, onPreview, onStop, language = 'zh' }: Props) {
+export function BehaviorPanel({ settings, onChange, customDances, statusText, status, onPreview, onStop, language = 'zh', pets = [], props = [], onCompanionTest }: Props) {
   const animations = animationCatalog(customDances, language)
   const catalog: AnimationOption[] = [...animations, ...BEHAVIOR_STATES.map(state => ({
     id: `behavior:${state.id}`, label: `${state.label} (behavior)`, group: 'Behaviors', procedural: false,
@@ -371,7 +376,8 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
         </div>
         <div style={{ display: 'grid', gap: 6 }}>
           <span style={muted}>Steps — played in order, then the pet returns to its state:</span>
-          {reaction.steps.map((step, index) => <div key={index} className="live-entry" data-reaction-step={`${reaction.id}:${index}`} data-active={status?.reaction?.id === reaction.id && status.reaction.index === index} style={{ ...row, border: '1px solid transparent', borderRadius: 8, padding: 6 }}>
+          {reaction.steps.map((step, index) => <div key={index} style={{ display: 'grid', gap: 6 }}>
+          <div className="live-entry" data-reaction-step={`${reaction.id}:${index}`} data-active={status?.reaction?.id === reaction.id && status.reaction.index === index} style={{ ...row, border: '1px solid transparent', borderRadius: 8, padding: 6 }}>
             {status?.reaction?.id === reaction.id && status.reaction.index === index && <span className="playback-badge">Playing</span>}
             <span style={{ ...muted, minWidth: 18 }}>{index + 1}.</span>
             <AnimationSelect value={step.animation} catalog={animations} onPick={animationId => patchReaction(reaction.id, r => { r.steps[index] = { ...r.steps[index], ...pickReactionAnimation(animationId) } })} />
@@ -398,6 +404,9 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
             </label>
             <button style={smallButton} onClick={() => tryEntry(step, false)} title="Try once"><Play size={12} /></button>
             <button style={smallButton} onClick={() => patchReaction(reaction.id, r => { if (r.steps.length > 1) r.steps.splice(index, 1) })} title="Remove" aria-label="Remove step"><Trash2 size={12} /></button>
+          </div>
+          <CompanionActionsEditor value={step.companions ?? []} pets={pets} props={props} language={language} onTest={onCompanionTest}
+            onChange={companions => patchReaction(reaction.id, r => { r.steps[index].companions = companions.length ? companions : undefined })} />
           </div>)}
           <div><button style={smallButton} onClick={() => patchReaction(reaction.id, r => {
             if (r.steps.length < 10) r.steps.push({ animation: 'idle', durationMs: 3000 })
@@ -492,6 +501,13 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
                 </span>
               </label>
             )}
+            <CompanionActionsEditor value={selEntry.companions ?? []} pets={pets} props={props} language={language} onTest={onCompanionTest}
+              onChange={companions => {
+                const patch = { companions: companions.length ? companions : undefined }
+                if (sel.phase === 'mains') setMainEntry(sel.state, sel.index, patch)
+                else if (sel.phase === 'occasionals') updateOccasional(sel.state, sel.index, patch)
+                else updateEntry(sel.state, sel.phase as 'start' | 'end', sel.index, patch)
+              }} />
             <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'once', selEntry.durationMs, sel)}>Preview once</button>
             <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'loop', selEntry.durationMs, sel)}>Preview looped</button>
             <button style={button} onClick={onStop}>Stop preview</button>

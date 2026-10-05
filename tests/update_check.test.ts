@@ -70,6 +70,50 @@ async function main() {
   // The fresh result was cached, so a later offline check still knows.
   stubFetch(() => Promise.reject(new Error('offline')))
   assert.equal((await checkForUpdates('0.1.0')).state, 'available')
+
+  // A failed check backs off: the failure is recorded, and a later automatic
+  // check returns unknown without spending another network request.
+  store.clear()
+  let calls = 0
+  stubFetch(() => {
+    calls++
+    return Promise.reject(new Error('offline'))
+  })
+  assert.deepEqual(await checkForUpdates('0.1.0', true), { state: 'unknown' })
+  assert.equal(calls, 1)
+  assert.deepEqual(await checkForUpdates('0.1.0'), { state: 'unknown' })
+  assert.equal(calls, 1)
+
+  // Forced checks (the manual "Check for updates" button) bypass the backoff.
+  assert.deepEqual(await checkForUpdates('0.1.0', true), { state: 'unknown' })
+  assert.equal(calls, 2)
+
+  // An old failure marker no longer blocks automatic retries, and a success
+  // clears the marker.
+  store.set(
+    'cuttle-pet-update-check-fail-v1',
+    JSON.stringify({ failedAt: Date.now() - 61 * 60 * 1000 }),
+  )
+  stubFetch(() =>
+    jsonResponse(200, { tag_name: 'v0.2.0', html_url: 'https://example.invalid/r', body: '', published_at: '' }),
+  )
+  assert.equal((await checkForUpdates('0.1.0')).state, 'available')
+  assert.equal(store.get('cuttle-pet-update-check-fail-v1'), undefined)
+
+  // A stale success cache still answers while backing off after a failure.
+  store.set(
+    'cuttle-pet-update-check-v1',
+    JSON.stringify({ checkedAt: Date.now() - 7 * 60 * 60 * 1000, latest: '0.1.0', url: 'https://example.invalid/r', notes: '', publishedAt: '' }),
+  )
+  calls = 0
+  stubFetch(() => {
+    calls++
+    return Promise.reject(new Error('offline'))
+  })
+  assert.deepEqual(await checkForUpdates('0.1.0', true), { state: 'latest', latest: '0.1.0' })
+  assert.equal(calls, 1)
+  assert.deepEqual(await checkForUpdates('0.1.0'), { state: 'latest', latest: '0.1.0' })
+  assert.equal(calls, 1)
   ;(globalThis as any).fetch = realFetch
 
   console.log('update_check.test.ts passed')

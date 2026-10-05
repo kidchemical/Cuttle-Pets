@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Cuttle bridge — make the pet react to Cuttle chat activity.
 
-Polls Cuttle's live-status endpoint and maps turn state onto pet verbs:
+Listens to Cuttle's activity stream and, on each change, reads the busy
+chats' live status (plain interval polling when the stream is unavailable).
+Maps turn state onto pet verbs:
 
     idle        -> relaxed
     thinking    -> think + scratchHead
@@ -22,6 +24,7 @@ import json
 import os
 import ssl
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -79,11 +82,19 @@ def _post(url: str, body: dict, timeout: float = 4.0) -> dict:
 
 
 def discover_sessions() -> list[str]:
-    """Discover all chats owned by the authenticated Cuttle user, including new chats."""
+    """Discover the authenticated user's chats that Cuttle reports as busy.
+
+    The session list already carries Cuttle's own `generating` flag (the same
+    one behind its history spinners), so only those chats need a live-status
+    lookup. Older Cuttle builds without the flag fall back to every chat.
+    """
     data = _get(f"{CUTTLE}/api/auth/sessions")
     if not data.get("success"):
         raise RuntimeError(f"chat discovery failed: {data.get('error', 'unknown error')}")
-    return [str(s["id"]) for s in data.get("sessions", []) if s.get("id") is not None]
+    owned = [s for s in data.get("sessions", []) if s.get("id") is not None]
+    if owned and all("generating" in s for s in owned):
+        owned = [s for s in owned if s.get("generating")]
+    return [str(s["id"]) for s in owned]
 
 
 def fetch_state(sessions: list[str] | None = None) -> tuple[str, str]:
@@ -130,6 +141,58 @@ HEARTBEAT_SEC = 60.0
 STALE_BUSY_SEC = 900.0
 
 
+# Activity stream: wake the loop on Cuttle changes instead of fixed polling.
+# Resync anyway every RESYNC_SEC for changes the stream cannot see (expiry).
+RESYNC_SEC = 10.0
+STREAM_MIN_GAP_SEC = 0.25
+STREAM_READ_TIMEOUT = 45.0
+STREAM_RETRY_SEC = 30.0
+
+
+class ActivityListener:
+    """Follows Cuttle's /api/activity/stream and wakes the poll loop on changes.
+
+    Older Cuttle builds without the stream leave it disconnected; the loop then
+    falls back to interval polling.
+    """
+
+    def __init__(self) -> None:
+        self.changed = threading.Event()
+        self.connected = False
+        self._stop = threading.Event()
+
+    def start(self) -> None:
+        threading.Thread(target=self._run, name="cuttle-activity", daemon=True).start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                req = urllib.request.Request(f"{CUTTLE}/api/activity/stream", headers=_headers())
+                with urllib.request.urlopen(req, timeout=STREAM_READ_TIMEOUT, context=_SSL_CTX) as r:
+                    self.connected = True
+                    for line in r:
+                        if line.startswith(b"event: activity"):
+                            self.changed.set()
+            except Exception:
+                pass
+            if self.connected:
+                self.connected = False
+                self.changed.set()  # resync right after a drop
+            self._stop.wait(STREAM_RETRY_SEC)
+
+    def pause(self, interval: float) -> None:
+        """Wait for the next poll: until Cuttle reports activity when streaming,
+        otherwise for the plain interval."""
+        if not self.connected:
+            time.sleep(interval)
+            return
+        self.changed.wait(RESYNC_SEC)
+        # Coalesce bursts (live status ticks) into one read; clearing before
+        # the read keeps changes that land during it.
+        self._stop.wait(STREAM_MIN_GAP_SEC)
+        self.changed.clear()
+
+
 def state_after_poll_failure(last: str | None, failures: int) -> tuple[str, str] | None:
     """Fallback (state, detail) once Cuttle has been unreachable for a while,
     else None to keep waiting silently."""
@@ -149,7 +212,7 @@ def fetch_state_for(sessions):
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--interval", type=float, default=3.0)
+    ap.add_argument("--interval", type=float, default=1.0)
     ap.add_argument("--session", action="append", default=[],
                     help="Cuttle session id to watch (repeatable); "
                          "also $CUTTLE_PET_SESSIONS; default: all chats")
@@ -172,6 +235,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     global CUTTLE
+    listener = ActivityListener()
+    if not a.once:
+        listener.start()
     last = None
     announced: tuple[str, str] | None = None
     last_emit = 0.0
@@ -278,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"pet sync failed: {exc}", file=sys.stderr)
         if a.once:
             return 0
-        time.sleep(a.interval)
+        listener.pause(a.interval)
 
 
 if __name__ == "__main__":

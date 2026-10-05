@@ -16,6 +16,10 @@ Responsibilities:
   * ``GET/PATCH /settings``     — renderer settings store.
   * ``POST /click-through``     — toggle mouse pass-through.
   * model / dance asset serving + import.
+  * ``/assets/<pets|props>/…``  — companion GLB library: stage a local
+                                  GLB/glTF/FBX/DAE (+ textures) for the
+                                  settings window to convert, then store GLB.
+  * ``GET /companions``, ``POST /companion`` — pet/prop catalog + control.
 
 Everything is loopback-only and dependency-light (stdlib + Flask).
 """
@@ -50,6 +54,8 @@ DATA_DIR = Path(os.environ.get("CUTTLE_PET_DATA", Path.home() / ".cuttle-pet"))
 MODELS_DIR = DATA_DIR / "models"
 DANCES_DIR = DATA_DIR / "dances"
 AUDIO_DIR = DATA_DIR / "audio"
+PETS_DIR = DATA_DIR / "pets"
+PROPS_DIR = DATA_DIR / "props"
 SETTINGS_PATH = DATA_DIR / "settings.json"
 
 HOST = os.environ.get("CUTTLE_PET_HOST", "127.0.0.1")
@@ -580,6 +586,9 @@ def _normalize_reaction_step(value: Any) -> dict[str, Any] | None:
                           "type": motion_type if motion_type in ("vmd", "vrma", "fbx") else "vmd",
                           "url": preset["url"],
                           "bgm": preset.get("bgm") if isinstance(preset.get("bgm"), str) else None}
+    companions = _normalize_companion_actions(value.get("companions"))
+    if companions:
+        step["companions"] = companions
     props = value.get("props")
     if isinstance(props, dict) and (props.get("working") is True or props.get("sip") is True):
         step["props"] = {}
@@ -721,6 +730,8 @@ def _play_reaction_sequence(reaction: dict[str, Any], values: dict[str, Any], ge
             frame["preset"] = step["preset"]
         if step.get("props"):
             frame["props"] = step["props"]
+        if step.get("companions"):
+            frame["companions"] = step["companions"]
         payload: dict[str, Any] = {
             "reactionStep": frame, "reaction": reaction["id"],
             "reactionIndex": index, "reactionCount": len(steps),
@@ -986,6 +997,285 @@ def audio_serve(name: str):
     return _serve_from(AUDIO_DIR, name)
 
 
+# ── companion assets (pets / props) ────────────────────────────────────────
+# Stored as GLB under DATA_DIR/pets and DATA_DIR/props (user data: only an
+# explicit delete removes files). Importing is two-step because FBX/DAE need
+# three.js to convert: /stage copies the source plus its sibling textures into
+# a private staging dir the settings window loads from, then /commit (already
+# GLB) or /upload (converted GLB bytes) stores the result.
+_ASSET_SOURCE_SUFFIXES = (".glb", ".gltf", ".fbx", ".dae")
+_ASSET_SIDECAR_SUFFIXES = (".bin", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".webp", ".gif", ".ktx2", ".dds")
+_ASSET_STAGE_LIMIT = 300 * 1024 * 1024
+_ASSET_STAGE_TTL = 3600
+_STAGE_TOKEN_RE = re.compile(r"^[a-f0-9]{16}$")
+
+
+def _asset_dir(kind: str) -> Path | None:
+    return {"pets": PETS_DIR, "props": PROPS_DIR}.get(kind)
+
+
+def _asset_stem(name: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(name).stem).strip("-._")[:60]
+    return stem or "asset"
+
+
+def _unique_asset_path(directory: Path, stem: str) -> Path:
+    target = directory / f"{stem}.glb"
+    n = 2
+    while target.exists():
+        target = directory / f"{stem}-{n}.glb"
+        n += 1
+    return target
+
+
+def _clean_stale_stages(directory: Path) -> None:
+    stage_root = directory / ".staging"
+    if not stage_root.is_dir():
+        return
+    cutoff = time.time() - _ASSET_STAGE_TTL
+    for entry in stage_root.iterdir():
+        try:
+            if entry.is_dir() and entry.stat().st_mtime < cutoff:
+                shutil.rmtree(entry, ignore_errors=True)
+        except OSError:
+            pass
+
+
+def _stage_dir(kind: str, token: str) -> Path | None:
+    directory = _asset_dir(kind)
+    if directory is None or not _STAGE_TOKEN_RE.match(token or ""):
+        return None
+    stage = directory / ".staging" / token
+    return stage if stage.is_dir() else None
+
+
+@app.get("/assets/<kind>/list")
+def asset_list(kind: str):
+    directory = _asset_dir(kind)
+    if directory is None:
+        return jsonify({"ok": False, "error": "kind must be pets or props"}), 404
+    _ensure_dirs()
+    items = [{"name": p.name, "size": p.stat().st_size, "url": f"/assets/{kind}/serve/{quote(p.name)}"}
+             for p in sorted(directory.iterdir()) if p.is_file() and p.suffix.lower() == ".glb"]
+    return jsonify({"ok": True, "assets": items})
+
+
+@app.post("/assets/<kind>/stage")
+def asset_stage(kind: str):
+    directory = _asset_dir(kind)
+    if directory is None:
+        return jsonify({"ok": False, "error": "kind must be pets or props"}), 404
+    src = (request.get_json(force=True, silent=True) or {}).get("path")
+    source = Path(src).expanduser() if isinstance(src, str) and src else None
+    if source is None or not source.is_file():
+        return jsonify({"ok": False, "error": "need a readable local path"}), 400
+    suffix = source.suffix.lower()
+    if suffix not in _ASSET_SOURCE_SUFFIXES:
+        return jsonify({"ok": False, "error": "Choose a .glb, .gltf, .fbx or .dae file"}), 400
+    _ensure_dirs()
+    _clean_stale_stages(directory)
+    token = os.urandom(8).hex()
+    stage = directory / ".staging" / token
+    stage.mkdir(parents=True)
+    # Textures usually sit beside the model or one folder down (images/,
+    # textures/); copy those so relative references resolve while loading.
+    files = [source]
+    for sibling in source.parent.iterdir():
+        if sibling.is_file() and sibling.suffix.lower() in _ASSET_SIDECAR_SUFFIXES:
+            files.append(sibling)
+        elif sibling.is_dir() and not sibling.name.startswith("."):
+            try:
+                files.extend(f for f in sibling.iterdir()
+                             if f.is_file() and f.suffix.lower() in _ASSET_SIDECAR_SUFFIXES)
+            except OSError:
+                continue
+    total = 0
+    for f in files:
+        size = f.stat().st_size
+        total += size
+        if total > _ASSET_STAGE_LIMIT:
+            shutil.rmtree(stage, ignore_errors=True)
+            return jsonify({"ok": False, "error": "Model folder is too large to import (300 MB limit)"}), 413
+        dest = stage / f.relative_to(source.parent)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(f, dest)
+    return jsonify({"ok": True, "token": token, "format": suffix[1:], "name": source.stem,
+                    "url": f"/assets/{kind}/staging/{token}/{quote(source.name)}"})
+
+
+@app.get("/assets/<kind>/staging/<token>/<path:rel>")
+def asset_staging_serve(kind: str, token: str, rel: str):
+    stage = _stage_dir(kind, token)
+    if stage is None:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    # Loaders sometimes ask for a texture by bare name or a different case;
+    # fall back to a case-insensitive basename match inside the stage.
+    target = (stage / rel).resolve()
+    if not str(target).startswith(str(stage.resolve()) + os.sep) or not target.is_file():
+        wanted = Path(rel.replace("\\", "/")).name.lower()
+        target = next((p for p in stage.rglob("*") if p.is_file() and p.name.lower() == wanted), None)
+        if target is None:
+            return jsonify({"ok": False, "error": "not found"}), 404
+    mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    return send_file(target, mimetype=mime)
+
+
+@app.post("/assets/<kind>/commit")
+def asset_commit(kind: str):
+    """Store a staged .glb as-is (no conversion needed)."""
+    directory = _asset_dir(kind)
+    body = request.get_json(force=True, silent=True) or {}
+    stage = _stage_dir(kind, str(body.get("token", "")))
+    if directory is None or stage is None:
+        return jsonify({"ok": False, "error": "unknown staging token"}), 404
+    glbs = [p for p in stage.iterdir() if p.is_file() and p.suffix.lower() == ".glb"]
+    if len(glbs) != 1:
+        return jsonify({"ok": False, "error": "staged import is not a single .glb; convert and upload instead"}), 400
+    target = _unique_asset_path(directory, _asset_stem(str(body.get("name") or glbs[0].name)))
+    shutil.copy2(glbs[0], target)
+    shutil.rmtree(stage, ignore_errors=True)
+    return jsonify({"ok": True, "name": target.name, "url": f"/assets/{kind}/serve/{quote(target.name)}"})
+
+
+@app.post("/assets/<kind>/upload")
+def asset_upload(kind: str):
+    """Store converted GLB bytes (request body) and drop the staging dir."""
+    directory = _asset_dir(kind)
+    if directory is None:
+        return jsonify({"ok": False, "error": "kind must be pets or props"}), 404
+    data = request.get_data(cache=False)
+    if len(data) < 12 or data[:4] != b"glTF":
+        return jsonify({"ok": False, "error": "body must be a binary glTF (.glb)"}), 400
+    if len(data) > _ASSET_STAGE_LIMIT:
+        return jsonify({"ok": False, "error": "model too large"}), 413
+    _ensure_dirs()
+    target = _unique_asset_path(directory, _asset_stem(request.args.get("name", "asset")))
+    target.write_bytes(data)
+    stage = _stage_dir(kind, request.args.get("token", ""))
+    if stage is not None:
+        shutil.rmtree(stage, ignore_errors=True)
+    return jsonify({"ok": True, "name": target.name, "url": f"/assets/{kind}/serve/{quote(target.name)}"})
+
+
+@app.post("/assets/<kind>/delete")
+def asset_delete(kind: str):
+    directory = _asset_dir(kind)
+    if directory is None:
+        return jsonify({"ok": False, "error": "kind must be pets or props"}), 404
+    name = Path(str((request.get_json(force=True, silent=True) or {}).get("name", ""))).name
+    target = directory / name
+    if name.lower().endswith(".glb") and target.is_file():
+        target.unlink()
+        return jsonify({"ok": True, "deleted": name})
+    return jsonify({"ok": False, "error": "not found"}), 404
+
+
+@app.get("/assets/<kind>/serve/<path:name>")
+def asset_serve(kind: str, name: str):
+    directory = _asset_dir(kind)
+    if directory is None:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    return _serve_from(directory, name)
+
+
+# ── companion control ──────────────────────────────────────────────────────
+# Mirrors normalizeCompanionAction in app/src/companions.ts.
+_COMPANION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-_]{0,39}$")
+PET_ACTIONS = ("show", "hide", "toggle", "expression", "play", "stop", "move")
+PROP_ACTIONS = ("show", "hide", "toggle")
+PET_MOVES = ("hop", "spin", "flap", "wiggle", "bounce")
+PET_ANCHORS = ("shoulder", "head", "beside", "hands", "orbit")
+
+
+def _normalize_companion_action(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    kind = value.get("kind")
+    if kind not in ("pet", "prop"):
+        return None
+    cid = value.get("id")
+    if not isinstance(cid, str) or not _COMPANION_ID_RE.match(cid):
+        return None
+    act = value.get("action")
+    if act not in (PET_ACTIONS if kind == "pet" else PROP_ACTIONS):
+        return None
+    out: dict[str, Any] = {"kind": kind, "id": cid, "action": act}
+    raw = value.get("value")
+    raw = raw[:120] if isinstance(raw, str) else ""
+    if act in ("expression", "play", "move"):
+        if not raw:
+            return None
+        if act == "move" and raw not in PET_ANCHORS and raw != "home":
+            return None
+        if act == "play" and raw not in PET_MOVES and not raw.startswith("clip:"):
+            return None
+        out["value"] = raw
+    if act == "play" and value.get("loop") is True:
+        out["loop"] = True
+    if act == "expression" and value.get("durationMs") is not None:
+        try:
+            ms = int(float(value["durationMs"]))
+        except (TypeError, ValueError):
+            ms = 0
+        if ms > 0:
+            out["durationMs"] = min(ms, 600000)
+    return out
+
+
+def _normalize_companion_actions(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [a for a in (_normalize_companion_action(v) for v in value) if a][:6]
+
+
+def _companion_catalog() -> dict[str, list[dict[str, Any]]]:
+    settings = _load_settings()
+    pets_raw = (settings.get("petSettings") or {}).get("pets") if isinstance(settings.get("petSettings"), dict) else None
+    props_raw = (settings.get("propSettings") or {}).get("props") if isinstance(settings.get("propSettings"), dict) else None
+    pets = []
+    for pet in pets_raw if isinstance(pets_raw, list) else []:
+        if isinstance(pet, dict) and isinstance(pet.get("id"), str):
+            clips = (pet.get("asset") or {}).get("clips") if isinstance(pet.get("asset"), dict) else []
+            pets.append({
+                "id": pet["id"], "name": pet.get("name") or pet["id"], "enabled": pet.get("enabled") is not False,
+                "expressions": [e.get("id") for e in pet.get("expressions") or [] if isinstance(e, dict) and e.get("id")],
+                "moves": list(PET_MOVES) + [f"clip:{c}" for c in clips or [] if isinstance(c, str)],
+                "anchors": list(PET_ANCHORS),
+            })
+    props = [{"id": p["id"], "name": p.get("name") or p["id"], "enabled": p.get("enabled") is not False}
+             for p in (props_raw if isinstance(props_raw, list) else [])
+             if isinstance(p, dict) and isinstance(p.get("id"), str)]
+    return {"pets": pets, "props": props}
+
+
+@app.get("/companions")
+def companions_catalog():
+    """Pets and props an agent can control with POST /companion."""
+    return jsonify({"ok": True, **_companion_catalog(),
+                    "actions": {"pet": list(PET_ACTIONS), "prop": list(PROP_ACTIONS)}})
+
+
+@app.post("/companion")
+def companion_control():
+    body = request.get_json(force=True, silent=True) or {}
+    action = _normalize_companion_action(body)
+    if action is None:
+        return jsonify({"ok": False, "error": "need kind (pet|prop), id, a valid action and its value",
+                        "actions": {"pet": list(PET_ACTIONS), "prop": list(PROP_ACTIONS)},
+                        "moves": list(PET_MOVES), "anchors": list(PET_ANCHORS)}), 400
+    catalog = _companion_catalog()
+    known = [c["id"] for c in catalog["pets" if action["kind"] == "pet" else "props"]]
+    if action["id"] not in known:
+        return jsonify({"ok": False, "error": f"unknown {action['kind']} {action['id']!r}", "known": known}), 404
+    if action["kind"] == "pet" and action["action"] == "expression":
+        pet = next(p for p in catalog["pets"] if p["id"] == action["id"])
+        if action["value"] not in pet["expressions"] and action["value"] != "neutral":
+            return jsonify({"ok": False, "error": f"unknown expression {action['value']!r}",
+                            "known": pet["expressions"]}), 400
+    payload = {"companion": action}
+    return jsonify({"ok": True, "delivered": broadcast(payload), "payload": payload})
+
+
 def _serve_from(directory: Path, name: str) -> Any:
     # Resolve and confirm containment so a crafted name can't escape the dir.
     target = (directory / Path(name).name).resolve()
@@ -996,7 +1286,7 @@ def _serve_from(directory: Path, name: str) -> Any:
 
 
 def _ensure_dirs() -> None:
-    for d in (MODELS_DIR, DANCES_DIR, AUDIO_DIR):
+    for d in (MODELS_DIR, DANCES_DIR, AUDIO_DIR, PETS_DIR, PROPS_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -1011,7 +1301,7 @@ def root():
         "service": "cuttle-pet",
         "sse": "/events",
         "verbs": ["/emote", "/action", "/say", "/pet/event", "/clear", "/click-through",
-                  "/behaviors", "/behaviors/trigger"],
+                  "/behaviors", "/behaviors/trigger", "/companions", "/companion"],
         "emotions": list(PRESET_EMOTIONS),
         "actions": list(PRESET_ACTIONS),
         "activities": list(ACTIVITY_MAP),

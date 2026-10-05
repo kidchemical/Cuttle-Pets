@@ -211,6 +211,27 @@ async function main() {
     assert.equal(f.time.timers.size, 0)
     f.engine.dispose()
   }
+  // An external pose reset while sustaining must be recoverable: resync
+  // re-applies the current state's base without touching timers, and never
+  // interrupts an in-flight sequence, preview, or paused engine.
+  {
+    const f = fixture()
+    f.engine.update({ ...f.input, state: 'working' }); await f.time.flush()
+    assert.equal(f.calls.at(-1), 'working:true')
+    f.scene.resetPose() // external reset (Stop preview, tray pose reset)
+    f.engine.resync()
+    assert.equal(f.calls.at(-1), 'working:true')
+    assert.equal(f.statuses.at(-1)?.state, 'working')
+    f.engine.previewEntry({ animation: 'action:greeting' }, false); await f.time.flush()
+    const duringPreview = f.calls.length
+    f.engine.resync()
+    assert.equal(f.calls.length, duringPreview)
+    f.engine.update({ ...f.input, state: 'working', paused: true }); await f.time.flush()
+    const whilePaused = f.calls.length
+    f.engine.resync()
+    assert.equal(f.calls.length, whilePaused)
+    f.engine.dispose()
+  }
   console.log('behavior engine tests passed')
 }
 void main().catch(error => { console.error(error); process.exitCode = 1 })

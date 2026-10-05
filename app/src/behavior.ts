@@ -1,6 +1,7 @@
 import { actionPresets, dancePresets, localizedPresetLabel, type DancePreset } from './motion-controller'
 import type { CustomMotionType } from './custom-dances'
 import { proceduralAnimations } from './animation-settings'
+import { normalizeCompanionActions, type CompanionAction } from './companions'
 
 // ── Behavior profiles ────────────────────────────────────────────────────────
 // A profile describes what the pet does in each state: an entry sequence when
@@ -39,7 +40,10 @@ export interface BehaviorEntryLocation {
 }
 
 export interface BehaviorEntry {
-  /** Animation id, 'random:action', or a 'behavior:idle/working/music/dancing' reference. */
+  /**
+   * Animation id, 'random:action', or a 'behavior:idle/working/music/dancing'
+   * reference. '' plays nothing (an entry that only drives pets/props).
+   */
   animation: string
   /** Hold time for one-shot procedural animations (default 5 seconds). */
   durationMs?: number
@@ -47,6 +51,8 @@ export interface BehaviorEntry {
   emotion?: string
   /** Required to replay imported dances (carries the file URLs). */
   preset?: DancePreset
+  /** Pet/prop instructions run when this entry starts (show pet, hide hat…). */
+  companions?: CompanionAction[]
 }
 
 export interface OccasionalEntry extends BehaviorEntry {
@@ -107,6 +113,8 @@ export interface ReactionStep {
   /** Required to replay imported dances (carries the file URLs). */
   preset?: DancePreset
   props?: ReactionStepProps
+  /** Pet/prop instructions for this step; the reaction restores them when done. */
+  companions?: CompanionAction[]
 }
 
 /**
@@ -181,6 +189,8 @@ function cleanEntry(value: unknown): BehaviorEntry | null {
       entry.preset = { label: preset.label, type: motionType(preset.type), url: preset.url, bgm: typeof preset.bgm === 'string' ? preset.bgm : undefined }
     }
   }
+  const companions = normalizeCompanionActions(item.companions)
+  if (companions.length) entry.companions = companions
   return entry
 }
 
@@ -386,6 +396,8 @@ function cleanReactionStep(value: unknown): ReactionStep | null {
     if (typeof preset.url !== 'string' || typeof preset.label !== 'string') return null
     step.preset = { label: preset.label, type: motionType(preset.type), url: preset.url, bgm: typeof preset.bgm === 'string' ? preset.bgm : undefined }
   }
+  const companions = normalizeCompanionActions(item.companions)
+  if (companions.length) step.companions = companions
   const rawProps = item.props && typeof item.props === 'object' ? item.props as Record<string, unknown> : null
   if (rawProps && (rawProps.working === true || rawProps.sip === true)) {
     step.props = {}
@@ -614,6 +626,11 @@ export interface BehaviorScene {
   setEmotionWithReset(emotion: string, durationMs: number, intensity?: number): void
   isBusy(): boolean
   isLooping?(): boolean
+  companion?(action: CompanionAction): void
+}
+
+export function applyCompanions(scene: BehaviorScene, actions: CompanionAction[] | undefined) {
+  for (const action of actions ?? []) scene.companion?.(action)
 }
 
 export function pickRandomAction(rand: () => number = Math.random): string {
@@ -649,6 +666,7 @@ export interface ReactionStepFrame {
   durationMs: number
   preset?: DancePreset
   props?: ReactionStepProps
+  companions?: CompanionAction[]
 }
 
 /**
@@ -659,6 +677,7 @@ export interface ReactionStepFrame {
 export function playReactionStep(scene: BehaviorScene, step: ReactionStepFrame) {
   scene.resetPose()
   const id = step.animation
+  applyCompanions(scene, step.companions)
   if (step.props?.working || step.props?.sip) scene.setWorking(true)
   if (step.props?.sip && id !== 'sip') scene.requestCoffeeSip()
   if (!id || id === 'idle') return

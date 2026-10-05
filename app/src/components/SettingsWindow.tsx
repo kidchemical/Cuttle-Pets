@@ -6,6 +6,7 @@ import { loadSettings, saveSettings } from '../settings'
 import { normalizeAnimations } from '../animation-settings'
 import { normalizeGazeGain } from '../cursor-gaze'
 import { normalizeBehaviorSettings } from '../behavior'
+import { normalizePetSettings, normalizePropSettings } from '../companions'
 import { DEFAULT_MUSIC, DEFAULT_FIT, normalizeMusic, normalizeFit, modelFitKey } from '../music-settings'
 import { normalizeQualitySettings } from '../render-quality'
 import { normalizeBubbleSettings } from '../bubble-settings'
@@ -67,5 +68,7 @@ export function SettingsWindow() {
     onAnimationPreview={(id, preset, mode, durationMs, source) => sendPetCommand({ type: 'animation', id, preset, mode, durationMs, source })}
     onAnimationStop={() => sendPetCommand({ type: 'stop' })}
     behaviorSettings={normalizeBehaviorSettings(settings.behaviorSettings, settings.musicSettings)} onBehaviorSettingsChange={behaviorSettings => patch({ behaviorSettings })}
+    petSettings={normalizePetSettings(settings.petSettings)} onPetSettingsChange={petSettings => patch({ petSettings })}
+    propSettings={normalizePropSettings(settings.propSettings)} onPropSettingsChange={propSettings => patch({ propSettings })}
   />
 }

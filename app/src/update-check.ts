@@ -15,7 +15,9 @@ export type UpdateStatus =
   | { state: 'unknown' }
 
 const CACHE_KEY = 'cuttle-pet-update-check-v1'
+const FAIL_KEY = 'cuttle-pet-update-check-fail-v1'
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+const RETRY_INTERVAL_MS = 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10_000
 
 interface CachedCheck {
@@ -43,6 +45,38 @@ function writeCache(entry: CachedCheck) {
     localStorage.setItem(CACHE_KEY, JSON.stringify(entry))
   } catch {
     /* Storage unavailable — the check just runs again next time. */
+  }
+}
+
+/**
+ * Negative cache: a failed check (rate limit, offline, …) records when it
+ * failed so automatic checks back off instead of retrying on every settings
+ * visit. A manual "Check for updates" passes force=true and bypasses this.
+ */
+function readFailMarker(): number | null {
+  try {
+    const raw = localStorage.getItem(FAIL_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    return typeof data?.failedAt === 'number' ? data.failedAt : null
+  } catch {
+    return null
+  }
+}
+
+function writeFailMarker(failedAt: number) {
+  try {
+    localStorage.setItem(FAIL_KEY, JSON.stringify({ failedAt }))
+  } catch {
+    /* Storage unavailable — the check just runs again next time. */
+  }
+}
+
+function clearFailMarker() {
+  try {
+    localStorage.removeItem(FAIL_KEY)
+  } catch {
+    /* Best effort. */
   }
 }
 
@@ -124,13 +158,26 @@ export async function checkForUpdates(current = APP_VERSION, force = false): Pro
   if (!force && cached && Date.now() - cached.checkedAt < CHECK_INTERVAL_MS) {
     return toStatus(current, cached)
   }
+  if (!force) {
+    // Back off after a recent failure: return the stale cache (or unknown)
+    // without spending another rate-limited request.
+    const failedAt = readFailMarker()
+    if (failedAt !== null && Date.now() - failedAt < RETRY_INTERVAL_MS) {
+      return toStatus(current, cached)
+    }
+  }
   try {
     const fresh = await fetchLatestRelease()
-    if (fresh === 'none') return { state: 'latest', latest: current }
+    if (fresh === 'none') {
+      clearFailMarker()
+      return { state: 'latest', latest: current }
+    }
     if (!fresh) return toStatus(current, cached)
     writeCache(fresh)
+    clearFailMarker()
     return toStatus(current, fresh)
   } catch {
+    writeFailMarker(Date.now())
     return toStatus(current, cached)
   }
 }

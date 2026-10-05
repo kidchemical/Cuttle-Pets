@@ -1,6 +1,6 @@
 {
   "name": "claw-sama",
-  "version": "0.3.4",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "scripts": {

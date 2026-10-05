@@ -9,6 +9,9 @@
     cuttle-pet models --import ~/pets/reef.vrm
     cuttle-pet behaviors      # browse agent-callable custom reactions
     cuttle-pet react rocket-launch --param message="Shipped!"
+    cuttle-pet companions     # list pets and props
+    cuttle-pet companion pet chao show
+    cuttle-pet companion pet chao play hop --loop
     cuttle-pet watch          # stream pet events to stdout
 """
 
@@ -169,6 +172,39 @@ def cmd_models(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_companions(a: argparse.Namespace) -> int:
+    """List pets and props an agent can drive (Settings → Pets / Props)."""
+    res = _request("GET", "/companions")
+    pets = res.get("pets", [])
+    props = res.get("props", [])
+    if not pets and not props:
+        print("no pets or props yet — import one in Settings → Pets")
+        return 0
+    for p in pets:
+        state = "" if p.get("enabled", True) else " (disabled)"
+        print(f"pet  {p['id']:<24} {p.get('name', '')}{state}")
+        if p.get("expressions"):
+            print(f"     expressions: {', '.join(p['expressions'])}")
+        print(f"     moves: {', '.join(p.get('moves', []))}")
+        print(f"     anchors: {', '.join(p.get('anchors', []))}")
+    for p in props:
+        state = "" if p.get("enabled", True) else " (disabled)"
+        print(f"prop {p['id']:<24} {p.get('name', '')}{state}")
+    return 0
+
+
+def cmd_companion(a: argparse.Namespace) -> int:
+    """Drive one pet/prop: show, hide, expression, play, move, stop."""
+    body: dict = {"kind": a.kind, "id": a.id, "action": a.action}
+    if a.value:
+        body["value"] = a.value
+    if a.loop:
+        body["loop"] = True
+    if a.hold:
+        body["durationMs"] = int(a.hold * 1000)
+    return _report(_request("POST", "/companion", body))
+
+
 def cmd_watch(a: argparse.Namespace) -> int:
     """Stream pet events. Ctrl-C to stop."""
     import http.client
@@ -321,6 +357,20 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--param", action="append", default=[],
                    help="parameter override as name=value (repeatable)")
     r.set_defaults(func=cmd_react)
+
+    cs = sub.add_parser("companions", help="list pets and props agents can drive")
+    cs.set_defaults(func=cmd_companions)
+
+    c = sub.add_parser("companion", help="show/hide/play a pet, or equip/remove a prop")
+    c.add_argument("kind", choices=["pet", "prop"])
+    c.add_argument("id", help="pet/prop id from `companions`")
+    c.add_argument("action", help="show, hide, toggle, expression, play, stop, move (pets); show, hide, toggle (props)")
+    c.add_argument("value", nargs="?",
+                   help="expression id, move/clip (clip:name), or anchor (or home) for move")
+    c.add_argument("--loop", action="store_true", help="keep a play move looping until stop")
+    c.add_argument("--hold", type=float, metavar="SECONDS",
+                   help="hold an expression this long, then revert")
+    c.set_defaults(func=cmd_companion)
 
     w = sub.add_parser("watch", help="stream pet events")
     w.set_defaults(func=cmd_watch)

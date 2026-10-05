@@ -9,6 +9,8 @@ interface VrmMessage {
   /** Custom reaction step (see playReactionStep); reactionDone ends the reaction. */
   reactionStep?: import('../behavior').ReactionStepFrame
   reactionDone?: boolean
+  /** Pet/prop instruction (POST /companion). */
+  companion?: import('../companions').CompanionAction
   reaction?: string
   reactionIndex?: number
   clearText?: boolean
@@ -304,7 +306,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
 
   // Stable handleMessage — never causes SSE reconnect
   const handleMessage = useCallback((msg: VrmMessage) => {
-    if (msg.activitySync || msg.musicPlaying !== undefined || msg.musicBeat || msg.musicAudio || msg.musicEnded) {
+    if (msg.activitySync || msg.companion || msg.musicPlaying !== undefined || msg.musicBeat || msg.musicAudio || msg.musicEnded) {
       onMessageRef.current?.(msg)
       return
     }

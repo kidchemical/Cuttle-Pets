@@ -1,6 +1,9 @@
 # Behavior editor and callable behavior library
 
-Status: proposed; implementation has not started.
+Status: partially implemented — states, reactions, profiles, and the
+companions system below are built. Remaining: run IDs/revisions, renderer
+authority, event bindings, transform tweening, and migration of the
+built-in laptop/cup/headphones onto props.
 
 ## Product direction
 
@@ -84,6 +87,39 @@ Event bindings are separate from behavior definitions: source + event + optional
 5. Integrations: event-to-behavior bindings and documentation for Cuttle and direct agent CLI invocation. Verify successful-push triggering exactly once and no trigger on failed push. Implement the Cuttle producer only under a separately authorized Cuttle task.
 
 First reviewable milestone: create a named reaction, sequence existing animations, bind a duration parameter, preview it, discover its description/schema through the CLI, and invoke it externally. Build props on that working contract.
+
+## Companions: pets and props (implemented)
+
+Pets are persistent characters (a Chao floating by the shoulder); props are
+passive wearables pinned to a bone (hat, guitar). They share one asset system:
+
+- Storage: GLB under `DATA_DIR/pets/` and `DATA_DIR/props/` (user data, never
+  in the repo). The importer accepts GLB/glTF directly and converts FBX/DAE
+  to GLB at import time via three.js (`stage` → load + convert → `commit` /
+  `upload`; see `/assets/<pets|props>/…` in `server/server.py`). The main
+  character stays VRM — VRM is for humanoids, GLB fits everything else.
+- Types and validation: `app/src/companions.ts` (pet/prop configs, expression
+  part-groups, blink, mood mirror, click/ambient moves, `CompanionAction`).
+  Import-time `suggestPetSetup` turns swap meshes (eyes, emotion balls) into
+  expression groups plus blink/mood defaults.
+- Rendering: `app/src/companion-runtime.ts` (`CompanionLayer` — anchors,
+  procedural idle, GLB clips, expressions, hit-testing, snapshots).
+- Settings: Pets and Props tabs (`PetsPanel.tsx`, `PropsPanel.tsx`) with
+  import, placement, idle, expressions, mood mirror, ambient antics, material
+  tints, and live test buttons.
+- Behaviors: `companions` steps on every entry phase and reaction step
+  (`show | hide | toggle | expression | play | stop | move`), edited in
+  `BehaviorPanel.tsx` via `CompanionActionsEditor.tsx`, executed by
+  `behavior-engine.ts`, previewed through `window-sync` commands.
+- Agents: `GET /companions` catalog, `POST /companion` control,
+  `cuttle-pet companions` / `cuttle-pet companion <pet|prop> <id> <action> [value] [--loop] [--hold SECONDS]`.
+- Chao notes: the Rescue Chao rips are rigged (~34 bones, skinned) but carry
+  no animation clips — motion is procedural, expressions are the swap meshes.
+  Keep them in user data; never commit them.
+
+Still open from the plan above: per-phase parallel actions with completion
+rules, pet-group transforms/tweening (rocket launch), and moving the
+built-in laptop, cup, and headphones onto the prop registry.
 
 ## Scripting decision
 

@@ -1,3 +1,4 @@
+import io
 import unittest
 from unittest.mock import patch
 from bridge import bridge
@@ -14,12 +15,57 @@ class BridgeTests(unittest.TestCase):
         sync = patch.object(bridge, 'pet_sync')
         self.sync = sync.start()
         self.addCleanup(sync.stop)
+        stream = patch.object(bridge.ActivityListener, 'start')
+        stream.start()
+        self.addCleanup(stream.stop)
+
+    def test_listener_wakes_on_stream_event_and_falls_back_when_down(self):
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+        listener = bridge.ActivityListener()
+        body = b'event: activity\ndata: {"version": 3}\n\n: keepalive\n\n'
+        def urlopen(*_a, **_k):
+            self.assertFalse(listener.changed.is_set())
+            listener._stop.set()
+            return Response(body)
+        with patch.object(bridge.urllib.request, 'urlopen', side_effect=urlopen):
+            listener._run()
+        self.assertTrue(listener.changed.is_set())
+        self.assertFalse(listener.connected)
+
+        with patch.object(bridge.time, 'sleep') as sleep:
+            listener.pause(1.0)
+        sleep.assert_called_once_with(1.0)
+
+    def test_listener_pause_returns_on_change_without_interval_sleep(self):
+        listener = bridge.ActivityListener()
+        listener.connected = True
+        listener.changed.set()
+        with patch.object(bridge, 'STREAM_MIN_GAP_SEC', 0), \
+             patch.object(bridge.time, 'sleep') as sleep:
+            listener.pause(1.0)
+        sleep.assert_not_called()
+        self.assertFalse(listener.changed.is_set())
 
     def test_discovers_owned_chats(self):
         with patch.object(bridge, '_get', return_value={
             'success': True, 'sessions': [{'id': 1}, {'id': 24}]
         }):
             self.assertEqual(bridge.discover_sessions(), ['1', '24'])
+
+    def test_discovers_only_generating_chats(self):
+        with patch.object(bridge, '_get', return_value={'success': True, 'sessions': [
+            {'id': i, 'generating': i == 412} for i in range(589)
+        ]}):
+            self.assertEqual(bridge.discover_sessions(), ['412'])
+
+    def test_no_busy_chats_skips_live_status_requests(self):
+        with patch.object(bridge, '_get') as request:
+            self.assertEqual(bridge.fetch_state([]), ('idle', ''))
+            request.assert_not_called()
 
     def test_busy_chat_after_first_batch_is_not_dropped(self):
         def get(url):

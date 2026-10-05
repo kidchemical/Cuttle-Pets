@@ -5,6 +5,9 @@ import { FramePacer } from '../frame-pacer'
 import { DEFAULT_ANIMATIONS, proceduralSpeed, type AnimationSettings } from '../animation-settings'
 import { MusicMotion } from '../music-motion'
 import { prepareLaptop, cupPositions } from '../work-props'
+import { CompanionLayer } from '../companion-runtime'
+import { companionAssetUrl } from '../asset-import'
+import type { CompanionAction, PetConfig, PropConfig } from '../companions'
 import { DEFAULT_MUSIC, DEFAULT_FIT, type MusicSettings, type HeadphoneFit } from '../music-settings'
 import { useEffect, useRef, useImperativeHandle, forwardRef, useState, useCallback } from 'react'
 import { listen } from '@tauri-apps/api/event'
@@ -30,11 +33,15 @@ interface VRMSceneProps {
   idleAnimationPath?: string
   gazeGain?: number
   onTouch?: (region: TouchRegion) => void
+  pets?: PetConfig[]
+  props?: PropConfig[]
   onModelError?: (message: string) => void
   onModelLoaded?: () => void
 }
 
 export type TrackingMode = 'mouse' | 'camera'
+const NO_PETS: PetConfig[] = []
+const NO_PROPS: PropConfig[] = []
 
 import type { RenderQuality, QualitySettings } from '../render-quality'
 import { QUALITY_PRESETS, normalizeQualitySettings } from '../render-quality'
@@ -92,6 +99,11 @@ export interface VRMSceneHandle {
    * tray-hide during suspend stays hidden).
    */
   setSuspended: (suspended: boolean) => void
+  /** Pet/prop instruction from a behavior, reaction, CLI or settings preview. */
+  companion: (action: CompanionAction) => void
+  /** Reactions restore pet/prop state they changed when they finish. */
+  snapshotCompanions: () => import('../companion-runtime').CompanionSnapshot | null
+  restoreCompanions: (snapshot: import('../companion-runtime').CompanionSnapshot) => void
 }
 
 // ── Blink state ───────────────────────────────────────────────────────────────
@@ -222,6 +234,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   idleAnimationPath = '/idle_loop.vrma',
   gazeGain = DEFAULT_GAZE_GAIN,
   onTouch,
+  pets = NO_PETS,
+  props = NO_PROPS,
   onModelLoaded,
   onModelError,
 }, ref) {
@@ -289,6 +303,10 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   }
   // Set inside the render effect (it owns the rAF id); called via setSuspended.
   const suspendFnRef = useRef<(suspended: boolean) => void>(() => {})
+  const companionsRef = useRef<CompanionLayer | null>(null)
+  const companionConfigRef = useRef({ pets, props })
+  companionConfigRef.current = { pets, props }
+  useEffect(() => { companionsRef.current?.configure(pets, props) }, [pets, props])
   const onTouchRef = useRef(onTouch)
   onTouchRef.current = onTouch
   const onModelErrorRef = useRef(onModelError)
@@ -299,9 +317,11 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   useImperativeHandle(ref, () => ({
     setEmotion(emotion: string, intensity?: number) {
       emoteRef.current?.setEmotion(emotion, intensity)
+      companionsRef.current?.emotion(emotion)
     },
     setEmotionWithReset(emotion: string, durationMs: number, intensity?: number) {
       emoteRef.current?.setEmotionWithReset(emotion, durationMs, intensity)
+      companionsRef.current?.emotion(emotion, Math.min(durationMs, 6000))
     },
     resetCamera() {
       resetCameraRef.current?.()
@@ -436,6 +456,15 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     setSuspended(suspended: boolean) {
       suspendFnRef.current(suspended)
     },
+    companion(action: CompanionAction) {
+      companionsRef.current?.apply(action)
+    },
+    snapshotCompanions() {
+      return companionsRef.current?.snapshot() ?? null
+    },
+    restoreCompanions(snapshot) {
+      companionsRef.current?.restore(snapshot)
+    },
   }), [])
 
   useEffect(() => {
@@ -511,6 +540,12 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     // ── Loader ───────────────────────────────────────────────────────────────
     const loader = new GLTFLoader()
     loader.register((parser) => new VRMLoaderPlugin(parser))
+
+    // Pets and props: plain GLB assets from the user's library.
+    const companionLoader = new GLTFLoader()
+    const companions = new CompanionLayer(scene, url => companionLoader.loadAsync(url), companionAssetUrl)
+    companionsRef.current = companions
+    companions.configure(companionConfigRef.current.pets, companionConfigRef.current.props)
 
     // ── State ─────────────────────────────────────────────────────────────────
     let vrm: VRM | null = null
@@ -635,6 +670,14 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           updateCameraOrbit()
           saveCameraViewNow()
         }
+
+        companions.setCharacter({
+          root: loadedVrm.scene,
+          height: modelSize.y,
+          floorY: box.min.y,
+          topY: box.max.y,
+          bone: name => loadedVrm.humanoid?.getNormalizedBoneNode(name as any) ?? null,
+        })
 
         // Build hand pose cache (applied every frame in animate loop)
         handPose = buildHandPoseCache(loadedVrm)
@@ -829,7 +872,21 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         -(clientY / window.innerHeight) * 2 + 1,
       )
       touchRaycaster.setFromCamera(touchMouseVec, camera)
-      return intersectAnimatedModel(touchRaycaster, vrm.scene).length > 0
+      return intersectAnimatedModel(touchRaycaster, vrm.scene).length > 0 || companions.intersects(touchRaycaster)
+    }
+
+    /** Pet under the cursor when it is in front of the character. */
+    function petUnderPointer(clientX: number, clientY: number): string | null {
+      if (!vrm) return null
+      touchMouseVec.set(
+        (clientX / window.innerWidth) * 2 - 1,
+        -(clientY / window.innerHeight) * 2 + 1,
+      )
+      touchRaycaster.setFromCamera(touchMouseVec, camera)
+      const pet = companions.hitPet(touchRaycaster)
+      if (!pet) return null
+      const character = intersectAnimatedModel(touchRaycaster, vrm.scene)[0]
+      return !character || pet.distance <= character.distance ? pet.id : null
     }
 
     function onWheel(e: WheelEvent) {
@@ -937,7 +994,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     }
 
     // ── Left-click: distinguish click (touch) vs drag (move window) ────
-    let leftDownPos: { x: number; y: number; time: number; region: TouchRegion | null } | null = null
+    let leftDownPos: { x: number; y: number; time: number; region: TouchRegion | null; pet?: string } | null = null
     const CLICK_MOVE_THRESHOLD = 5  // px
     const CLICK_TIME_THRESHOLD = 300 // ms
 
@@ -959,6 +1016,11 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       // model rotating out from under the cursor) and deafen the canvas.
       ;(window as any).__clawDragging = true
       if (e.button === 0) {
+        const pet = petUnderPointer(e.clientX, e.clientY)
+        if (pet) {
+          leftDownPos = { x: e.clientX, y: e.clientY, time: Date.now(), region: null, pet }
+          return
+        }
         const region = detectTouchRegion(e)
         if (region) {
           // Might be a touch — wait for pointerup to confirm it's not a drag
@@ -1026,7 +1088,10 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         const elapsed = Date.now() - leftDownPos.time
         const dx = Math.abs(e.clientX - leftDownPos.x)
         const dy = Math.abs(e.clientY - leftDownPos.y)
-        if (elapsed < CLICK_TIME_THRESHOLD && dx <= CLICK_MOVE_THRESHOLD && dy <= CLICK_MOVE_THRESHOLD) {
+        if (leftDownPos.pet && elapsed < CLICK_TIME_THRESHOLD && dx <= CLICK_MOVE_THRESHOLD && dy <= CLICK_MOVE_THRESHOLD) {
+          spawnRipple(e.clientX, e.clientY, true)
+          companions.click(leftDownPos.pet)
+        } else if (elapsed < CLICK_TIME_THRESHOLD && dx <= CLICK_MOVE_THRESHOLD && dy <= CLICK_MOVE_THRESHOLD) {
           const now = Date.now()
           const region = leftDownPos.region!
           if (now - lastTapTime < DOUBLE_TAP_WINDOW && lastTapRegion === region && now - lastTouchFireTime > TOUCH_COOLDOWN) {
@@ -1216,6 +1281,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         if (typingCache && !motion?.actionPlaying && !motion?.isDancing) applyMusicAngles(typingCache, musicPose.pitch, musicPose.roll)
         // 2. Humanoid update
         vrm.humanoid?.update()
+        // 2.5. Pets follow the final pose; props ride their bones.
+        companions.update(delta)
 
         // 3. Camera tracking mode: look at camera position
         if (trackingModeRef.current === 'camera') {
@@ -1413,6 +1480,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       canvas.removeEventListener('pointercancel', onPointerCancel)
       canvas.removeEventListener('contextmenu', onContextMenu)
       window.removeEventListener('resize', onResize)
+      companions.dispose()
+      if (companionsRef.current === companions) companionsRef.current = null
       emote?.dispose()
       emoteRef.current = null
       motion?.dispose()
