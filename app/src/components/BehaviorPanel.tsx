@@ -16,7 +16,7 @@ interface Props {
   onChange: (value: BehaviorSettings) => void
   customDances: { id: string; label: string; vmdUrl: string; bgmUrl?: string; type?: 'vmd' | 'vrma' | 'fbx' }[]
   statusText: string | null
-  onPreview?: (id: string, preset?: DancePreset, mode?: PreviewMode) => void
+  onPreview?: (id: string, preset?: DancePreset, mode?: PreviewMode, durationMs?: number) => void
   onStop?: () => void
   language?: 'zh' | 'en'
 }
@@ -54,10 +54,10 @@ function groupedOptions(catalog: AnimationOption[], allowLeaveAlone: boolean) {
   </>
 }
 
-function AnimationSelect({ value, catalog, allowLeaveAlone, onPick }: {
-  value: string; catalog: AnimationOption[]; allowLeaveAlone?: boolean; onPick: (id: string) => void
+function AnimationSelect({ value, catalog, allowLeaveAlone, onPick, label = 'Animation' }: {
+  value: string; catalog: AnimationOption[]; allowLeaveAlone?: boolean; label?: string; onPick: (id: string) => void
 }) {
-  return <select aria-label="Animation" value={catalog.some(o => o.id === value) || (allowLeaveAlone && value === '') ? value : ''} onChange={e => onPick(e.target.value)} style={select}>
+  return <select aria-label={label} value={catalog.some(o => o.id === value) || (allowLeaveAlone && value === '') ? value : ''} onChange={e => onPick(e.target.value)} style={select}>
     {value !== '' && !catalog.some(o => o.id === value) && <option value="">— pick an animation —</option>}
     {groupedOptions(catalog, !!allowLeaveAlone)}
   </select>
@@ -81,7 +81,10 @@ function EmotionSelect({ value, onPick }: { value: string; onPick: (emotion: str
 }
 
 export function BehaviorPanel({ settings, onChange, customDances, statusText, onPreview, onStop, language = 'zh' }: Props) {
-  const catalog = animationCatalog(customDances, language)
+  const animations = animationCatalog(customDances, language)
+  const catalog: AnimationOption[] = [...animations, ...BEHAVIOR_STATES.map(state => ({
+    id: `behavior:${state.id}`, label: `${state.label} (behavior)`, group: 'Behaviors', procedural: false,
+  }))]
   const current = settings.current
   const reactions = settings.reactions ?? []
   const [importError, setImportError] = useState('')
@@ -237,8 +240,8 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
   }
 
   const tryEntry = (entry: BehaviorEntry, loop: boolean) => {
-    if (loop) onPreview?.(entry.animation, entry.preset, 'loop')
-    else onPreview?.(entry.animation, entry.preset, 'once')
+    if (loop) onPreview?.(entry.animation, entry.preset, 'loop', entry.durationMs)
+    else onPreview?.(entry.animation, entry.preset, 'once', entry.durationMs)
   }
 
   const saveProfile = () => {
@@ -292,10 +295,6 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
       <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%', background: '#7fe08a', display: 'inline-block' }} />
       <span>Now: <strong>{statusText}</strong></span>
     </div>}
-    <label style={{ ...row, cursor: 'pointer' }}>
-      <input type="checkbox" checked={settings.enabled} onChange={e => onChange({ ...settings, enabled: e.target.checked })} />
-      <span><strong>Behavior engine enabled</strong><br /><span style={muted}>When off, the pet falls back to its built-in idle behavior.</span></span>
-    </label>
     <div style={{ ...row, background: '#1c2330', border: '1px solid #39465c', borderRadius: 8, padding: 12 }}>
       <input aria-label="Profile name" value={current.name} onChange={e => patchCurrent(profile => ({ ...profile, name: e.target.value.slice(0, 60) }))} style={{ flex: '1 1 140px', minWidth: 0 }} />
       <button style={smallButton} onClick={saveProfile} title="Save the current setup as a named profile"><Save size={13} style={{ verticalAlign: -2 }} /> Save profile</button>
@@ -312,6 +311,11 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
         <button style={{ background: 'none', border: 'none', color: '#adb5c8', cursor: 'pointer', padding: '0 4px' }} onClick={() => deleteProfile(profile.name)} title={`Delete ${profile.name}`} aria-label={`Delete ${profile.name}`}><Trash2 size={13} /></button>
       </span>)}
     </div>}
+
+    <label style={{ ...row, cursor: 'pointer' }}>
+      <input type="checkbox" checked={settings.enabled} onChange={e => onChange({ ...settings, enabled: e.target.checked })} />
+      <span><strong>Behavior engine enabled</strong><br /><span style={muted}>When off, automatic behavior sequences and occasional actions stop.</span></span>
+    </label>
 
     <section aria-label="Custom reactions" style={{ border: '1px solid #39465c', borderRadius: 10, padding: 14, display: 'grid', gap: 12, background: '#1a2130' }}>
       <div>
@@ -367,7 +371,7 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
           <span style={muted}>Steps — played in order, then the pet returns to its state:</span>
           {reaction.steps.map((step, index) => <div key={index} style={row}>
             <span style={{ ...muted, minWidth: 18 }}>{index + 1}.</span>
-            <AnimationSelect value={step.animation} catalog={catalog} onPick={animationId => patchReaction(reaction.id, r => { r.steps[index] = { ...r.steps[index], ...pickReactionAnimation(animationId) } })} />
+            <AnimationSelect value={step.animation} catalog={animations} onPick={animationId => patchReaction(reaction.id, r => { r.steps[index] = { ...r.steps[index], ...pickReactionAnimation(animationId) } })} />
             <EmotionSelect value={step.emotion ?? ''} onPick={emotion => patchReaction(reaction.id, r => { r.steps[index].emotion = emotion })} />
             <input aria-label="Speech text" value={step.say ?? ''} onChange={e => patchReaction(reaction.id, r => { r.steps[index].say = e.target.value.slice(0, 280) })} placeholder="Say… ({{param}})" style={{ flex: '1 1 140px', minWidth: 0 }} />
             <label style={{ ...muted, display: 'flex', gap: 4, alignItems: 'center' }}>
@@ -399,6 +403,7 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
       </article>)}
     </section>
 
+    <p style={muted}>Choose an animation or another behavior in any entry. Start, End, and Occasionals play referenced behaviors once (Start → one Main → End), then resume. Main references sustain the chosen behavior. Circular references are skipped.</p>
     <div className="animation-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 1.65fr) minmax(150px, 0.85fr)', gap: 16, alignItems: 'stretch' }}>
         <div className="animation-list" role="listbox" aria-label="Behavior animations" style={{ overflowY: 'auto', height: '100%', minHeight: 330, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {BEHAVIOR_STATES.map(({ id: stateId, label: stateLabel, hint }) => (
@@ -417,8 +422,8 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
                         {title} <small style={{ color: '#b5becf' }}>{entryMeta(stateId, phase, entry)}</small>
                       </button>
                       <div style={{ display: 'flex', flexDirection: 'row', gap: 2, flexShrink: 0 }}>
-                        <button title={'Play ' + title + ' once'} aria-label={'Play ' + title + ' once'} onClick={() => onPreview?.(entry.animation, preset, 'once')} style={{ ...button, padding: '6px 7px' }}><Play size={12} /></button>
-                        <button title={'Play ' + title + ' looped'} aria-label={'Play ' + title + ' looped'} onClick={() => onPreview?.(entry.animation, preset, 'loop')} style={{ ...button, padding: '6px 7px' }}><Repeat size={12} /></button>
+                        <button title={'Play ' + title + ' once'} aria-label={'Play ' + title + ' once'} onClick={() => onPreview?.(entry.animation, preset, 'once', entry.durationMs)} style={{ ...button, padding: '6px 7px' }}><Play size={12} /></button>
+                        <button title={'Play ' + title + ' looped'} aria-label={'Play ' + title + ' looped'} onClick={() => onPreview?.(entry.animation, preset, 'loop', entry.durationMs)} style={{ ...button, padding: '6px 7px' }}><Repeat size={12} /></button>
                         <button title={'Stop ' + title} aria-label={'Stop ' + title} onClick={() => onStop?.()} style={{ ...button, padding: '6px 7px' }}><Square size={12} /></button>
                       </div>
                     </div>
@@ -435,13 +440,21 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
               <span style={muted}>{selStateLabel} · {selPhaseLabel} · #{sel.index + 1}</span>
               <div><strong style={{ fontSize: 15 }}>{animationLabel(selEntry.animation, customDances, language)}</strong></div>
             </div>
-            <label style={{ display: 'grid', gap: 8 }}>Animation
-              <AnimationSelect value={selEntry.animation} catalog={catalog} allowLeaveAlone={sel.state === 'dancing'} onPick={animationId => {
+            <label style={{ display: 'grid', gap: 8 }}>Animation or behavior
+              <AnimationSelect label="Animation or behavior" value={selEntry.animation} catalog={catalog.filter(option => option.id !== `behavior:${sel.state}`)} allowLeaveAlone={sel.state === 'dancing'} onPick={animationId => {
                 const picked = pickAnimation(animationId)
                 if (sel.phase === 'mains') setMainEntry(sel.state, sel.index, { animation: picked.animation, preset: picked.preset })
                 else if (sel.phase === 'occasionals') updateOccasional(sel.state, sel.index, { animation: picked.animation, preset: picked.preset })
                 else updateEntry(sel.state, sel.phase, sel.index, { animation: picked.animation, preset: picked.preset })
               }} />
+            </label>
+            <label style={{ display: 'grid', gap: 8 }}>One-shot hold (procedural motions)
+              <SecondsInput valueMs={selEntry.durationMs ?? 5000} onCommit={durationMs => {
+                if (sel.phase === 'mains') setMainEntry(sel.state, sel.index, { durationMs })
+                else if (sel.phase === 'occasionals') updateOccasional(sel.state, sel.index, { durationMs })
+                else updateEntry(sel.state, sel.phase, sel.index, { durationMs })
+              }} />
+              <span style={muted}>Clip animations finish naturally. This hold applies to procedural motions when played once.</span>
             </label>
             {sel.phase === 'mains' && (() => {
               const mains = current.states[sel.state].mains
@@ -473,11 +486,11 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
                 </span>
               </label>
             )}
-            <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'once')}>Preview once</button>
-            <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'loop')}>Preview looped</button>
+            <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'once', selEntry.durationMs)}>Preview once</button>
+            <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'loop', selEntry.durationMs)}>Preview looped</button>
             <button style={button} onClick={onStop}>Stop preview</button>
             <button style={button} onClick={() => removeEntry(sel.state, sel.phase, sel.index)}>Remove entry</button>
-          </> : <span style={muted}>No animations yet — add one from any section on the left.</span>}
+          </> : <span style={muted}>No entries yet — add one from any section on the left.</span>}
         </div>
       </div>
   </div>

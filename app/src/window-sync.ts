@@ -3,8 +3,9 @@ import { emit, emitTo, listen } from '@tauri-apps/api/event'
 import type { DancePreset } from './motion-controller'
 
 export type PetCommand =
-  | { type: 'animation'; id: string; preset?: DancePreset; mode?: 'once' | 'loop' }
+  | { type: 'animation'; id: string; preset?: DancePreset; mode?: 'once' | 'loop'; durationMs?: number }
   | { type: 'stop' }
+  | { type: 'status' }
   | { type: 'music-preview'; active: boolean }
   | { type: 'bubble-preview' }
   | { type: 'screenshot'; request: string }
@@ -13,14 +14,16 @@ export function publishPreferences(patch: Record<string, unknown>) {
   if (isTauri()) void emit('pet-preferences', patch).catch(console.warn)
   else browserBus?.postMessage({ name: 'pet-preferences', payload: patch })
 }
-export function subscribeWindowEvent<T>(name: string, callback: (payload: T) => void): () => void {
+export function subscribeWindowEvent<T>(name: string, callback: (payload: T) => void, onReady?: () => void): () => void {
   if (isTauri()) {
     let disposed = false
     const pending = listen<T>(name, event => { if (!disposed) callback(event.payload) })
+    void pending.then(() => { if (!disposed) onReady?.() }).catch(console.warn)
     return () => { disposed = true; void pending.then(stop => stop()).catch(console.warn) }
   }
   const handler = (event: MessageEvent) => { if (event.data?.name === name) callback(event.data.payload) }
   browserBus?.addEventListener('message', handler)
+  onReady?.()
   return () => browserBus?.removeEventListener('message', handler)
 }
 export function sendPetCommand(command: PetCommand) {
@@ -34,8 +37,18 @@ export interface PetStatusPayload {
   working: boolean
   sipping: boolean
 }
+const STATUS_CACHE = 'cuttle-pet-playback-status-v1'
+/** Last real snapshot only; stale data is shown as connecting instead. */
+export function getLastPetStatus(): PetStatusPayload | null {
+  try {
+    const cached = JSON.parse(localStorage.getItem(STATUS_CACHE) || 'null')
+    if (cached && Date.now() - cached.at < 10000 && ['idle', 'working', 'music', 'dancing'].includes(cached.status?.state)) return cached.status
+  } catch { /* Status requests still work when storage is unavailable. */ }
+  return null
+}
 /** Main window → settings windows: live "what is the pet doing" snapshot. */
 export function publishStatus(status: PetStatusPayload) {
+  try { localStorage.setItem(STATUS_CACHE, JSON.stringify({ at: Date.now(), status })) } catch { /* Best-effort cache. */ }
   if (isTauri()) void emit('pet-status', status).catch(console.warn)
   else browserBus?.postMessage({ name: 'pet-status', payload: status })
 }

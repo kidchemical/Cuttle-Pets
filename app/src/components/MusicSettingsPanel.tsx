@@ -74,9 +74,7 @@ export function MusicSettingsPanel({ fit, music, enabled, onFitChange, onMusicCh
       {slider('Side sway', music.sway, 0, 15, .5, v => onMusicChange({ ...music, sway: v }), '°')}
       <label><input type="checkbox" checked={music.amplitudeReactive} onChange={e => onMusicChange({ ...music, amplitudeReactive: e.target.checked })} /> Nod more strongly with louder music</label>
       {slider('Amplitude response', music.amplitudeGain, .5, 12, .25, v => onMusicChange({ ...music, amplitudeGain: v }), '×')}
-      <label><input type="checkbox" checked={music.reactOnEnd} onChange={e => onMusicChange({ ...music, reactOnEnd: e.target.checked })} /> Clap or cheer after a song goes quiet</label>
-      <span style={{ opacity: .75 }}>End reactions wait for sustained quiet after at least 10 seconds of playback. Typing resumes after the gesture.</span>
-      <label><input type="checkbox" checked={music.randomDance} onChange={e => onMusicChange({ ...music, randomDance: e.target.checked })} /> Occasionally dance while idle</label>
+      <p className="music-note">Automatic dances and end reactions are configured in Behavior → Music.</p>
       <button onClick={() => onMusicChange({ ...DEFAULT_MUSIC })}>Reset music settings</button>
     </section>
     <section className="music-headphone-fit" aria-label="Headphone fit">

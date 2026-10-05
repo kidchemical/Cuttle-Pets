@@ -208,7 +208,31 @@ Music tab. Speech remains synchronized to its audio; music beat matching works b
 at 1×. At effective speeds below 0.0625×, dance audio stays at 0.0625× (the browser's
 minimum playback rate).
 
-**Custom reactions** (same tab, below the states) are one-shot behaviors any
+The **Behavior** tab owns all automatic action timing: Idle surprises, Working
+coffee sips, Music dance breaks, and each state's Start / Main / Occasionals / End.
+Music's default Main is **Music nod / sway**; its default occasional is
+**Dancing (behavior)** every 45–90 seconds. Referenced behaviors in Start, End,
+or Occasionals play Start → one weighted Main → End once, then resume the
+current state. Main references sustain another behavior. Animation clips finish
+naturally; one-shot procedural motions use the configurable hold time (5 seconds
+by default). Circular references are skipped. Turning the behavior engine off
+stops automatic sequences and occasionals; manual previews still work.
+
+Settings show the latest real playback snapshot immediately when available,
+request a fresh snapshot on opening, and show “Connecting to pet…” while waiting.
+
+**Settings migration:** `behaviorSettings.version: 2` moves the legacy
+`musicSettings.randomDance` and `musicSettings.reactOnEnd` toggles into explicit
+Music Occasionals and End entries in the current and saved behavior profiles.
+Enabled legacy dance breaks become a Dancing behavior occasional; enabled end
+reactions become a clapping End entry. Existing entries are preserved, and full
+lists are left intact. Disabled toggles add no corresponding entry. Migration
+runs once and saves only the `behaviorSettings` preference through a merge patch;
+other preferences, model files, dances, and audio are untouched. Future edits
+are governed solely by the behavior profile. End entries run when leaving a
+state, including Music giving way to Working.
+
+**Custom reactions** (Behavior tab) are one-shot behaviors any
 agent can call by id — e.g. a `rocket-launch` celebration after a git push.
 Each reaction is an ordered step sequence (animation + emotion + speech +
 laptop/coffee props) with typed parameters referenced as `{{name}}` in speech

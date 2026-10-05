@@ -51,13 +51,13 @@ export interface VRMSceneHandle {
   resetCamera: () => void
   setTrackingMode: (mode: TrackingMode) => void
   playAction: (name: string, hold?: boolean) => void
-  playAnimationOnce: (name: string) => void
+  playAnimationOnce: (name: string) => Promise<void>
   captureScreenshot: () => string | null
   panCamera: (dx: number, dy: number) => void
   rotateCamera: (dx: number, dy: number) => void
   playDance: (nameOrPreset: string | import('../motion-controller').DancePreset, preferenceKey?: string) => void
   /** Dance clip played once, then back to idle. */
-  playDanceOnce: (nameOrPreset: string | import('../motion-controller').DancePreset, preferenceKey?: string) => void
+  playDanceOnce: (nameOrPreset: string | import('../motion-controller').DancePreset, preferenceKey?: string) => Promise<void>
   /** Replay an action on every finish until stop. */
   playActionLoop: (name: string) => void
   /** Repeat the coffee sip until stop (implies working mode). */
@@ -74,15 +74,13 @@ export interface VRMSceneHandle {
   getPlaybackStatus: () => { actionId: string | null; dancing: boolean; danceId: string | null; working: boolean; sipping: boolean }
   /** True while a one-shot action or dance owns the mixer. */
   isBusy: () => boolean
-  /** Built-in idle coffee-sip scheduler (the behavior engine disables it and schedules sips itself). */
-  setAutoSip: (enabled: boolean) => void
+  isLooping: () => boolean
   /** Working mode: typing pose + laptop prop (eases in/out) */
   setMusicMode: (active: boolean) => void
   /** durationMs > 0 auto-disables the preview after the timeout. */
   setMusicPreview: (active: boolean, durationMs?: number) => void
   receiveMusicBeat: (beat: { bpm: number | null; confidence: number; timestamp: number }) => void
   receiveMusicAudio: (audio: { amplitude: number; available: boolean; timestamp: number }) => void
-  celebrateMusicEnd: () => void
   requestCoffeeSip: () => void
   /** durationMs > 0 auto-disables working mode after the timeout (preview). */
   setWorking: (active: boolean, durationMs?: number) => void
@@ -251,7 +249,6 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   const lipSyncRef = useRef<LipSync>(LipSync.getInstance())
   const musicModeRef = useRef(false)
   const musicPreviewRef = useRef(false)
-  const musicDanceActiveRef = useRef(false)
   const animationSettingsRef = useRef(animationSettings)
   animationSettingsRef.current = animationSettings
   useEffect(() => { motionRef.current?.setAnimationSettings(animationSettings) }, [animationSettings])
@@ -262,14 +259,15 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   const headphoneFitRef = useRef(headphoneFit)
   headphoneFitRef.current = headphoneFit
   const musicMotionRef = useRef(new MusicMotion())
-  const musicEndUntilRef = useRef(0)
   const sipRequestedRef = useRef(false)
   const workingTargetRef = useRef(false)
-  const autoSipRef = useRef(true)
   const sipBlendMirrorRef = useRef(0)
+  const sipActiveMirrorRef = useRef(false)
+  const sipResetRef = useRef(0)
   // Preview/loop state owned by the settings animations list transport.
   const actionLoopRef = useRef<string | null>(null)
   const sipLoopRef = useRef(false)
+  const danceLoopRef = useRef(false)
   const pulseRef = useRef<{ id: string; until: number } | null>(null)
   const workingGenRef = useRef(0)
   const musicGenRef = useRef(0)
@@ -285,6 +283,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     previewGenReset()
     actionLoopRef.current = null
     sipLoopRef.current = false
+    danceLoopRef.current = false
     pulseRef.current = null
     musicPreviewRef.current = false
   }
@@ -312,12 +311,10 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     },
     playAction(name: string, hold?: boolean) {
       stopLoops()
-      musicDanceActiveRef.current = false
       motionRef.current?.playAction(name, hold)
     },
     playActionLoop(name: string) {
       stopLoops()
-      musicDanceActiveRef.current = false
       motionRef.current?.resetToIdle()
       actionLoopRef.current = name
       void motionRef.current?.playAction(name, false)
@@ -333,17 +330,15 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     },
     playDance(nameOrPreset: string | import('../motion-controller').DancePreset, preferenceKey?: string) {
       stopLoops()
-      musicDanceActiveRef.current = false
-      motionRef.current?.playDance(nameOrPreset, preferenceKey)
+      danceLoopRef.current = true
+      void motionRef.current?.playDance(nameOrPreset, preferenceKey)
     },
-    playDanceOnce(nameOrPreset: string | import('../motion-controller').DancePreset, preferenceKey?: string) {
+    async playDanceOnce(nameOrPreset: string | import('../motion-controller').DancePreset, preferenceKey?: string) {
       stopLoops()
-      musicDanceActiveRef.current = false
-      void motionRef.current?.playDanceOnce(nameOrPreset, preferenceKey)
+      await motionRef.current?.playDanceOnce(nameOrPreset, preferenceKey)
     },
     startSipLoop() {
       stopLoops()
-      musicDanceActiveRef.current = false
       if (!workingTargetRef.current) motionRef.current?.resetToIdle()
       workingTargetRef.current = true
       sipRequestedRef.current = true
@@ -366,6 +361,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       stopLoops()
       workingTargetRef.current = false
       sipRequestedRef.current = false
+      sipResetRef.current++
+      sipActiveMirrorRef.current = false
+      sipBlendMirrorRef.current = 0
       motionRef.current?.resetToIdle()
       emoteRef.current?.resetAll()
     },
@@ -376,14 +374,16 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       stopLoops()
       workingTargetRef.current = false
       sipRequestedRef.current = false
+      sipResetRef.current++
+      sipActiveMirrorRef.current = false
+      sipBlendMirrorRef.current = 0
       motionRef.current?.resetToIdle()
       emoteRef.current?.resetAll()
     },
-    playAnimationOnce(name: string) {
+    async playAnimationOnce(name: string) {
       stopLoops()
-      musicDanceActiveRef.current = false
       motionRef.current?.resetToIdle()
-      void motionRef.current?.playAction(name, false)
+      await motionRef.current?.playAction(name, false)
     },
     setMusicMode(active: boolean) { musicModeRef.current = active },
     setMusicPreview(active: boolean, durationMs = 0) {
@@ -403,12 +403,11 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       if (Math.abs(Date.now() / 1000 - audio.timestamp) > 2) return
       musicMotionRef.current.receiveAudio(audio.amplitude, audio.available, performance.now() / 1000)
     },
-    celebrateMusicEnd() { if (musicSettingsRef.current.reactOnEnd) musicEndUntilRef.current = performance.now() / 1000 + 15 },
     requestCoffeeSip() { sipRequestedRef.current = true },
-    setAutoSip(enabled: boolean) { autoSipRef.current = enabled },
+    isLooping() { return !!actionLoopRef.current || danceLoopRef.current || sipLoopRef.current },
     isBusy() {
       const motion = motionRef.current
-      return !!motion && (motion.actionPlaying || motion.isDancing)
+      return sipRequestedRef.current || sipActiveMirrorRef.current || sipBlendMirrorRef.current > 0.05 || (!!motion && (motion.actionPlaying || motion.isDancing))
     },
     getPlaybackStatus() {
       const motion = motionRef.current
@@ -421,7 +420,6 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       }
     },
     setWorking(active: boolean, durationMs = 0) {
-      if (active) musicDanceActiveRef.current = false
       // Never cut a one-shot action: a working frame arriving mid-preview
       // would reset the mixer and kill the clip (the render loop already
       // yields the typing layer while an action plays).
@@ -437,7 +435,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     setSuspended(suspended: boolean) {
       suspendFnRef.current(suspended)
     },
-  }))
+  }), [])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -524,13 +522,13 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     let phone: THREE.Object3D | null = null
     let cup: THREE.Object3D | null = null
     let headphones: THREE.Group | null = null
-    let nextMusicDance = 0
     let workingBlend = 0
     // Coffee-sip state: sipActive while raising/lowering, sipBlend eases 0→1→0
     let sipActive = false
     let sipBlend = 0
     let sipT0 = 0
     let nextSipAt = Infinity
+    let lastSipReset = sipResetRef.current
     // Head-center → face-surface distance, raycast once per model so the
     // sip target sits outside the skull on any head shape. Null = unmeasured.
     let faceOffset: number | null = null
@@ -724,13 +722,12 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         motionRef.current = motion
         // Show the cellphone prop while the phoneCall action is playing
         motion.onActionChange = (actionName) => {
-          if (!actionName) musicDanceActiveRef.current = false
           if (phone) phone.visible = actionName === 'phoneCall'
           // Looped action preview: replay on every finish until stopped.
           // (stopLoops clears the ref before resetToIdle, so the stop path
           // never replays.)
           if (!actionName && actionLoopRef.current && motionRef.current
-            && !musicDanceActiveRef.current && !motionRef.current.isDancing) {
+            && !motionRef.current.isDancing) {
             void motionRef.current.playAction(actionLoopRef.current, false)
           }
         }
@@ -1103,9 +1100,6 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     let renderingPaused = document.hidden
     const framePacer = new FramePacer()
     const animationTimes = { hands: 0, typing: 0, sip: 0 }
-    // Wall-clock for music scheduling: never scaled by any animation speed,
-    // so sip/typing sliders can't shift music dance timing.
-    let musicClock = 0
 
     function animate() {
       animFrameId = requestAnimationFrame(animate)
@@ -1120,7 +1114,6 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
       if (vrm) {
         const prefs = animationSettingsRef.current
-        musicClock += delta
         // Procedural layers use only their own individual speed; the global
         // multiplier applies to base clips (mixer) only. A pulsed layer
         // (settings-list preview) runs 3x until its preview ends.
@@ -1154,15 +1147,20 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           }
         }
 
-        // 1.7. Coffee sip: every 40–90s of sustained working, raise the cup
-        // for ~4.5s (blend ramps up/down over the first/last quarter)
+        // 1.7. Play a requested coffee sip (~4.5s), or repeat an explicit
+        // loop preview. Automatic sip frequency belongs to the behavior engine.
+        if (lastSipReset !== sipResetRef.current) {
+          lastSipReset = sipResetRef.current
+          sipActive = false
+          sipBlend = 0
+          nextSipAt = Infinity
+        }
         const now = animationTimes.sip
         if (workingBlend > 0.8) {
           if (sipRequestedRef.current) {
             nextSipAt = now
             sipRequestedRef.current = false
           }
-          if (autoSipRef.current && nextSipAt === Infinity) nextSipAt = now + 25
           if (!sipActive && now >= nextSipAt) {
             sipActive = true
             sipT0 = now
@@ -1174,8 +1172,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
               sipActive = false
               sipBlend = 0
               // Looped sip preview: short pause, then drink again.
-              // With the built-in scheduler off, the behavior engine owns sip timing.
-              nextSipAt = !autoSipRef.current ? Infinity : sipLoopRef.current ? now + 2.5 : now + 40 + Math.random() * 50
+              nextSipAt = sipLoopRef.current ? now + 2.5 : Infinity
             } else {
               const k = st / SIP_DUR
               sipBlend = k < 0.25 ? k / 0.25 : k > 0.75 ? (1 - k) / 0.25 : 1
@@ -1186,6 +1183,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           sipBlend = 0
           nextSipAt = Infinity
         }
+        sipActiveMirrorRef.current = sipActive
         sipBlendMirrorRef.current = sipBlend
         if (faceOffset == null && typingCache?.head) faceOffset = measureFaceOffset()
         if (typingCache && sipBlend > 0) {
@@ -1210,28 +1208,6 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         }
         const musicPose = musicMotionRef.current.step(delta, performance.now() / 1000, musicOptions, listening, musicPreviewRef.current, workingTargetRef.current, sipBlend, effSpeed('music'))
         if (typingCache && !motion?.actionPlaying && !motion?.isDancing) applyMusicAngles(typingCache, musicPose.pitch, musicPose.roll)
-        if (listening && !motion?.actionPlaying && !motion?.isDancing) {
-          if (!nextMusicDance) nextMusicDance = musicClock + 20 + Math.random() * 25
-          if (musicOptions.randomDance && !musicPreviewRef.current && !workingTargetRef.current && workingBlend < .02 && musicClock >= nextMusicDance) {
-            const choices = ['breakdance', 'cheering', 'joyfulJump']
-            musicDanceActiveRef.current = true
-            void motion?.playAction(choices[Math.floor(Math.random() * choices.length)])
-            nextMusicDance = musicClock + 45 + Math.random() * 45
-          }
-        } else if (!listening) {
-          if (musicDanceActiveRef.current) {
-            musicDanceActiveRef.current = false
-            motion?.resetToIdle()
-          }
-          nextMusicDance = 0
-        }
-
-        if (musicEndUntilRef.current && (!musicOptions.reactOnEnd || performance.now() / 1000 > musicEndUntilRef.current || listening)) musicEndUntilRef.current = 0
-        if (musicEndUntilRef.current && sipBlend < .05 && !motion?.actionPlaying && !motion?.isDancing) {
-          musicEndUntilRef.current = 0
-          void motion?.playAction(Math.random() < .65 ? 'clapping' : 'cheering')
-        }
-
         // 2. Humanoid update
         vrm.humanoid?.update()
 

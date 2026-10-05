@@ -147,18 +147,35 @@ async function main() {
   assert.deepEqual(migrated.states.working.mains, [{ animation: 'typing', weight: 1 }])
   const migratedDance = normalizeProfile({ name: 'old', states: { dancing: { base: '', start: [], occasionals: [], end: [] } } }, 'fb')
   assert.deepEqual(migratedDance.states.dancing.mains, [])
-  // Dancing only dances: a non-dance base (e.g. an action saved by the old
-  // single-select) restores the default rotation instead of a bogus main.
+  // Every state accepts both animations and behavior references.
   const sanitized = normalizeProfile({ name: 'old', states: { dancing: { base: { animation: 'action:defeated' }, start: [], occasionals: [], end: [] } } }, 'fb')
-  assert.deepEqual(sanitized.states.dancing.mains.map(e => e.animation), ['dance:jile', 'dance:love', 'dance:ualDance'])
-  assert.equal(sanitized.states.dancing.base.animation, 'dance:jile')
-  // Explicit dancing mains keep dances and drop anything else.
+  assert.deepEqual(sanitized.states.dancing.mains.map(e => e.animation), ['action:defeated'])
+  assert.equal(sanitized.states.dancing.base.animation, 'action:defeated')
+  // Explicit dancing mains preserve all supported assignments.
   const mixed = normalizeProfile({ name: 'm', states: { dancing: { base: '', mains: [{ animation: 'action:happy', weight: 3 }, { animation: 'dance:love', weight: 2 }], start: [], occasionals: [], end: [] } } }, 'fb')
-  assert.deepEqual(mixed.states.dancing.mains, [{ animation: 'dance:love', weight: 2 }])
+  assert.deepEqual(mixed.states.dancing.mains, [{ animation: 'action:happy', weight: 3 }, { animation: 'dance:love', weight: 2 }])
   // Explicitly emptied dancing mains stay empty (leave playing as-is).
   const emptied = normalizeProfile({ name: 'm', states: { dancing: { base: '', mains: [], start: [], occasionals: [], end: [] } } }, 'fb')
   assert.deepEqual(emptied.states.dancing.mains, [])
   assert.equal(emptied.states.dancing.base.animation, '')
+  const references = normalizeProfile({ states: { music: {
+    mains: [{ animation: 'behavior:working', weight: 1 }],
+    start: [{ animation: 'behavior:idle', durationMs: 7000 }],
+    occasionals: [{ animation: 'behavior:dancing', everyMin: 20, everyMax: 30, chance: .5 }],
+    end: [{ animation: 'behavior:nope' }],
+  } } }, 'References')
+  assert.equal(references.states.music.mains[0].animation, 'behavior:working')
+  assert.equal(references.states.music.start[0].durationMs, 7000)
+  assert.equal(references.states.music.occasionals[0].animation, 'behavior:dancing')
+  assert.deepEqual(references.states.music.end, [])
+  const oldSettings = { current: { states: { music: { base: 'music', occasionals: [{ animation: 'action:happy', everyMin: 15, everyMax: 15, chance: 1 }], end: [] } } } }
+  const upgraded = normalizeBehaviorSettings(oldSettings)
+  assert.equal(upgraded.version, 2)
+  assert.deepEqual(upgraded.current.states.music.occasionals.map(e => e.animation), ['action:happy', 'behavior:dancing'])
+  assert.deepEqual(normalizeBehaviorSettings(upgraded), upgraded, 'Migration is idempotent')
+  const optedOut = normalizeBehaviorSettings(oldSettings, { randomDance: false, reactOnEnd: false })
+  assert.deepEqual(optedOut.current.states.music.occasionals.map(e => e.animation), ['action:happy'])
+  assert.deepEqual(optedOut.current.states.music.end, [])
   // Mains weights are cleaned (clamped, capped, unknown animations dropped).
   const messy = normalizeProfile({ name: 'm', states: { idle: { base: 'idle', mains: [{ animation: 'idle', weight: 500 }, { animation: 'nope', weight: 1 }, { animation: 'action:happy' }], start: [], occasionals: [], end: [] } } }, 'fb')
   assert.deepEqual(messy.states.idle.mains, [{ animation: 'idle', weight: 99 }, { animation: 'action:happy', weight: 1 }])

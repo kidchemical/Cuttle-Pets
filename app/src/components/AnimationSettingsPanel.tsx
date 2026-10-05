@@ -11,12 +11,10 @@ interface Props {
   customDances: { id: string; label: string; vmdUrl: string; bgmUrl?: string; type?: 'vmd' | 'vrma' | 'fbx' }[]
   onPreview?: (id: string, preset?: DancePreset, mode?: PreviewMode) => void
   onStop?: () => void
-  /** Live "what is the pet doing" line, when the main window publishes it. */
-  statusText?: string | null
   language?: 'zh' | 'en'
 }
 const button: React.CSSProperties = { padding: '9px 12px', border: '1px solid #505665', borderRadius: 7, background: '#303645', color: 'white', cursor: 'pointer', textAlign: 'left' }
-export function AnimationSettingsPanel({ settings, onChange, customDances, onPreview, onStop, statusText, language = 'zh' }: Props) {
+export function AnimationSettingsPanel({ settings, onChange, customDances, onPreview, onStop, language = 'zh' }: Props) {
   const [selected, setSelected] = useState('idle')
   const [query, setQuery] = useState('')
   const items: { id: string; label: string; group: string; procedural: boolean; preset?: DancePreset }[] = [
@@ -36,10 +34,6 @@ export function AnimationSettingsPanel({ settings, onChange, customDances, onPre
     </div></label>
   )
   return <div style={{ display: 'grid', gap: 18, fontSize: 14 }}>
-    {statusText && <div role="status" style={{ display: 'flex', gap: 8, alignItems: 'center', background: '#22303f', border: '1px solid #39465c', borderRadius: 8, padding: '9px 12px' }}>
-      <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%', background: '#7fe08a', display: 'inline-block' }} />
-      <span>Now: <strong>{statusText}</strong></span>
-    </div>}
     {slider('Global animation speed', settings.speed, .1, 4, .05, speed => onChange({ ...settings, speed }))}
     <p style={{ color: '#adb5c8', lineHeight: 1.5 }}>Global and individual speeds multiply for base clips (idle, actions, dances). Procedural layers (typing, music nod, eyes, blink, …) use only their individual speed. Changes apply immediately. Speech audio stays synchronized; music beat matching works best at 1×.</p>
     <input aria-label="Search animations" placeholder="Search animations…" value={query} onChange={e => setQuery(e.target.value)} style={{ ...button, width: '100%' }} />

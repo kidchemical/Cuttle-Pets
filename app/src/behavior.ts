@@ -13,7 +13,7 @@ export const BEHAVIOR_STATES: { id: BehaviorStateId; label: string; hint: string
   { id: 'idle', label: 'Idle', hint: 'Hanging out, no task and no music.' },
   { id: 'working', label: 'Working', hint: 'Typing at the laptop (driven by Cuttle activity).' },
   { id: 'music', label: 'Music', hint: 'Music is playing and the pet is listening.' },
-  { id: 'dancing', label: 'Dancing', hint: 'Plays a weighted pick from Main below (default: the 3 built-in dances, equal chance). Empty Main leaves the playing dance alone.' },
+  { id: 'dancing', label: 'Dancing', hint: 'Plays a weighted Main pick. When called by another behavior, plays Start → one Main → End, then returns.' },
 ]
 
 export const EMOTION_OPTIONS = [
@@ -28,9 +28,15 @@ export const RANDOM_EMOTION = 'random'
 
 const AMBIENT_IDS = new Set(['hands', 'eyes', 'blink', 'expressions'])
 
+export function behaviorTarget(id: string): BehaviorStateId | null {
+  return BEHAVIOR_STATES.find(state => `behavior:${state.id}` === id)?.id ?? null
+}
+
 export interface BehaviorEntry {
-  /** Animation id from the animations list ('idle', 'action:x', 'dance:x', 'typing', 'sip', 'music', …) or 'random:action'. */
+  /** Animation id, 'random:action', or a 'behavior:idle/working/music/dancing' reference. */
   animation: string
+  /** Hold time for one-shot procedural animations (default 5 seconds). */
+  durationMs?: number
   /** Emotion id, 'random', or '' for none. */
   emotion?: string
   /** Required to replay imported dances (carries the file URLs). */
@@ -114,6 +120,8 @@ export interface CustomReaction {
 }
 
 export interface BehaviorSettings {
+  /** v2 moves legacy music scheduling into the behavior profile. */
+  version: 2
   enabled: boolean
   current: BehaviorProfile
   profiles: BehaviorProfile[]
@@ -156,8 +164,9 @@ function cleanEntry(value: unknown): BehaviorEntry | null {
   if (!value || typeof value !== 'object') return null
   const item = value as Record<string, unknown>
   const animation = cleanId(item.animation)
-  if (!knownAnimation(animation)) return null
+  if (!knownAnimation(animation) && !behaviorTarget(animation)) return null
   const entry: BehaviorEntry = { animation }
+  if (item.durationMs !== undefined) entry.durationMs = bounded(item.durationMs, 5000, 500, 300000)
   const emotion = cleanEmotion(item.emotion)
   if (emotion) entry.emotion = emotion
   if (animation.startsWith('dance:custom:') && item.preset && typeof item.preset === 'object') {
@@ -191,32 +200,22 @@ function cleanWeightedEntry(value: unknown): WeightedEntry | null {
   return { ...entry, weight: bounded(weight, 1, 0, 99) }
 }
 
-function cleanState(value: unknown, fallback: StateBehavior, id: BehaviorStateId): StateBehavior {
+function cleanState(value: unknown, fallback: StateBehavior): StateBehavior {
   const source = value && typeof value === 'object' ? value as Record<string, unknown> : {}
   const start = Array.isArray(source.start) ? source.start.map(cleanEntry).filter((e): e is BehaviorEntry => e !== null).slice(0, 5) : []
   const occasionals = Array.isArray(source.occasionals) ? source.occasionals.map(cleanOccasional).filter((e): e is OccasionalEntry => e !== null).slice(0, 8) : []
   const end = Array.isArray(source.end) ? source.end.map(cleanEntry).filter((e): e is BehaviorEntry => e !== null).slice(0, 5) : []
   // Accept a bare id string for hand-written profiles ("base": "typing").
   const baseSource = typeof source.base === 'string' ? { animation: source.base } : source.base
-  let base = cleanEntry(baseSource) ?? { ...fallback.base }
+  const base = cleanEntry(baseSource) ?? { ...fallback.base }
   // Older profiles predate mains: an explicit base migrates to a single
   // weighted entry so Main always shows what actually plays. A state with no
   // base info at all inherits the default rotation (the 3 dances for dancing).
-  let mains = Array.isArray(source.mains)
+  const mains = Array.isArray(source.mains)
     ? source.mains.map(cleanWeightedEntry).filter((e): e is WeightedEntry => e !== null).slice(0, MAX_MAINS)
     : source.base !== undefined
       ? base.animation ? [{ ...base, weight: 1 }] : []
       : fallback.mains.map(m => ({ ...m }))
-  if (id === 'dancing') {
-    // Dancing only dances: drop non-dance entries (e.g. an action saved as
-    // the old single base). When something was specified but nothing dance
-    // survived, restore the default rotation instead of a bogus main.
-    const specified = mains.length > 0 || base.animation !== ''
-    mains = mains.filter(e => e.animation.startsWith('dance:'))
-    if (mains.length === 0 && specified) mains = fallback.mains.map(m => ({ ...m }))
-    const first = mains[0]
-    base = first ? (first.preset ? { animation: first.animation, preset: first.preset } : { animation: first.animation }) : { animation: '' }
-  }
   return { start, base, mains, occasionals, end }
 }
 
@@ -227,7 +226,7 @@ export function normalizeProfile(value: unknown, fallbackName: string): Behavior
   const out = {} as Record<BehaviorStateId, StateBehavior>
   // A missing state restores the full default (base + occasionals), not an
   // empty shell — otherwise a fresh install would lose the built-in behavior.
-  for (const { id } of BEHAVIOR_STATES) out[id] = cleanState(states[id] ?? fallback[id], fallback[id], id)
+  for (const { id } of BEHAVIOR_STATES) out[id] = cleanState(states[id] ?? fallback[id], fallback[id])
   const name = cleanId(source.name).slice(0, 60)
   return { name: name || fallbackName, states: out }
 }
@@ -248,7 +247,11 @@ function defaultProfileStates(): Record<BehaviorStateId, StateBehavior> {
       occasionals: [{ animation: 'sip', everyMin: 40, everyMax: 90, chance: 1 }],
       end: [],
     },
-    music: { start: [], base: { animation: 'music' }, mains: [{ animation: 'music', weight: 1 }], occasionals: [], end: [] },
+    music: {
+      start: [], base: { animation: 'music' }, mains: [{ animation: 'music', weight: 1 }],
+      occasionals: [{ animation: 'behavior:dancing', everyMin: 45, everyMax: 90, chance: 1 }],
+      end: [{ animation: 'action:clapping' }],
+    },
     dancing: {
       start: [],
       base: { animation: 'dance:jile' },
@@ -267,14 +270,36 @@ export function defaultBehaviorProfile(): BehaviorProfile {
   return { name: 'Default', states: defaultProfileStates() }
 }
 
-export function normalizeBehaviorSettings(value: unknown): BehaviorSettings {
+export function normalizeBehaviorSettings(value: unknown, legacyMusic?: { randomDance?: boolean; reactOnEnd?: boolean }): BehaviorSettings {
   const source = value && typeof value === 'object' ? value as Record<string, unknown> : {}
   const profiles = Array.isArray(source.profiles)
     ? source.profiles.map((p, i) => normalizeProfile(p, `Profile ${i + 1}`)).slice(0, 20)
     : []
+  const current = normalizeProfile(source.current, 'Default')
+  // Named migration: behaviorSettings.version 2 replaces the two hidden music
+  // schedulers with explicit Music entries. Existing entries are preserved.
+  if (source.version !== 2) {
+    const migrate = (profile: BehaviorProfile) => {
+      const music = profile.states.music
+      // Missing profiles already inherit the new defaults; explicit v1 states
+      // need the legacy toggles translated exactly once.
+      const raw = source.current as { states?: { music?: unknown } } | undefined
+      if (raw?.states?.music || profile !== current) {
+        if (music.occasionals.length < 8 && legacyMusic?.randomDance !== false && !music.occasionals.some(e => e.animation === 'behavior:dancing'))
+          music.occasionals.push({ animation: 'behavior:dancing', everyMin: 45, everyMax: 90, chance: 1 })
+        if (music.end.length < 5 && legacyMusic?.reactOnEnd !== false && !music.end.some(e => e.animation === 'action:clapping'))
+          music.end.push({ animation: 'action:clapping' })
+      }
+      if (legacyMusic?.randomDance === false) music.occasionals = music.occasionals.filter(e => e.animation !== 'behavior:dancing')
+      if (legacyMusic?.reactOnEnd === false) music.end = music.end.filter(e => e.animation !== 'action:clapping')
+    }
+    migrate(current)
+    profiles.forEach(migrate)
+  }
   return {
+    version: 2,
     enabled: source.enabled !== false,
-    current: normalizeProfile(source.current, 'Default'),
+    current,
     profiles,
     reactions: normalizeReactions(source.reactions),
   }
@@ -513,6 +538,8 @@ export function animationCatalog(customDances: { id: string; label: string; vmdU
 
 export function animationLabel(id: string | null, customDances: { id: string; label: string }[] = [], language: 'zh' | 'en' = 'zh'): string {
   if (!id) return ''
+  const target = behaviorTarget(id)
+  if (target) return `${BEHAVIOR_STATES.find(s => s.id === target)!.label} (behavior)`
   if (id === 'idle') return 'Idle loop'
   if (id === RANDOM_ACTION) return 'Surprise action'
   if (id === 'typing') return 'Working / typing'
@@ -574,12 +601,13 @@ export interface BehaviorScene {
   startSipLoop(): void
   setMusicPreview(active: boolean, durationMs?: number): void
   pulseProcedural(id: string, loop: boolean): void
-  playAnimationOnce(name: string): void
+  playAnimationOnce(name: string): void | Promise<void>
   playActionLoop(name: string): void
   playDance(nameOrPreset: string | DancePreset, preferenceKey?: string): void
-  playDanceOnce(nameOrPreset: string | DancePreset, preferenceKey?: string): void
+  playDanceOnce(nameOrPreset: string | DancePreset, preferenceKey?: string): void | Promise<void>
   setEmotionWithReset(emotion: string, durationMs: number, intensity?: number): void
   isBusy(): boolean
+  isLooping?(): boolean
 }
 
 export function pickRandomAction(rand: () => number = Math.random): string {
@@ -599,13 +627,13 @@ export function applyEmotion(scene: BehaviorScene, emotion: string | undefined, 
 /** Play an animation a single time (settings preview, engine sequences). */
 export function playOnceById(scene: BehaviorScene, id: string, preset?: DancePreset, previewMs = 0) {
   if (!id || id === 'idle') { scene.resetPose(); return }
-  if (id === RANDOM_ACTION) { scene.playAnimationOnce(pickRandomAction()); return }
+  if (id === RANDOM_ACTION) { return scene.playAnimationOnce(pickRandomAction()) }
   if (id === 'typing') { scene.setWorking(true, previewMs); return }
   if (id === 'sip') { scene.setWorking(true); scene.requestCoffeeSip(); return }
   if (id === 'music') { scene.setMusicPreview(true, previewMs); return }
   if (AMBIENT_IDS.has(id)) { scene.pulseProcedural(id, false); return }
-  if (id.startsWith('action:')) { scene.playAnimationOnce(id.slice(7)); return }
-  if (id.startsWith('dance:')) { scene.playDanceOnce(preset ?? id.slice(6), id); return }
+  if (id.startsWith('action:')) { return scene.playAnimationOnce(id.slice(7)) }
+  if (id.startsWith('dance:')) { return scene.playDanceOnce(preset ?? id.slice(6), id) }
   scene.resetPose()
 }
 

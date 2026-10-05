@@ -13,7 +13,7 @@ import { ChatInput } from './components/ChatInput'
 import { ResizeHandles } from './components/ResizeHandles'
 import { openSettingsWindow, subscribeWindowEvent, replyScreenshot, publishStatus, type PetCommand } from './window-sync'
 import { DEFAULT_ANIMATIONS, normalizeAnimations, type AnimationSettings } from './animation-settings'
-import { normalizeBehaviorSettings, resolvePetState, playOnceById, applyBaseById, playReactionStep, pickWeightedEntry, type BehaviorSettings, type BehaviorStateId } from './behavior'
+import { normalizeBehaviorSettings, resolvePetState, playReactionStep, pickWeightedEntry, type BehaviorSettings, type BehaviorStateId } from './behavior'
 import { useBehaviorEngine } from './hooks/useBehaviorEngine'
 import { usePassThrough } from './hooks/usePassThrough'
 import { dancePresets, actionPresets, localizedPresetLabel } from './motion-controller'
@@ -74,17 +74,12 @@ export default function App() {
   const [musicEnabled, setMusicEnabled] = useState(true)
   const [musicSettings, setMusicSettings] = useState<MusicSettings>(DEFAULT_MUSIC)
   const [headphoneFits, setHeadphoneFits] = useState<Record<string, HeadphoneFit>>({})
-  const musicEnabledRef = useRef(musicEnabled)
-  musicEnabledRef.current = musicEnabled
   const [musicPlaying, setMusicPlaying] = useState(false)
-  const musicPlayingRef = useRef(false)
   const workingRef = useRef(false)
   const [working, setWorkingState] = useState(false)
   const [behaviorSettings, setBehaviorSettings] = useState<BehaviorSettings>(() => normalizeBehaviorSettings(undefined))
   const behaviorEnabledRef = useRef(true)
   behaviorEnabledRef.current = behaviorSettings.enabled
-  const [petState, setPetState] = useState<BehaviorStateId>('idle')
-  const lastPublishedRef = useRef('')
   const [pinned, setPinned] = useState(true)
   const [tracking, setTracking] = useState<'mouse' | 'camera'>('mouse')
   const [gazeGain, setGazeGain] = useState(DEFAULT_GAZE_GAIN)
@@ -99,7 +94,9 @@ export default function App() {
 
   const [ttsEnabled, setTtsEnabled] = useState(true)
   const [modelError, setModelError] = useState('')
+  const [sceneReady, setSceneReady] = useState(false)
   const [modelPath, setModelPath] = useState(DEFAULT_MODEL)
+  useEffect(() => { setSceneReady(false) }, [modelPath])
   const [animationSettings, setAnimationSettings] = useState<AnimationSettings>(DEFAULT_ANIMATIONS)
   const openSettings = useCallback(() => { void openSettingsWindow().catch(error => setModelError(String(error))) }, [])
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -109,17 +106,15 @@ export default function App() {
   const [dancing, setDancing] = useState(false)
   const [currentDance, setCurrentDance] = useState('jile')
   const [customDancePreset, setCustomDancePreset] = useState<import('./motion-controller').DancePreset | undefined>(undefined)
+  const behaviorPlaybackRef = useRef<{ state: BehaviorStateId | null; owned: boolean }>({ state: null, owned: false })
+  const engineRef = useRef<ReturnType<typeof useBehaviorEngine> | null>(null)
   const userDanceRef = useRef({ dancing, currentDance, customDancePreset })
   userDanceRef.current = { dancing, currentDance, customDancePreset }
   // Custom reaction in progress (server reactionStep frames). Pauses the
   // behavior engine; reactionDone restores the pet's own working/dance state.
   const [reactionActive, setReactionActive] = useState(false)
-  const reactionRef = useRef<{ dance: string | null; watchdog?: ReturnType<typeof setTimeout> } | null>(null)
-  // Manual one-shot preview in progress (settings/tray "play once"): pauses the
-  // behavior engine and defers working frames so typing can't cut the clip.
-  const [previewHold, setPreviewHold] = useState(false)
-  const previewHoldRef = useRef(false)
-  const previewWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [suspended, setSuspended] = useState(false)
+  const reactionRef = useRef<{ watchdog?: ReturnType<typeof setTimeout> } | null>(null)
   const [hideMood, setHideMood] = useState(false)
   const [screenObserve, setScreenObserve] = useState(false)
   const [screenObserveInterval, setScreenObserveInterval] = useState(60)
@@ -166,7 +161,11 @@ export default function App() {
       saveSettings({ language: detected })
     }
     if (s.animationSettings) setAnimationSettings(normalizeAnimations(s.animationSettings))
-    if (s.behaviorSettings) setBehaviorSettings(normalizeBehaviorSettings(s.behaviorSettings))
+    if (s.behaviorSettings || initial) {
+      const normalized = normalizeBehaviorSettings(s.behaviorSettings, s.musicSettings)
+      setBehaviorSettings(normalized)
+      if (initial && s.behaviorSettings?.version !== 2) saveSettings({ behaviorSettings: normalized })
+    }
   }, [])
   useEffect(() => {
     let active = true
@@ -176,19 +175,11 @@ export default function App() {
     return () => { active = false; stop() }
   }, [applyPreferences])
   useEffect(() => subscribeWindowEvent<PetCommand>('pet-command', command => {
+    if (command.type === 'status') { publishCurrentStatus(true); return }
     if (command.type === 'animation') {
-      const scene = sceneRef.current
-      if (!scene) return
-      scene.resetPose()
-      if (command.id === 'idle') return
-      if (command.mode === 'loop') applyBaseById(scene, command.id, command.preset)
-      else {
-        // One-shot: hold behavior until the clip finishes (see status poll).
-        beginPreviewHold()
-        playOnceById(scene, command.id, command.preset, 15000)
-      }
+      engineRef.current?.previewEntry({ animation: command.id, preset: command.preset, durationMs: command.durationMs }, command.mode === 'loop')
     }
-    if (command.type === 'stop') { endPreviewHold(); sceneRef.current?.resetPose(); setDancing(false) }
+    if (command.type === 'stop') { engineRef.current?.stopPreview(); sceneRef.current?.resetPose(); setDancing(false) }
     if (command.type === 'music-preview') sceneRef.current?.setMusicPreview(command.active)
     if (command.type === 'bubble-preview') (window as any).__clawPreviewBubble?.('Hello! This is your text bubble preview.')
     if (command.type === 'screenshot') replyScreenshot(command.request, sceneRef.current?.captureScreenshot() ?? null)
@@ -228,8 +219,7 @@ export default function App() {
     const animation = listen<string>('play-animation', event => {
       if (actionPresets[event.payload]) {
         setDancing(false)
-        beginPreviewHold()
-        sceneRef.current?.playAnimationOnce(event.payload)
+        engineRef.current?.previewEntry({ animation: `action:${event.payload}` }, false)
       }
     })
     const controls = listen<string>('tray-control', event => {
@@ -255,58 +245,45 @@ export default function App() {
     return () => { model.then(f => f()); animation.then(f => f()); controls.then(f => f()) }
   }, [])
 
-  useEffect(() => { musicPlayingRef.current = musicEnabled && musicPlaying; sceneRef.current?.setMusicMode(musicEnabled && musicPlaying) }, [musicEnabled, musicPlaying, modelPath])
+  useEffect(() => { sceneRef.current?.setMusicMode(musicEnabled && musicPlaying) }, [musicEnabled, musicPlaying, modelPath])
 
-  // Built-in sip scheduler runs only when the behavior engine is off; the
-  // engine schedules sips itself from the working state's occasionals.
-  useEffect(() => { sceneRef.current?.setAutoSip(!behaviorSettings.enabled) }, [behaviorSettings.enabled, modelPath])
-
-  // Live status for the settings banner + behavior engine state, polled from
-  // the scene so dances (any source) count as dancing.
+  // State drivers are independent of engine-owned clips. A one-shot dance
+  // must not feed back into the state engine as a new persistent dance.
+  const currentStatusRef = useRef<(force?: boolean) => void>(() => {})
+  const statusSnapshotRef = useRef({ key: '', at: 0 })
+  const publishCurrentStatus = (force = false) => currentStatusRef.current(force)
+  currentStatusRef.current = (force = false) => {
+    const playback = sceneRef.current?.getPlaybackStatus()
+    if (!playback) return
+    const managed = behaviorPlaybackRef.current
+    const state = managed.owned && managed.state ? managed.state
+      : resolvePetState({ dancing: playback.dancing, working, music: musicEnabled && musicPlaying })
+    const snapshot = { state, actionId: playback.actionId, danceId: playback.danceId, working: playback.working, sipping: playback.sipping }
+    const key = JSON.stringify(snapshot)
+    const now = Date.now()
+    if (force || key !== statusSnapshotRef.current.key || now - statusSnapshotRef.current.at >= 1000) {
+      statusSnapshotRef.current = { key, at: now }
+      publishStatus(snapshot)
+    }
+  }
   useEffect(() => {
     const timer = setInterval(() => {
-      const scene = sceneRef.current
-      const playback = scene?.getPlaybackStatus()
-      if (!playback) return
-      // A held one-shot finished: release behavior so it settles into the
-      // current state. A dance started from settings also flips the toggle on.
-      if (previewHoldRef.current && !sceneRef.current?.isBusy()) endPreviewHold()
-      if (playback.dancing) setDancing(previous => previous ? previous : true)
-      const state = resolvePetState({ dancing: playback.dancing, working, music: musicEnabled && musicPlaying })
-      setPetState(previous => (previous === state ? previous : state))
-      const key = JSON.stringify([state, playback.actionId, playback.danceId, playback.working, playback.sipping])
-      if (key !== lastPublishedRef.current) {
-        lastPublishedRef.current = key
-        publishStatus({ state, actionId: playback.actionId, danceId: playback.danceId, working: playback.working, sipping: playback.sipping })
-      }
-    }, 1000)
+      publishCurrentStatus()
+    }, 250)
+    publishCurrentStatus()
     return () => clearInterval(timer)
-  }, [working, musicEnabled, musicPlaying])
-
-  const endPreviewHold = useCallback(() => {
-    if (previewWatchdogRef.current) { clearTimeout(previewWatchdogRef.current); previewWatchdogRef.current = null }
-    if (!previewHoldRef.current) return
-    previewHoldRef.current = false
-    setPreviewHold(false)
-    // Apply the latest working state that arrived while held.
-    sceneRef.current?.setWorking(workingRef.current)
   }, [])
-  const beginPreviewHold = useCallback(() => {
-    previewHoldRef.current = true
-    setPreviewHold(true)
-    if (previewWatchdogRef.current) clearTimeout(previewWatchdogRef.current)
-    // Safety net: never hold behavior hostage if the clip end is missed.
-    previewWatchdogRef.current = setTimeout(() => endPreviewHold(), 30_000)
-  }, [endPreviewHold])
-  useEffect(() => () => { if (previewWatchdogRef.current) clearTimeout(previewWatchdogRef.current) }, [])
 
-  useBehaviorEngine({
+  const engine = useBehaviorEngine({
     enabled: behaviorSettings.enabled,
     profile: behaviorSettings.current,
-    state: petState,
-    paused: reactionActive || previewHold,
+    state: resolvePetState({ dancing, working, music: musicEnabled && musicPlaying }),
+    paused: reactionActive || suspended,
+    ready: sceneReady,
+    onPlayback: playback => { behaviorPlaybackRef.current = playback; publishCurrentStatus() },
     getScene: () => sceneRef.current,
   })
+  engineRef.current = engine
 
   const endReaction = useCallback(() => {
     const active = reactionRef.current
@@ -317,19 +294,12 @@ export default function App() {
     if (scene) {
       scene.resetPose()
       scene.setWorking(workingRef.current)
-      // Resume a dance the reaction interrupted: the user's dance toggle, or
-      // any other dance replayable from its key (built-in name or file URL).
+      // Resume a manual dance when automatic behavior is disabled.
       const user = userDanceRef.current
-      let resumedDance = true
-      if (user.dancing) {
+      if (user.dancing && !behaviorEnabledRef.current) {
         if (user.currentDance.startsWith('custom:') && user.customDancePreset) scene.playDance(user.customDancePreset, `dance:${user.currentDance}`)
         else scene.playDance(user.currentDance)
-      } else if (active.dance?.startsWith('dance:') && !active.dance.startsWith('dance:custom:')) {
-        scene.playDance(active.dance.slice(6), active.dance)
-      } else {
-        resumedDance = false
       }
-      setPetState(resolvePetState({ dancing: resumedDance, working: workingRef.current, music: musicPlayingRef.current }))
     }
     setReactionActive(false)
   }, [])
@@ -344,9 +314,9 @@ export default function App() {
     // Screensaver/lock suspend: full render suspend + window hide (see
     // VRMScene.setSuspended). document.hidden never fires under a fullscreen
     // saver, so this server-driven frame is the only reliable trigger.
-    if (msg.suspended !== undefined) { sceneRef.current?.setSuspended(msg.suspended); return }
+    if (msg.suspended !== undefined) { setSuspended(msg.suspended); sceneRef.current?.setSuspended(msg.suspended); return }
     if (msg.musicAudio) { sceneRef.current?.receiveMusicAudio(msg.musicAudio); return }
-    if (msg.musicEnded) { if (musicEnabledRef.current) sceneRef.current?.celebrateMusicEnd(); return }
+    if (msg.musicEnded) return // Music End entries are handled by the behavior engine.
     if (msg.musicBeat) sceneRef.current?.receiveMusicBeat(msg.musicBeat)
     if (msg.musicPlaying !== undefined) {
       setMusicPlaying(msg.musicPlaying)
@@ -355,7 +325,7 @@ export default function App() {
     if (msg.reactionStep) {
       const scene = sceneRef.current
       if (!reactionRef.current) {
-        reactionRef.current = { dance: scene?.getPlaybackStatus().danceId ?? null }
+        reactionRef.current = {}
         setReactionActive(true)
       }
       // Safety net if reactionDone never arrives (server restart mid-reaction).
@@ -371,11 +341,10 @@ export default function App() {
     if (msg.demoReset) sceneRef.current?.resetPose()
     if (msg.sipCoffee) sceneRef.current?.requestCoffeeSip()
     if (msg.working !== undefined) {
-      // During a reaction or one-shot preview only record the state;
-      // endReaction / endPreviewHold applies it so typing can't cut the clip.
+      // The engine applies state drivers; previews resume the latest state.
       workingRef.current = msg.working
       setWorkingState(msg.working)
-      if (!reactionRef.current && !previewHoldRef.current) sceneRef.current?.setWorking(msg.working)
+      if (!behaviorEnabledRef.current && !reactionRef.current && !engineRef.current?.isPreviewing()) sceneRef.current?.setWorking(msg.working)
     }
     if (msg.playAction) sceneRef.current?.playAction(msg.playAction, msg.hold ?? false)
     if (msg.emotion && sceneRef.current) {
@@ -391,50 +360,6 @@ export default function App() {
       }
     }
   }, [endReaction])
-
-  // ── Idle fidget: random emotion + action every ~60s when idle ──────────────
-  const lastActivityRef = useRef(Date.now())
-  // Reset idle timer whenever a VRM message arrives
-  const originalHandleVrmMessage = handleVrmMessage
-  const handleVrmMessageWithActivity: OnVrmMessage = useCallback((msg) => {
-    if (!msg.activitySync && !msg.musicBeat && !msg.musicAudio && !msg.musicEnded && msg.musicPlaying === undefined && msg.suspended === undefined) lastActivityRef.current = Date.now()
-    originalHandleVrmMessage(msg)
-  }, [originalHandleVrmMessage])
-
-  useEffect(() => {
-    const allEmotions = [
-      'happy', 'sad', 'angry', 'surprised', 'think', 'awkward',
-      'question', 'curious', 'neutral', 'love', 'flirty', 'greeting', 'relaxed',
-    ]
-    const allActions = [
-      'akimbo', 'playFingers', 'scratchHead', 'stretch',
-      'happy', 'angry', 'greeting', 'excited', 'shy',
-      'point', 'salute', 'angryPump',
-      'waving', 'cheering', 'clapping', 'victory', 'praying',
-      'defeated', 'joyfulJump', 'looking', 'pointing', 'breakdance',
-      'sittingIdle', 'sittingTalk', 'talkingIdle', 'phoneCall',
-    ]
-    const IDLE_THRESHOLD_MS = 30_000
-    const FIDGET_CHECK_MS = 15_000 // check every 15s, randomness inside
-
-    const timer = setInterval(() => {
-      // The behavior engine owns idle variety when enabled; this is the fallback.
-      if (behaviorEnabledRef.current || workingRef.current || musicPlayingRef.current || reactionRef.current) return
-      const idleMs = Date.now() - lastActivityRef.current
-      if (idleMs < IDLE_THRESHOLD_MS) return
-      // 50% chance each check to avoid being too predictable
-      if (Math.random() > 0.5) return
-
-      const emotion = allEmotions[Math.floor(Math.random() * allEmotions.length)]
-      const action = allActions[Math.floor(Math.random() * allActions.length)]
-      const intensity = 0.4 + Math.random() * 0.4 // 0.4–0.8
-      sceneRef.current?.setEmotionWithReset(emotion, 3000 + Math.random() * 2000, intensity)
-      sceneRef.current?.playAction(action)
-      lastActivityRef.current = Date.now() // reset so we don't spam
-    }, FIDGET_CHECK_MS)
-
-    return () => clearInterval(timer)
-  }, [])
 
   // ── Dancing mood boost: +1 every 30s ─────────
   useEffect(() => {
@@ -562,7 +487,6 @@ export default function App() {
     const visual = reactions[Math.floor(Math.random() * reactions.length)]
 
     // Immediate visual feedback (always)
-    lastActivityRef.current = Date.now()
     sceneRef.current?.setEmotionWithReset(visual.emotion, 3000, 0.8)
     if (visual.action) sceneRef.current?.playAction(visual.action)
 
@@ -619,9 +543,9 @@ export default function App() {
       {modelError && <div role="alert" data-no-passthrough style={{ position: 'absolute', top: 20, left: 16, right: 16, zIndex: 1000, background: '#402020', color: 'white', padding: 12, borderRadius: 8 }}>
         {modelError}<button onClick={() => { setModelError(''); setModelPath(DEFAULT_MODEL); saveSettings({ modelPath: DEFAULT_MODEL }) }}>Use default model</button>
       </div>}
-      <VRMScene animationSettings={animationSettings} ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} gazeGain={gazeGain} onTouch={handleTouch} onModelError={setModelError} onModelLoaded={() => { setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
+      <VRMScene animationSettings={animationSettings} ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} gazeGain={gazeGain} onTouch={handleTouch} onModelError={message => { setSceneReady(false); setModelError(message) }} onModelLoaded={() => { setSceneReady(true); setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
       <div style={hoverControlsStyle}>{!hideMood && <MoodIndicator uiAlign={uiAlign} />}</div>
-      <TextBubble onMessage={handleVrmMessageWithActivity} enabled={showText} ttsEnabled={ttsEnabled} bubble={bubbleSettings} />
+      <TextBubble onMessage={handleVrmMessage} enabled={showText} ttsEnabled={ttsEnabled} bubble={bubbleSettings} />
       <div style={hoverControlsStyle}>{!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}</div>
       <HistoryPanel
         visible={historyOpen}
@@ -728,6 +652,13 @@ export default function App() {
               if (dancing) {
                 sceneRef.current?.reset()
                 setDancing(false)
+              } else if (behaviorSettings.enabled) {
+                engineRef.current?.stopPreview()
+                setDancing(true)
+                fetch(petUrl('/session/memo'), {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ text: language === 'en' ? '[User invited you to dance]' : '[用户邀请你跳舞]' }),
+                }).catch(() => {})
               } else {
                 // Weighted pick from the dancing Main rotation (default: the 3
                 // dances, equal chance). Falls back to the selected dance.

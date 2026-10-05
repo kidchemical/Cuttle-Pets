@@ -64,8 +64,8 @@ export function SettingsWindow() {
     panelWidth={settings.panelWidth ?? 400} onPanelWidthChange={panelWidth => patch({ panelWidth })}
     pinned={settings.pinned ?? true} onPinnedChange={pinned => patch({ pinned })}
     animationSettings={normalizeAnimations(settings.animationSettings)} onAnimationSettingsChange={animationSettings => patch({ animationSettings })}
-    onAnimationPreview={(id, preset, mode) => sendPetCommand({ type: 'animation', id, preset, mode })}
+    onAnimationPreview={(id, preset, mode, durationMs) => sendPetCommand({ type: 'animation', id, preset, mode, durationMs })}
     onAnimationStop={() => sendPetCommand({ type: 'stop' })}
-    behaviorSettings={normalizeBehaviorSettings(settings.behaviorSettings)} onBehaviorSettingsChange={behaviorSettings => patch({ behaviorSettings })}
+    behaviorSettings={normalizeBehaviorSettings(settings.behaviorSettings, settings.musicSettings)} onBehaviorSettingsChange={behaviorSettings => patch({ behaviorSettings })}
   />
 }

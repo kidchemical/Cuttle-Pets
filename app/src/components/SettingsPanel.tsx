@@ -13,7 +13,7 @@ import { BehaviorPanel } from './BehaviorPanel'
 import { VersionChip, VersionFooter, openExternal } from './VersionFooter'
 import { APP_REPO_URL } from '../version'
 import { describeStatus, type BehaviorSettings, type BehaviorStateId } from '../behavior'
-import { subscribeWindowEvent, type PetStatusPayload } from '../window-sync'
+import { getLastPetStatus, sendPetCommand, subscribeWindowEvent, type PetStatusPayload } from '../window-sync'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isTauri, invoke } from '@tauri-apps/api/core'
 import type { DancePreset } from '../motion-controller'
@@ -33,7 +33,7 @@ interface SettingsPanelProps {
   standalone?: boolean
   animationSettings: AnimationSettings
   onAnimationSettingsChange: (value: AnimationSettings) => void
-  onAnimationPreview?: (id: string, preset?: DancePreset, mode?: 'once' | 'loop') => void
+  onAnimationPreview?: (id: string, preset?: DancePreset, mode?: 'once' | 'loop', durationMs?: number) => void
   onAnimationStop?: () => void
   onBubblePreview?: () => void
   musicSettings: MusicSettings
@@ -186,17 +186,19 @@ export function SettingsPanel({
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [customDances, setCustomDances] = useState<DanceItem[]>([])
   const [importingDance, setImportingDance] = useState(false)
-  const [petStatus, setPetStatus] = useState<PetStatusPayload | null>(null)
+  const [petStatus, setPetStatus] = useState<PetStatusPayload | null>(getLastPetStatus)
   useEffect(() => {
     if (!visible) return
-    return subscribeWindowEvent<PetStatusPayload>('pet-status', setPetStatus)
+    return subscribeWindowEvent<PetStatusPayload>('pet-status', payload => {
+      setPetStatus(previous => JSON.stringify(previous) === JSON.stringify(payload) ? previous : payload)
+    }, () => sendPetCommand({ type: 'status' }))
   }, [visible])
   const petStatusText = petStatus
     ? describeStatus({
       state: (['idle', 'working', 'music', 'dancing'] as string[]).includes(petStatus.state) ? petStatus.state as BehaviorStateId : 'idle',
       actionId: petStatus.actionId, danceId: petStatus.danceId, working: petStatus.working, sipping: petStatus.sipping,
     }, customDances, language)
-    : null
+    : 'Connecting to pet…'
 
 
   // Drag state
@@ -437,6 +439,10 @@ export function SettingsPanel({
           {tab === 'music'  && <MusicSettingsPanel fit={headphoneFit} music={musicSettings} enabled={musicEnabled} onFitChange={onHeadphoneFitChange} onMusicChange={onMusicSettingsChange} onEnabledChange={onMusicEnabledChange} onPreview={handlePreview} />}
           {tab === 'animations' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {petStatusText && <div role="status" style={{ display: 'flex', gap: 8, alignItems: 'center', background: '#22303f', border: '1px solid #39465c', borderRadius: 8, padding: '9px 12px' }}>
+                <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%', background: '#7fe08a', display: 'inline-block' }} />
+                <span>Now: <strong>{petStatusText}</strong></span>
+              </div>}
               <div style={sectionStyle}>
                   <div style={labelStyle}>{t('导入的动作', 'Imported Motion')}</div>
                   <div style={{ fontSize: 12, color: '#aebbd0', marginBottom: 8 }}>
@@ -564,7 +570,7 @@ export function SettingsPanel({
                     </div>
                   </div>
               </div>
-              <AnimationSettingsPanel settings={animationSettings} onChange={onAnimationSettingsChange} customDances={customDances} onPreview={onAnimationPreview} onStop={onAnimationStop} statusText={petStatusText} language={language} />
+              <AnimationSettingsPanel settings={animationSettings} onChange={onAnimationSettingsChange} customDances={customDances} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} />
             </div>
           )}
           {tab === 'behavior' && <BehaviorPanel settings={behaviorSettings} onChange={onBehaviorSettingsChange} customDances={customDances} statusText={petStatusText} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} />}

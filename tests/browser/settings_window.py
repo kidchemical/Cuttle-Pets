@@ -35,11 +35,33 @@ with sync_playwright() as p:
     page.goto(f'{base_url}/?settings')
     page.get_by_role('button', name='Animations', exact=True).click()
     page.get_by_role('option', name='Test imported dance').wait_for()
+    page.get_by_text('Now: Connecting to pet…', exact=True).wait_for()
     assert page.locator('canvas').count() == 0
     assert page.get_by_role('button', name='Close settings', exact=True).count() == 0
     peer = context.new_page()
     peer.goto(f'{base_url}/?settings')
-    peer.evaluate("""() => { window.commands=[]; window.bus = new BroadcastChannel('cuttle-pet-windows'); bus.onmessage = e => { if (e.data.name==='pet-command') { commands.push(e.data.payload); if(e.data.payload.type==='screenshot') bus.postMessage({name:'pet-screenshot',payload:{request:e.data.payload.request,image:'data:image/png;base64,test'}}) } } }""")
+    peer.evaluate("""() => { window.commands=[]; window.bus = new BroadcastChannel('cuttle-pet-windows'); bus.onmessage = e => { if (e.data.name==='pet-command') { commands.push(e.data.payload); if(e.data.payload.type==='status') bus.postMessage({name:'pet-status',payload:{state:'music',actionId:null,danceId:null,working:false,sipping:false}}); if(e.data.payload.type==='screenshot') bus.postMessage({name:'pet-screenshot',payload:{request:e.data.payload.request,image:'data:image/png;base64,test'}}) } } }""")
+    # A newly opened settings window requests the existing state, even if the
+    # pet has not changed animation since opening the first window.
+    page.reload()
+    page.get_by_role('button', name='Animations', exact=True).click()
+    peer.wait_for_function("commands.some(c => c.type==='status')")
+    page.get_by_text('Now: Listening to music', exact=True).wait_for()
+    status = page.locator('div[role="status"]').filter(has_text='Now:')
+    assert status.count() == 1
+    assert status.bounding_box()['y'] < page.get_by_text('Imported Motion', exact=True).bounding_box()['y']
+    page.get_by_role('button', name='Behavior', exact=True).click()
+    enabled = page.get_by_role('checkbox', name='Behavior engine enabled', exact=False)
+    assert page.get_by_role('button', name='Save profile', exact=True).bounding_box()['y'] < enabled.bounding_box()['y']
+    with page.expect_response(lambda r: r.url.endswith('/settings') and r.request.method == 'POST'):
+        page.get_by_label('Animation or behavior', exact=True).select_option('behavior:dancing')
+    assert saved['behaviorSettings']['current']['states']['idle']['mains'][0]['animation'] == 'behavior:dancing'
+    page.get_by_role('button', name='Preview once', exact=True).click()
+    peer.wait_for_function("commands.some(c => c.type==='animation' && c.id==='behavior:dancing' && c.mode==='once')")
+    page.get_by_role('button', name='Stop preview', exact=True).click()
+    peer.wait_for_function("commands.some(c => c.type==='stop')")
+    page.get_by_role('button', name='Reset to default', exact=True).click()
+    page.get_by_role('button', name='Animations', exact=True).click()
     page.get_by_label('Global animation speed', exact=True).fill('2')
     page.get_by_role('option', name='Happy', exact=False).click()
     page.get_by_label('Individual speed', exact=True).fill('0.5')
@@ -94,17 +116,17 @@ with sync_playwright() as p:
     with page.expect_response(lambda r: r.url.endswith('/settings') and r.request.method == 'POST'):
         page.get_by_role('slider', name='Overall scale', exact=True).fill('1.2')
     assert peer.evaluate("commands.filter(c=>c.type==='music-preview').at(-1).active") is True
-    for tab in ['General','Music','Cuttle','Voice','Model','Persona','Dance','Quality','Display']:
+    for tab in ['General','Music','Cuttle','Voice','Model','Persona','Behavior','Quality','Display']:
         page.get_by_role('button', name=tab, exact=True).click()
     page.get_by_role('button', name='Persona', exact=True).click()
     page.get_by_role('button', name='Auto Generate', exact=True).click()
     peer.wait_for_function("commands.some(c => c.type==='screenshot')")
     page.set_viewport_size({'width': 480, 'height': 500})
-    for tab in ['General','Music','Cuttle','Voice','Model','Persona','Dance','Quality','Display','Animations']:
+    for tab in ['General','Music','Cuttle','Voice','Model','Persona','Behavior','Quality','Display','Animations']:
         page.get_by_role('button', name=tab, exact=True).click()
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), tab
         assert page.locator('.settings-content').evaluate('e => e.scrollWidth <= e.clientWidth'), tab
     page.screenshot(path=str(scratch / 'animation-settings-small.png'))
     assert not errors, errors
-    print('Browser checks passed: standalone settings, imported list, live sync, preview routing, reload persistence, reset, all tabs, small window, no page errors.')
+    print('Browser checks passed: standalone settings, imported list, immediate state request, behavior assignments, live sync, preview routing, reload persistence, reset, all tabs, small window, no page errors.')
     browser.close()
