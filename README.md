@@ -333,10 +333,16 @@ npm --prefix app run dev -- --port 1431
 # In another terminal:
 python tests/browser/settings_window.py --base-url http://127.0.0.1:1431
 python tests/browser/settings_imports.py --base-url http://127.0.0.1:1431
+python tests/browser/music_polling.py --base-url http://127.0.0.1:1431
+python tests/browser/render_readback.py --base-url http://127.0.0.1:1431
 ```
 
-The browser smoke test mocks all pet-server calls, checks persistence and live
-window synchronization, and saves screenshots under `temp/`.
+The settings browser smoke test mocks all pet-server calls, checks persistence and
+live window synchronization, and saves screenshots under `temp/`. The polling test
+checks that BPM updates leave the fitting controls idle and stop on unmount. The
+render test exercises real WebGL alpha readbacks, screenshots, and teardown with
+native window operations mocked; it does not verify desktop input delivery or
+hardware frame-rate gains.
 
 ## License
 

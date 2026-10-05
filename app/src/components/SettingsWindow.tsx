@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isTauri } from '@tauri-apps/api/core'
 import { SettingsPanel } from './SettingsPanel'
@@ -36,11 +36,21 @@ export function SettingsWindow() {
     saveSettings(value)
   }
   const modelPath = settings.modelPath || '/model1.vrm'
+  // Preserve unrelated config identities while dragging a setting slider.
+  const musicSettings = useMemo(() => normalizeMusic(settings.musicSettings || DEFAULT_MUSIC), [settings.musicSettings])
+  const modelFit = settings.headphoneFits?.[modelFitKey(modelPath)]
+  const headphoneFit = useMemo(() => normalizeFit(modelFit || DEFAULT_FIT), [modelFit])
+  const qualitySettings = useMemo(() => normalizeQualitySettings(settings.quality), [settings.quality])
+  const bubbleSettings = useMemo(() => normalizeBubbleSettings(settings.bubbleSettings), [settings.bubbleSettings])
+  const animationSettings = useMemo(() => normalizeAnimations(settings.animationSettings), [settings.animationSettings])
+  const behaviorSettings = useMemo(() => normalizeBehaviorSettings(settings.behaviorSettings, settings.musicSettings), [settings.behaviorSettings, settings.musicSettings])
+  const petSettings = useMemo(() => normalizePetSettings(settings.petSettings), [settings.petSettings])
+  const propSettings = useMemo(() => normalizePropSettings(settings.propSettings), [settings.propSettings])
   if (!ready) return <div style={{ background: '#1b1d25', color: 'white', height: '100vh', padding: 24 }}>Loading settings…</div>
   return <SettingsPanel
     standalone visible onClose={() => { sendPetCommand({ type: 'music-preview', active: false }); if (isTauri()) void getCurrentWindow().close(); else window.close() }}
-    musicSettings={normalizeMusic(settings.musicSettings || DEFAULT_MUSIC)}
-    headphoneFit={normalizeFit(settings.headphoneFits?.[modelFitKey(modelPath)] || DEFAULT_FIT)}
+    musicSettings={musicSettings}
+    headphoneFit={headphoneFit}
     musicEnabled={settings.musicEnabled ?? true}
     onMusicEnabledChange={musicEnabled => patch({ musicEnabled })}
     onMusicSettingsChange={musicSettings => patch({ musicSettings: normalizeMusic(musicSettings) })}
@@ -52,7 +62,7 @@ export function SettingsWindow() {
     ttsEnabled={settings.ttsEnabled ?? true} onTtsEnabledChange={ttsEnabled => patch({ ttsEnabled })}
     tracking={settings.tracking || 'mouse'} onTrackingChange={tracking => patch({ tracking })}
     gazeGain={normalizeGazeGain(settings.gazeGain)} onGazeGainChange={gazeGain => patch({ gazeGain })}
-    qualitySettings={normalizeQualitySettings(settings.quality)} onQualitySettingsChange={quality => patch({ quality })}
+    qualitySettings={qualitySettings} onQualitySettingsChange={quality => patch({ quality })}
     volume={settings.volume ?? .5} onVolumeChange={volume => patch({ volume })}
     uiAlign={settings.uiAlign || 'right'} onUiAlignChange={uiAlign => patch({ uiAlign })}
     hideMood={settings.hideMood ?? false} onHideMoodChange={hideMood => patch({ hideMood })}
@@ -61,14 +71,14 @@ export function SettingsWindow() {
     captureVrmScreenshot={requestScreenshot} onBubblePreview={previewBubble}
     language={settings.language || (navigator.language.startsWith('zh') ? 'zh' : 'en')} onLanguageChange={language => patch({ language })}
     currentDance={settings.currentDance || 'jile'} onDanceChange={(currentDance, customDancePreset) => patch({ currentDance, customDancePreset })}
-    bubbleSettings={normalizeBubbleSettings(settings.bubbleSettings)} onBubbleSettingsChange={bubbleSettings => patch({ bubbleSettings })}
+    bubbleSettings={bubbleSettings} onBubbleSettingsChange={bubbleSettings => patch({ bubbleSettings })}
     panelWidth={settings.panelWidth ?? 400} onPanelWidthChange={panelWidth => patch({ panelWidth })}
     pinned={settings.pinned ?? true} onPinnedChange={pinned => patch({ pinned })}
-    animationSettings={normalizeAnimations(settings.animationSettings)} onAnimationSettingsChange={animationSettings => patch({ animationSettings })}
+    animationSettings={animationSettings} onAnimationSettingsChange={animationSettings => patch({ animationSettings })}
     onAnimationPreview={(id, preset, mode, durationMs, source) => sendPetCommand({ type: 'animation', id, preset, mode, durationMs, source })}
     onAnimationStop={() => sendPetCommand({ type: 'stop' })}
-    behaviorSettings={normalizeBehaviorSettings(settings.behaviorSettings, settings.musicSettings)} onBehaviorSettingsChange={behaviorSettings => patch({ behaviorSettings })}
-    petSettings={normalizePetSettings(settings.petSettings)} onPetSettingsChange={petSettings => patch({ petSettings })}
-    propSettings={normalizePropSettings(settings.propSettings)} onPropSettingsChange={propSettings => patch({ propSettings })}
+    behaviorSettings={behaviorSettings} onBehaviorSettingsChange={behaviorSettings => patch({ behaviorSettings })}
+    petSettings={petSettings} onPetSettingsChange={petSettings => patch({ petSettings })}
+    propSettings={propSettings} onPropSettingsChange={propSettings => patch({ propSettings })}
   />
 }

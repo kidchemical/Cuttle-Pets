@@ -13,37 +13,7 @@ interface Props {
 }
 export function MusicSettingsPanel({ fit, music, enabled, onFitChange, onMusicChange, onEnabledChange, onPreview }: Props) {
   const [preview, setPreview] = useState(false)
-  const [analysis, setAnalysis] = useState<MusicAnalysis>({})
-  const [lastBpm, setLastBpm] = useState<number | null>(null)
-  const readout = musicReadout(analysis, lastBpm, enabled)
   useEffect(() => () => onPreview(false), [onPreview])
-  useEffect(() => {
-    let active = true
-    let timer: ReturnType<typeof setTimeout>
-    let controller: AbortController | null = null
-    const poll = async () => {
-      controller = new AbortController()
-      const timeout = setTimeout(() => controller?.abort(), 2000)
-      try {
-        const response = await fetch(petUrl('/music'), { signal: controller.signal })
-        if (!response.ok) throw new Error('Music status unavailable')
-        const result = await response.json()
-        if (active) {
-          const next: MusicAnalysis = result.analysis || {}
-          setAnalysis(next)
-          const value = musicReadout(next, null, true)
-          if (value.current) setLastBpm(value.bpm)
-        }
-      } catch {
-        if (active) setAnalysis({ status: 'unavailable', message: 'Pet server offline; using fallback tempo.' })
-      } finally {
-        clearTimeout(timeout)
-        if (active) timer = setTimeout(() => { void poll() }, 500)
-      }
-    }
-    void poll()
-    return () => { active = false; clearTimeout(timer); controller?.abort() }
-  }, [])
   const slider = (label: string, value: number, min: number, max: number, step: number, change: (v: number) => void, unit = '') => <label style={{ display: 'grid', gridTemplateColumns: '1fr 76px', gap: 6, fontSize: 12 }}>
     <span>{label}</span><span style={{ textAlign: 'right' }}>{Number(value.toFixed(2))}{unit}</span>
     <input style={{ gridColumn: '1 / -1', width: '100%' }} type="range" aria-label={label} min={min} max={max} step={step} value={value} onChange={e => change(Number(e.target.value))} />
@@ -51,15 +21,7 @@ export function MusicSettingsPanel({ fit, music, enabled, onFitChange, onMusicCh
   return <div className="music-settings">
     <label><input type="checkbox" checked={enabled} onChange={e => onEnabledChange(e.target.checked)} /> React to music</label>
     <section aria-label="BPM analysis">
-      <div className="music-bpm-card" data-state={readout.state}>
-        <div className="music-bpm-heading"><h3>Desktop playback BPM</h3><span className="music-bpm-state" role="status">{readout.label}</span></div>
-        <div className="music-bpm-value" aria-label={readout.bpm === null ? 'BPM estimate pending' : `${Math.round(readout.bpm)} BPM ${readout.current ? 'current' : 'last'} estimate`}>
-          <strong>{readout.bpm === null ? '—' : Math.round(readout.bpm)}</strong><span>BPM</span>
-        </div>
-        <p className="music-note">{readout.detail}</p>
-        {!readout.current && readout.bpm !== null && readout.state !== 'calculating' && <p className="music-note">Last estimate</p>}
-        <div className="music-bpm-confidence"><span>Rhythm confidence</span><meter aria-label="Rhythm confidence" min={0} max={1} value={readout.confidence} /></div>
-      </div>
+      <MusicAnalysisReadout enabled={enabled} />
       <label><input type="checkbox" checked={music.beatSync} onChange={e => onMusicChange({ ...music, beatSync: e.target.checked })} /> Sync to beats in desktop playback audio</label>
       {slider('Minimum detected BPM', music.minBpm, 40, music.maxBpm - 1, 1, v => onMusicChange({ ...music, minBpm: v }))}
       {slider('Maximum detected BPM', music.maxBpm, music.minBpm + 1, 240, 1, v => onMusicChange({ ...music, maxBpm: v }))}
@@ -87,4 +49,49 @@ export function MusicSettingsPanel({ fit, music, enabled, onFitChange, onMusicCh
       <button onClick={() => onFitChange({ ...DEFAULT_FIT })}>Reset this character’s headphone fit</button>
     </section>
   </div>
+}
+
+/** Polling updates only the live readout, leaving the fitting controls alone. */
+function MusicAnalysisReadout({ enabled }: { enabled: boolean }) {
+  const [analysis, setAnalysis] = useState<MusicAnalysis>({})
+  const [lastBpm, setLastBpm] = useState<number | null>(null)
+  const readout = musicReadout(analysis, lastBpm, enabled)
+  useEffect(() => {
+    let active = true
+    let timer: ReturnType<typeof setTimeout>
+    let controller: AbortController | null = null
+    const poll = async () => {
+      controller = new AbortController()
+      const timeout = setTimeout(() => controller?.abort(), 2000)
+      try {
+        const response = await fetch(petUrl('/music'), { signal: controller.signal })
+        if (!response.ok) throw new Error('Music status unavailable')
+        const result = await response.json()
+        if (active) {
+          const next: MusicAnalysis = result.analysis || {}
+          setAnalysis(next)
+          const value = musicReadout(next, null, true)
+          if (value.current) setLastBpm(value.bpm)
+        }
+      } catch {
+        if (active) setAnalysis({ status: 'unavailable', message: 'Pet server offline; using fallback tempo.' })
+      } finally {
+        clearTimeout(timeout)
+        if (active) timer = setTimeout(() => { void poll() }, 500)
+      }
+    }
+    void poll()
+    return () => { active = false; clearTimeout(timer); controller?.abort() }
+  }, [])
+  return (
+    <div className="music-bpm-card" data-state={readout.state}>
+      <div className="music-bpm-heading"><h3>Desktop playback BPM</h3><span className="music-bpm-state" role="status">{readout.label}</span></div>
+      <div className="music-bpm-value" aria-label={readout.bpm === null ? 'BPM estimate pending' : `${Math.round(readout.bpm)} BPM ${readout.current ? 'current' : 'last'} estimate`}>
+        <strong>{readout.bpm === null ? '—' : Math.round(readout.bpm)}</strong><span>BPM</span>
+      </div>
+      <p className="music-note">{readout.detail}</p>
+      {!readout.current && readout.bpm !== null && readout.state !== 'calculating' && <p className="music-note">Last estimate</p>}
+      <div className="music-bpm-confidence"><span>Rhythm confidence</span><meter aria-label="Rhythm confidence" min={0} max={1} value={readout.confidence} /></div>
+    </div>
+  )
 }

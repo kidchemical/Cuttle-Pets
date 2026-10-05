@@ -303,6 +303,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   }
   // Set inside the render effect (it owns the rAF id); called via setSuspended.
   const suspendFnRef = useRef<(suspended: boolean) => void>(() => {})
+  const captureScreenshotRef = useRef<() => string | null>(() => null)
   const companionsRef = useRef<CompanionLayer | null>(null)
   const companionConfigRef = useRef({ pets, props })
   companionConfigRef.current = { pets, props }
@@ -340,7 +341,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       void motionRef.current?.playAction(name, false)
     },
     captureScreenshot() {
-      return canvasRef.current?.toDataURL('image/png') ?? null
+      return captureScreenshotRef.current()
     },
     panCamera(dx: number, dy: number) {
       panCameraRef.current?.(dx, dy)
@@ -476,11 +477,20 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       canvas,
       alpha: true,
       antialias: true,
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: false,
     })
     renderer.setSize(window.innerWidth, window.innerHeight)
     renderer.setPixelRatio(window.devicePixelRatio)
     renderer.setClearColor(0x000000, 0)
+
+    // Capture immediately after an explicit render. Keeping every drawing buffer
+    // alive just for occasional screenshots adds work to every normal frame.
+    captureScreenshotRef.current = () => {
+      if (disposed) return null
+      renderer.setRenderTarget(null)
+      renderer.render(scene, camera)
+      return canvas.toDataURL('image/png')
+    }
 
     // ── Scene ─────────────────────────────────────────────────────────────────
     const scene = new THREE.Scene()
@@ -1144,18 +1154,29 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     window.addEventListener('resize', onResize)
 
     // ── Hit-test for window pass-through ──────────────────────────────────────
-    // Offscreen render target: render scene, read 1 pixel alpha at cursor.
-    // Updated in the render loop — no extra render pass, just piggybacks.
-    const hitTarget = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false })
+    // Keep the full viewport for screen-space material effects, but scissor the
+    // cursor pass to one pixel. Async readback avoids waiting for the GPU here.
+    const hitTarget = new THREE.WebGLRenderTarget(1, 1)
     let pendingHitTest: { x: number; y: number; resolve: (hit: boolean) => void } | null = null
     const hitPixel = new Uint8Array(4)
     const inputTarget = new THREE.WebGLRenderTarget(1, 1)
     let lastInputMaskTime = 0
     let inputPixels = new Uint8Array(4)
+    let inputReadback: Promise<void> | null = null
+    let hitReadback: Promise<void> | null = null
+    let activeHitResolve: ((hit: boolean) => void) | null = null
+    let readbackErrorReported = false
+    const reportReadbackError = (error: unknown) => {
+      if (!disposed && !readbackErrorReported) {
+        readbackErrorReported = true
+        console.warn('Input pixel readback failed; keeping the window receptive.', error)
+      }
+    }
 
     // Async hit-test: queues a request, resolved after next frame render
     ;(window as any).__clawHitTest = (clientX: number, clientY: number): Promise<boolean> => {
       return new Promise((resolve) => {
+        pendingHitTest?.resolve(true)
         pendingHitTest = { x: clientX, y: clientY, resolve }
       })
     }
@@ -1323,13 +1344,14 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       renderer.render(scene, camera)
 
       // Linux uses a persistent silhouette input shape, never cursor polling.
-      if (canvas && (window as any).__clawInputRegionsEnabled && performance.now() - lastInputMaskTime >= 100) {
+      if (canvas && !inputReadback && (window as any).__clawInputRegionsEnabled && performance.now() - lastInputMaskTime >= 100) {
         lastInputMaskTime = performance.now()
         if (!vrm) {
           delete (window as any).__clawInputRegions
         } else {
+          const cssWidth = canvas.clientWidth, cssHeight = canvas.clientHeight
           const width = 128
-          const height = Math.max(1, Math.round(width * canvas.clientHeight / canvas.clientWidth))
+          const height = Math.max(1, Math.round(width * cssHeight / Math.max(1, cssWidth)))
           if (inputTarget.width !== width || inputTarget.height !== height) {
             inputTarget.setSize(width, height)
             inputPixels = new Uint8Array(width * height * 4)
@@ -1338,43 +1360,55 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
             renderer.setRenderTarget(inputTarget)
             renderer.clear()
             renderer.render(scene, camera)
-            renderer.readRenderTargetPixels(inputTarget, 0, 0, width, height, inputPixels)
-            ;(window as any).__clawInputRegions = alphaInputRegions(inputPixels, width, height, canvas.clientWidth, canvas.clientHeight)
+            inputReadback = renderer.readRenderTargetPixelsAsync(inputTarget, 0, 0, width, height, inputPixels)
+              .then(() => {
+                // Never publish an old-sized mask after a resize or scene teardown.
+                if (disposed || renderingPaused || !(window as any).__clawInputRegionsEnabled
+                  || canvas.clientWidth !== cssWidth || canvas.clientHeight !== cssHeight) return
+                ;(window as any).__clawInputRegions = alphaInputRegions(inputPixels, width, height, cssWidth, cssHeight)
+              })
+              .catch(error => {
+                if (!disposed) delete (window as any).__clawInputRegions
+                reportReadbackError(error)
+              })
+              .finally(() => { inputReadback = null })
           } finally {
             renderer.setRenderTarget(null)
           }
         }
       }
 
-      // Process pending hit-test after render
-      if (pendingHitTest && canvas) {
+      // Only one cursor readback may own the pixel buffer at a time.
+      if (pendingHitTest && !hitReadback && canvas) {
         const { x, y, resolve } = pendingHitTest
         pendingHitTest = null
-
         if (!vrm) {
-          resolve(true) // Model not loaded — don't pass through
+          resolve(true) // Model not loaded — keep the window receptive.
         } else {
-
-        const dpr = renderer.getPixelRatio()
-        const bufW = canvas.clientWidth * dpr
-        const bufH = canvas.clientHeight * dpr
-
-        if (hitTarget.width !== bufW || hitTarget.height !== bufH) {
-          hitTarget.setSize(bufW, bufH)
+          const dpr = renderer.getPixelRatio()
+          const bufW = canvas.width, bufH = canvas.height
+          const px = Math.floor(x * dpr)
+          const py = bufH - 1 - Math.floor(y * dpr)
+          if (px < 0 || py < 0 || px >= bufW || py >= bufH) {
+            resolve(false)
+          } else {
+            if (hitTarget.width !== bufW || hitTarget.height !== bufH) hitTarget.setSize(bufW, bufH)
+            hitTarget.scissor.set(px, py, 1, 1)
+            hitTarget.scissorTest = true
+            activeHitResolve = resolve
+            try {
+              renderer.setRenderTarget(hitTarget)
+              renderer.clear()
+              renderer.render(scene, camera)
+              hitReadback = renderer.readRenderTargetPixelsAsync(hitTarget, px, py, 1, 1, hitPixel)
+                .then(() => { activeHitResolve?.(hitPixel[3] > 10) })
+                .catch(error => { activeHitResolve?.(true); reportReadbackError(error) })
+                .finally(() => { activeHitResolve = null; hitReadback = null })
+            } finally {
+              renderer.setRenderTarget(null)
+            }
+          }
         }
-
-        // Render to offscreen target
-        renderer.setRenderTarget(hitTarget)
-        renderer.clear()
-        renderer.render(scene, camera)
-        // Read 1 pixel at cursor position
-        const px = Math.floor(x * dpr)
-        const py = Math.floor(bufH - y * dpr) // GL Y-flip
-        renderer.readRenderTargetPixels(hitTarget, px, py, 1, 1, hitPixel)
-        renderer.setRenderTarget(null)
-
-        resolve(hitPixel[3] > 10)
-        } // end else (vrm exists)
       }
     }
 
@@ -1392,6 +1426,10 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       if (renderingPaused) return
       renderingPaused = true
       cancelAnimationFrame(animFrameId)
+      pendingHitTest?.resolve(true)
+      pendingHitTest = null
+      activeHitResolve?.(true)
+      activeHitResolve = null
     }
     function resumeRendering() {
       if (!renderingPaused) return
@@ -1450,6 +1488,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     // ── Cleanup ───────────────────────────────────────────────────────────────
     return () => {
       disposed = true
+      captureScreenshotRef.current = () => null
       // Canvas gestures die with the effect; never leave the cursor monitor
       // suppressed (or a stale in-flight gesture) behind.
       ;(window as any).__clawDragging = false
@@ -1501,8 +1540,15 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       cup?.removeFromParent()
       cup = null
       typingCache = null
-      hitTarget.dispose()
-      inputTarget.dispose()
+      // Readbacks own GL resources until their fences complete. Release the
+      // renderer afterwards, even on rapid model reloads / StrictMode teardown.
+      activeHitResolve?.(true)
+      activeHitResolve = null
+      void Promise.allSettled([inputReadback, hitReadback]).then(() => {
+        hitTarget.dispose()
+        inputTarget.dispose()
+        renderer.dispose()
+      })
       delete (window as any).__clawInputRegions
       // Fail open: a cursor hit-test still awaiting its frame must resolve
       // instead of hanging usePassThrough's pending gate forever.
@@ -1513,7 +1559,6 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       delete (window as any).__clawHitTest
       for (const timer of previewTimersRef.current) clearTimeout(timer)
       previewTimersRef.current = []
-      renderer.dispose()
     }
   }, [modelPath, idleAnimationPath])
 
