@@ -10,6 +10,7 @@ interface VrmMessage {
   reactionStep?: import('../behavior').ReactionStepFrame
   reactionDone?: boolean
   reaction?: string
+  reactionIndex?: number
   clearText?: boolean
   text?: string
   emotion?: string

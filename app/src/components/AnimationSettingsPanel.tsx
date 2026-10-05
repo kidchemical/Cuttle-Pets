@@ -1,3 +1,5 @@
+import { activeAnimationIds } from '../playback-highlights'
+import type { PetStatusPayload } from '../window-sync'
 import { useState } from 'react'
 import { Play, Repeat, Square } from 'lucide-react'
 import { actionPresets, dancePresets, localizedPresetLabel, type DancePreset } from '../motion-controller'
@@ -11,10 +13,12 @@ interface Props {
   customDances: { id: string; label: string; vmdUrl: string; bgmUrl?: string; type?: 'vmd' | 'vrma' | 'fbx' }[]
   onPreview?: (id: string, preset?: DancePreset, mode?: PreviewMode) => void
   onStop?: () => void
+  status?: PetStatusPayload | null
   language?: 'zh' | 'en'
 }
 const button: React.CSSProperties = { padding: '9px 12px', border: '1px solid #505665', borderRadius: 7, background: '#303645', color: 'white', cursor: 'pointer', textAlign: 'left' }
-export function AnimationSettingsPanel({ settings, onChange, customDances, onPreview, onStop, language = 'zh' }: Props) {
+export function AnimationSettingsPanel({ settings, onChange, customDances, onPreview, onStop, status, language = 'zh' }: Props) {
+  const active = activeAnimationIds(status)
   const [selected, setSelected] = useState('idle')
   const [query, setQuery] = useState('')
   const items: { id: string; label: string; group: string; procedural: boolean; preset?: DancePreset }[] = [
@@ -40,8 +44,9 @@ export function AnimationSettingsPanel({ settings, onChange, customDances, onPre
     <div className="animation-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 1.65fr) minmax(150px, 0.85fr)', gap: 16, alignItems: 'stretch' }}>
       <div className="animation-list" role="listbox" aria-label="Animations" style={{ overflowY: 'auto', height: '100%', minHeight: 330, display: 'flex', flexDirection: 'column', gap: 4 }}>
         {items.filter(item => `${item.label} ${item.group}`.toLowerCase().includes(query.toLowerCase())).map(entry => <div key={entry.id} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <button role="option" aria-selected={item.id === entry.id} onClick={() => setSelected(entry.id)} style={{ ...button, padding: '6px 10px', flex: 1, minWidth: 0, background: item.id === entry.id ? '#385a90' : '#262c38', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {entry.label} <small style={{ color: '#b5becf' }}>{entry.group}{settings.overrides[entry.id] ? ' · customized' : ''}</small>
+          <button className="live-entry" data-animation={entry.id} data-active={active.has(entry.id)} role="option" aria-selected={item.id === entry.id} onClick={() => setSelected(entry.id)} style={{ ...button, padding: '6px 10px', flex: 1, minWidth: 0, background: item.id === entry.id ? '#385a90' : '#262c38', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <span className="live-entry-name">{entry.label} <small style={{ color: '#b5becf' }}>{entry.group}{settings.overrides[entry.id] ? ' · customized' : ''}</small></span>
+            {active.has(entry.id) && <span className="playback-badge">Playing</span>}
           </button>
           <div style={{ display: 'flex', flexDirection: 'row', gap: 2, flexShrink: 0 }}>
             <button title={`Play ${entry.label} once`} aria-label={`Play ${entry.label} once`} onClick={() => onPreview?.(entry.id, entry.preset, 'once')} style={{ ...button, padding: '6px 7px' }}><Play size={12} /></button>

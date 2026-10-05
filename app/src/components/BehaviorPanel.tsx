@@ -4,11 +4,12 @@ import {
   BEHAVIOR_STATES, EMOTION_OPTIONS, RANDOM_ACTION, RANDOM_EMOTION, MAX_MAINS, animationCatalog, animationLabel,
   normalizeProfile, normalizeReaction, defaultBehaviorProfile, exampleReaction,
   slugifyReactionId, editReactionId, isValidReactionParamName, describeReaction, reactionCliExample,
-  type AnimationOption, type BehaviorEntry, type BehaviorSettings, type BehaviorStateId,
+  type AnimationOption, type BehaviorEntry, type BehaviorEntryLocation, type BehaviorSettings, type BehaviorStateId,
   type CustomReaction, type OccasionalEntry, type ReactionParam, type StateBehavior, type WeightedEntry,
 } from '../behavior'
 import type { DancePreset } from '../motion-controller'
 import type { PreviewMode } from './AnimationSettingsPanel'
+import type { PetStatusPayload } from '../window-sync'
 import { petUrl } from '../config'
 
 interface Props {
@@ -16,7 +17,8 @@ interface Props {
   onChange: (value: BehaviorSettings) => void
   customDances: { id: string; label: string; vmdUrl: string; bgmUrl?: string; type?: 'vmd' | 'vrma' | 'fbx' }[]
   statusText: string | null
-  onPreview?: (id: string, preset?: DancePreset, mode?: PreviewMode, durationMs?: number) => void
+  status?: PetStatusPayload | null
+  onPreview?: (id: string, preset?: DancePreset, mode?: PreviewMode, durationMs?: number, source?: BehaviorEntryLocation) => void
   onStop?: () => void
   language?: 'zh' | 'en'
 }
@@ -80,7 +82,7 @@ function EmotionSelect({ value, onPick }: { value: string; onPick: (emotion: str
   </select>
 }
 
-export function BehaviorPanel({ settings, onChange, customDances, statusText, onPreview, onStop, language = 'zh' }: Props) {
+export function BehaviorPanel({ settings, onChange, customDances, statusText, status, onPreview, onStop, language = 'zh' }: Props) {
   const animations = animationCatalog(customDances, language)
   const catalog: AnimationOption[] = [...animations, ...BEHAVIOR_STATES.map(state => ({
     id: `behavior:${state.id}`, label: `${state.label} (behavior)`, group: 'Behaviors', procedural: false,
@@ -369,7 +371,8 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
         </div>
         <div style={{ display: 'grid', gap: 6 }}>
           <span style={muted}>Steps — played in order, then the pet returns to its state:</span>
-          {reaction.steps.map((step, index) => <div key={index} style={row}>
+          {reaction.steps.map((step, index) => <div key={index} className="live-entry" data-reaction-step={`${reaction.id}:${index}`} data-active={status?.reaction?.id === reaction.id && status.reaction.index === index} style={{ ...row, border: '1px solid transparent', borderRadius: 8, padding: 6 }}>
+            {status?.reaction?.id === reaction.id && status.reaction.index === index && <span className="playback-badge">Playing</span>}
             <span style={{ ...muted, minWidth: 18 }}>{index + 1}.</span>
             <AnimationSelect value={step.animation} catalog={animations} onPick={animationId => patchReaction(reaction.id, r => { r.steps[index] = { ...r.steps[index], ...pickReactionAnimation(animationId) } })} />
             <EmotionSelect value={step.emotion ?? ''} onPick={emotion => patchReaction(reaction.id, r => { r.steps[index].emotion = emotion })} />
@@ -414,16 +417,19 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
                 return <div key={phase} style={{ display: 'grid', gap: 4 }}>
                   <span style={muted}>{phaseLabel}</span>
                   {entries.map((entry, index) => {
+                    const source: BehaviorEntryLocation = { state: stateId, phase, index }
+                    const isActive = status?.behaviorEntries?.some(active => active.state === stateId && active.phase === phase && active.index === index) ?? false
                     const isSel = sel?.state === stateId && sel?.phase === phase && sel?.index === index
                     const preset = presetFor(entry)
                     const title = animationLabel(entry.animation, customDances, language)
                     return <div key={stateId + ':' + phase + ':' + index} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                      <button role="option" aria-selected={isSel} onClick={() => setSelected({ state: stateId, phase, index })} style={{ ...button, padding: '6px 10px', flex: 1, minWidth: 0, background: isSel ? '#385a90' : '#262c38', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {title} <small style={{ color: '#b5becf' }}>{entryMeta(stateId, phase, entry)}</small>
+                      <button className="live-entry" data-entry={`${stateId}:${phase}:${index}`} data-active={isActive} role="option" aria-selected={isSel} onClick={() => setSelected({ state: stateId, phase, index })} style={{ ...button, padding: '6px 10px', flex: 1, minWidth: 0, background: isSel ? '#385a90' : '#262c38', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <span className="live-entry-name">{title} <small style={{ color: '#b5becf' }}>{entryMeta(stateId, phase, entry)}</small></span>
+                        {isActive && <span className="playback-badge">Playing</span>}
                       </button>
                       <div style={{ display: 'flex', flexDirection: 'row', gap: 2, flexShrink: 0 }}>
-                        <button title={'Play ' + title + ' once'} aria-label={'Play ' + title + ' once'} onClick={() => onPreview?.(entry.animation, preset, 'once', entry.durationMs)} style={{ ...button, padding: '6px 7px' }}><Play size={12} /></button>
-                        <button title={'Play ' + title + ' looped'} aria-label={'Play ' + title + ' looped'} onClick={() => onPreview?.(entry.animation, preset, 'loop', entry.durationMs)} style={{ ...button, padding: '6px 7px' }}><Repeat size={12} /></button>
+                        <button title={'Play ' + title + ' once'} aria-label={'Play ' + title + ' once'} onClick={() => onPreview?.(entry.animation, preset, 'once', entry.durationMs, source)} style={{ ...button, padding: '6px 7px' }}><Play size={12} /></button>
+                        <button title={'Play ' + title + ' looped'} aria-label={'Play ' + title + ' looped'} onClick={() => onPreview?.(entry.animation, preset, 'loop', entry.durationMs, source)} style={{ ...button, padding: '6px 7px' }}><Repeat size={12} /></button>
                         <button title={'Stop ' + title} aria-label={'Stop ' + title} onClick={() => onStop?.()} style={{ ...button, padding: '6px 7px' }}><Square size={12} /></button>
                       </div>
                     </div>
@@ -486,8 +492,8 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, on
                 </span>
               </label>
             )}
-            <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'once', selEntry.durationMs)}>Preview once</button>
-            <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'loop', selEntry.durationMs)}>Preview looped</button>
+            <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'once', selEntry.durationMs, sel)}>Preview once</button>
+            <button style={button} onClick={() => onPreview?.(selEntry.animation, presetFor(selEntry), 'loop', selEntry.durationMs, sel)}>Preview looped</button>
             <button style={button} onClick={onStop}>Stop preview</button>
             <button style={button} onClick={() => removeEntry(sel.state, sel.phase, sel.index)}>Remove entry</button>
           </> : <span style={muted}>No entries yet — add one from any section on the left.</span>}

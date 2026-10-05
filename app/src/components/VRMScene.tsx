@@ -71,7 +71,7 @@ export interface VRMSceneHandle {
   resetPose: () => void
   reset: () => void
   /** Live playback snapshot for the settings status banner + behavior engine. */
-  getPlaybackStatus: () => { actionId: string | null; dancing: boolean; danceId: string | null; working: boolean; sipping: boolean }
+  getPlaybackStatus: () => { actionId: string | null; dancing: boolean; danceId: string | null; working: boolean; sipping: boolean; musicMotion: boolean }
   /** True while a one-shot action or dance owns the mixer. */
   isBusy: () => boolean
   isLooping: () => boolean
@@ -417,6 +417,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         danceId: motion?.danceId ?? null,
         working: workingTargetRef.current,
         sipping: sipBlendMirrorRef.current > 0.05,
+        musicMotion: (musicModeRef.current || musicPreviewRef.current) && !motion?.actionPlaying && !motion?.isDancing,
       }
     },
     setWorking(active: boolean, durationMs = 0) {

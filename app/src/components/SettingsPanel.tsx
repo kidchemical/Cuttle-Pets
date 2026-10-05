@@ -12,7 +12,7 @@ import { X, Play, Loader, Sparkles, Trash2, Upload, Music, Github } from 'lucide
 import { BehaviorPanel } from './BehaviorPanel'
 import { VersionChip, VersionFooter, openExternal } from './VersionFooter'
 import { APP_REPO_URL } from '../version'
-import { describeStatus, type BehaviorSettings, type BehaviorStateId } from '../behavior'
+import { describeStatus, type BehaviorEntryLocation, type BehaviorSettings, type BehaviorStateId } from '../behavior'
 import { getLastPetStatus, sendPetCommand, subscribeWindowEvent, type PetStatusPayload } from '../window-sync'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isTauri, invoke } from '@tauri-apps/api/core'
@@ -33,7 +33,7 @@ interface SettingsPanelProps {
   standalone?: boolean
   animationSettings: AnimationSettings
   onAnimationSettingsChange: (value: AnimationSettings) => void
-  onAnimationPreview?: (id: string, preset?: DancePreset, mode?: 'once' | 'loop', durationMs?: number) => void
+  onAnimationPreview?: (id: string, preset?: DancePreset, mode?: 'once' | 'loop', durationMs?: number, source?: BehaviorEntryLocation) => void
   onAnimationStop?: () => void
   onBubblePreview?: () => void
   musicSettings: MusicSettings
@@ -570,10 +570,10 @@ export function SettingsPanel({
                     </div>
                   </div>
               </div>
-              <AnimationSettingsPanel settings={animationSettings} onChange={onAnimationSettingsChange} customDances={customDances} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} />
+              <AnimationSettingsPanel status={petStatus} settings={animationSettings} onChange={onAnimationSettingsChange} customDances={customDances} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} />
             </div>
           )}
-          {tab === 'behavior' && <BehaviorPanel settings={behaviorSettings} onChange={onBehaviorSettingsChange} customDances={customDances} statusText={petStatusText} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} />}
+          {tab === 'behavior' && <BehaviorPanel status={petStatus} settings={behaviorSettings} onChange={onBehaviorSettingsChange} customDances={customDances} statusText={petStatusText} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} />}
           {tab === 'cuttle' && <CuttleConnection />}
           {tab === 'general' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

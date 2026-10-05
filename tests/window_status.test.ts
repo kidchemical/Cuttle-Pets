@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { activeAnimationIds } from '../app/src/playback-highlights'
 
 async function main() {
   const memory = new Map<string, string>()
@@ -19,6 +20,10 @@ async function main() {
   const { getLastPetStatus, publishStatus, sendPetCommand, subscribeWindowEvent } = await import('../app/src/window-sync')
   assert.equal(getLastPetStatus(), null)
   const status = { state: 'music', actionId: null, danceId: null, working: false, sipping: false }
+  assert.deepEqual([...activeAnimationIds({ ...status, actionId: 'idle', musicMotion: true })], ['music'])
+  assert.deepEqual([...activeAnimationIds({ ...status, actionId: 'idle', working: true, sipping: true, musicMotion: true })], ['typing', 'sip', 'music'])
+  assert.deepEqual([...activeAnimationIds({ ...status, danceId: 'dance:jile', musicMotion: false })], ['dance:jile'])
+  assert.deepEqual([...activeAnimationIds(null)], [])
   publishStatus(status)
   assert.deepEqual(getLastPetStatus(), status, 'A new settings window can read the latest snapshot immediately')
   assert.deepEqual(posted[0], { name: 'pet-status', payload: status })

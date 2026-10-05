@@ -70,6 +70,14 @@ async function main() {
     assert.deepEqual(f.calls.filter(c => /^(once|danceOnce|music):/.test(c)), ['music:true', 'once:greeting', 'danceOnce:jile', 'once:happy', 'music:true'])
     assert.ok(f.statuses.some(s => s.state === 'dancing' && s.owned))
     assert.equal(f.statuses.at(-1)?.state, 'music')
+    assert.deepEqual(f.statuses.at(-1)?.entries, [{ state: 'music', phase: 'mains', index: 0 }])
+    assert.ok(f.statuses.some(status => status.state === 'dancing' && JSON.stringify(status.entries) === JSON.stringify([
+      { state: 'music', phase: 'occasionals', index: 0 }, { state: 'dancing', phase: 'mains', index: 0 },
+    ])), 'Highlight the invoking occasional and exact nested Main row together')
+    assert.ok(f.statuses.some(status => JSON.stringify(status.entries) === JSON.stringify([
+      { state: 'music', phase: 'occasionals', index: 0 }, { state: 'dancing', phase: 'start', index: 0 },
+    ])), 'Highlight Start independently from Main')
+
     assert.ok(!f.calls.includes('once:angry'), 'Nested one-shot does not start its own occasional timers')
     f.engine.dispose(); assert.equal(f.time.timers.size, 0)
   }
@@ -127,8 +135,11 @@ async function main() {
   {
     const f = fixture()
     f.engine.update(f.input); await f.time.flush()
-    f.engine.previewEntry({ animation: 'behavior:dancing' }, false)
+    f.engine.previewEntry({ animation: 'behavior:dancing' }, false, { state: 'music', phase: 'occasionals', index: 0 })
     await f.time.advance(500)
+    assert.deepEqual(f.statuses.at(-1)?.entries, [
+      { state: 'music', phase: 'occasionals', index: 0 }, { state: 'dancing', phase: 'mains', index: 0 },
+    ], 'Settings previews preserve the invoking row')
     f.engine.update({ ...f.input, state: 'working' })
     assert.equal(f.engine.isPreviewing(), true)
     await f.time.advance(1500)

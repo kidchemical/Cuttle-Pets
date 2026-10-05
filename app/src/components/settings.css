@@ -119,7 +119,7 @@
    The padding is the real fix (works where scrollbar-gutter is unsupported);
    the gutter just avoids a layout shift where it is supported. */
 .animation-list { scrollbar-gutter: stable; padding-right: 14px; }
-.animation-list > div { min-width: 0; }
+.animation-list div { min-width: 0; }
 .animation-list > div > div:last-child { flex-shrink: 0; }
 @media (max-width: 600px) {
   .pet-settings-window .settings-shell { grid-template-columns: 112px minmax(0, 1fr); }
@@ -130,4 +130,31 @@
   .animation-layout { grid-template-columns: minmax(0, 1fr) !important; }
   .settings-content div[style*="justify-content"] { flex-wrap: wrap; gap: 10px; }
   .animation-list { height: 210px !important; }
+}
+
+/* Playback uses mint motion; editor selection remains blue. */
+.live-entry { position: relative; isolation: isolate; display: flex; align-items: center; gap: 8px; }
+.live-entry-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-entry[data-active="true"] {
+  border-color: #69d9c4 !important;
+  animation: playback-glow 3s ease-in-out infinite;
+}
+.live-entry[data-active="true"]::before {
+  content: "";
+  position: absolute; inset: 0; border-radius: inherit; z-index: -1; pointer-events: none;
+  background: linear-gradient(110deg, #319b8733, #50bda94d, #79a7ff44, #319b8733);
+  background-size: 250% 100%;
+  animation: playback-gradient 5s ease-in-out infinite;
+}
+.live-entry[data-active="true"][aria-selected="true"] { outline: 1px solid #84b6ff; outline-offset: 1px; }
+.playback-badge { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 600; color: #a1f2df; }
+.playback-badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #8cf2d7; }
+@keyframes playback-gradient { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+@keyframes playback-glow {
+  0%, 100% { box-shadow: inset 2px 0 #65ddc8, 0 0 3px #65ddc81a; }
+  50% { box-shadow: inset 2px 0 #65ddc8, 0 0 9px #65ddc847; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-entry[data-active="true"], .live-entry[data-active="true"]::before { animation: none; }
+  .live-entry[data-active="true"] { box-shadow: inset 2px 0 #65ddc8; }
 }

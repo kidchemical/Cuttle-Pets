@@ -14,6 +14,7 @@ import { ResizeHandles } from './components/ResizeHandles'
 import { openSettingsWindow, subscribeWindowEvent, replyScreenshot, publishStatus, type PetCommand } from './window-sync'
 import { DEFAULT_ANIMATIONS, normalizeAnimations, type AnimationSettings } from './animation-settings'
 import { normalizeBehaviorSettings, resolvePetState, playReactionStep, pickWeightedEntry, type BehaviorSettings, type BehaviorStateId } from './behavior'
+import type { BehaviorPlayback } from './behavior-engine'
 import { useBehaviorEngine } from './hooks/useBehaviorEngine'
 import { usePassThrough } from './hooks/usePassThrough'
 import { dancePresets, actionPresets, localizedPresetLabel } from './motion-controller'
@@ -106,7 +107,7 @@ export default function App() {
   const [dancing, setDancing] = useState(false)
   const [currentDance, setCurrentDance] = useState('jile')
   const [customDancePreset, setCustomDancePreset] = useState<import('./motion-controller').DancePreset | undefined>(undefined)
-  const behaviorPlaybackRef = useRef<{ state: BehaviorStateId | null; owned: boolean }>({ state: null, owned: false })
+  const behaviorPlaybackRef = useRef<BehaviorPlayback>({ state: null, owned: false })
   const engineRef = useRef<ReturnType<typeof useBehaviorEngine> | null>(null)
   const userDanceRef = useRef({ dancing, currentDance, customDancePreset })
   userDanceRef.current = { dancing, currentDance, customDancePreset }
@@ -114,7 +115,7 @@ export default function App() {
   // behavior engine; reactionDone restores the pet's own working/dance state.
   const [reactionActive, setReactionActive] = useState(false)
   const [suspended, setSuspended] = useState(false)
-  const reactionRef = useRef<{ watchdog?: ReturnType<typeof setTimeout> } | null>(null)
+  const reactionRef = useRef<{ watchdog?: ReturnType<typeof setTimeout>; playing?: { id: string; index: number } } | null>(null)
   const [hideMood, setHideMood] = useState(false)
   const [screenObserve, setScreenObserve] = useState(false)
   const [screenObserveInterval, setScreenObserveInterval] = useState(60)
@@ -177,7 +178,7 @@ export default function App() {
   useEffect(() => subscribeWindowEvent<PetCommand>('pet-command', command => {
     if (command.type === 'status') { publishCurrentStatus(true); return }
     if (command.type === 'animation') {
-      engineRef.current?.previewEntry({ animation: command.id, preset: command.preset, durationMs: command.durationMs }, command.mode === 'loop')
+      engineRef.current?.previewEntry({ animation: command.id, preset: command.preset, durationMs: command.durationMs }, command.mode === 'loop', command.source)
     }
     if (command.type === 'stop') { engineRef.current?.stopPreview(); sceneRef.current?.resetPose(); setDancing(false) }
     if (command.type === 'music-preview') sceneRef.current?.setMusicPreview(command.active)
@@ -258,7 +259,7 @@ export default function App() {
     const managed = behaviorPlaybackRef.current
     const state = managed.owned && managed.state ? managed.state
       : resolvePetState({ dancing: playback.dancing, working, music: musicEnabled && musicPlaying })
-    const snapshot = { state, actionId: playback.actionId, danceId: playback.danceId, working: playback.working, sipping: playback.sipping }
+    const snapshot = { state, actionId: playback.actionId, danceId: playback.danceId, working: playback.working, sipping: playback.sipping, musicMotion: playback.musicMotion, behaviorEntries: reactionRef.current ? [] : managed.owned ? managed.entries : [], reaction: reactionRef.current?.playing }
     const key = JSON.stringify(snapshot)
     const now = Date.now()
     if (force || key !== statusSnapshotRef.current.key || now - statusSnapshotRef.current.at >= 1000) {
@@ -328,6 +329,7 @@ export default function App() {
         reactionRef.current = {}
         setReactionActive(true)
       }
+      reactionRef.current.playing = msg.reaction && msg.reactionIndex !== undefined ? { id: msg.reaction, index: msg.reactionIndex } : undefined
       // Safety net if reactionDone never arrives (server restart mid-reaction).
       clearTimeout(reactionRef.current.watchdog)
       reactionRef.current.watchdog = setTimeout(endReaction, msg.reactionStep.durationMs + 5000)

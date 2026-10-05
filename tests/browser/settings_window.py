@@ -61,6 +61,36 @@ with sync_playwright() as p:
     page.get_by_role('button', name='Stop preview', exact=True).click()
     peer.wait_for_function("commands.some(c => c.type==='stop')")
     page.get_by_role('button', name='Reset to default', exact=True).click()
+    peer.evaluate("""() => bus.postMessage({name:'pet-status',payload:{state:'music',actionId:'idle',danceId:null,working:false,sipping:false,musicMotion:true,behaviorEntries:[{state:'music',phase:'mains',index:0}]}})""")
+    main = page.locator('[data-entry="music:mains:0"]')
+    page.wait_for_function("document.querySelector('[data-entry=\"music:mains:0\"]')?.dataset.active === 'true'")
+    assert main.get_attribute('aria-selected') == 'false', 'Playback is distinct from editor selection'
+    assert 'Playing' in main.inner_text()
+    page.get_by_role('button', name='Animations', exact=True).click()
+    music = page.locator('[data-animation="music"]')
+    page.wait_for_function("document.querySelector('[data-animation=\"music\"]')?.dataset.active === 'true'")
+    assert page.locator('[data-animation="idle"]').get_attribute('data-active') == 'false'
+    music.scroll_into_view_if_needed()
+    assert music.evaluate("e => getComputedStyle(e).animationName") == 'playback-glow'
+    page.screenshot(path=str(scratch / 'animation-playing.png'))
+    page.emulate_media(reduced_motion='reduce')
+    assert music.evaluate("e => getComputedStyle(e).animationName") == 'none'
+    page.emulate_media(reduced_motion='no-preference')
+    peer.evaluate("""() => bus.postMessage({name:'pet-status',payload:{state:'dancing',actionId:null,danceId:'dance:jile',working:false,sipping:false,musicMotion:false,behaviorEntries:[{state:'music',phase:'occasionals',index:0},{state:'dancing',phase:'mains',index:0}]}})""")
+    page.wait_for_function("document.querySelector('[data-animation=\"dance:jile\"]')?.dataset.active === 'true'")
+    assert music.get_attribute('data-active') == 'false'
+    page.get_by_role('button', name='Behavior', exact=True).click()
+    page.wait_for_function("document.querySelector('[data-entry=\"music:occasionals:0\"]')?.dataset.active === 'true'")
+    assert page.locator('.live-entry[data-active="true"]').count() == 2
+    assert page.locator('[data-entry="dancing:mains:0"]').get_attribute('data-active') == 'true'
+    assert page.locator('[data-entry="idle:mains:0"]').get_attribute('data-active') == 'false'
+    page.locator('[data-entry="music:occasionals:0"]').scroll_into_view_if_needed()
+    page.screenshot(path=str(scratch / 'behavior-playing.png'))
+    page.get_by_role('button', name='Add rocket-launch example', exact=True).click()
+    peer.evaluate("""() => bus.postMessage({name:'pet-status',payload:{state:'idle',actionId:'action:cheering',danceId:null,working:false,sipping:false,behaviorEntries:[],reaction:{id:'rocket-launch',index:1}}})""")
+    page.wait_for_function("document.querySelector('[data-reaction-step=\"rocket-launch:1\"]')?.dataset.active === 'true'")
+    assert page.locator('.live-entry[data-active="true"]').count() == 1
+
     page.get_by_role('button', name='Animations', exact=True).click()
     page.get_by_label('Global animation speed', exact=True).fill('2')
     page.get_by_role('option', name='Happy', exact=False).click()

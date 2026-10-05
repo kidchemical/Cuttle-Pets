@@ -218,6 +218,11 @@ naturally; one-shot procedural motions use the configurable hold time (5 seconds
 by default). Circular references are skipped. Turning the behavior engine off
 stops automatic sequences and occasionals; manual previews still work.
 
+Currently playing entries on both settings pages show a mint gradient, a gentle
+glow, and a Playing badge. Blue marks the entry selected for editing. Nested
+behaviors highlight both the invoking entry and the currently playing step;
+reduced-motion preferences use a static highlight.
+
 Settings show the latest real playback snapshot immediately when available,
 request a fresh snapshot on opening, and show “Connecting to pet…” while waiting.
 

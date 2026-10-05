@@ -1,9 +1,10 @@
 import { isTauri, invoke } from '@tauri-apps/api/core'
 import { emit, emitTo, listen } from '@tauri-apps/api/event'
+import type { BehaviorEntryLocation } from './behavior'
 import type { DancePreset } from './motion-controller'
 
 export type PetCommand =
-  | { type: 'animation'; id: string; preset?: DancePreset; mode?: 'once' | 'loop'; durationMs?: number }
+  | { type: 'animation'; id: string; preset?: DancePreset; mode?: 'once' | 'loop'; durationMs?: number; source?: BehaviorEntryLocation }
   | { type: 'stop' }
   | { type: 'status' }
   | { type: 'music-preview'; active: boolean }
@@ -36,6 +37,9 @@ export interface PetStatusPayload {
   danceId: string | null
   working: boolean
   sipping: boolean
+  musicMotion?: boolean
+  behaviorEntries?: BehaviorEntryLocation[]
+  reaction?: { id: string; index: number }
 }
 const STATUS_CACHE = 'cuttle-pet-playback-status-v1'
 /** Last real snapshot only; stale data is shown as connecting instead. */

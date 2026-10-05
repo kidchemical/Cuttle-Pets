@@ -32,6 +32,12 @@ export function behaviorTarget(id: string): BehaviorStateId | null {
   return BEHAVIOR_STATES.find(state => `behavior:${state.id}` === id)?.id ?? null
 }
 
+export interface BehaviorEntryLocation {
+  state: BehaviorStateId
+  phase: 'start' | 'mains' | 'occasionals' | 'end'
+  index: number
+}
+
 export interface BehaviorEntry {
   /** Animation id, 'random:action', or a 'behavior:idle/working/music/dancing' reference. */
   animation: string
