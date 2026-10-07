@@ -7,6 +7,8 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    // Don't waste inotify watches on Rust build output (see ENOSPC crash).
+    watch: { ignored: ['**/src-tauri/target/**'] },
   },
   // Required for Tauri to work with HMR
   envPrefix: ['VITE_', 'TAURI_'],
