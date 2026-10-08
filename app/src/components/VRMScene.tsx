@@ -21,7 +21,8 @@ import type { VRM } from '@pixiv/three-vrm'
 import { EmoteController } from '../emote'
 import { LipSync } from '../lip-sync'
 import { MotionController } from '../motion-controller'
-import { buildTypingPoseCache, restoreTypingPose, applyTypingPose, applySipPose, applyMusicAngles, faceDirection } from '../typing-pose'
+import { buildTypingPoseCache, restoreTypingPose, applyTypingPose, applySipPose, applyMusicAngles, applyHeadTurn, faceDirection } from '../typing-pose'
+import { headTurnTarget, dampAngle } from '../head-turn'
 import type { TypingPoseCache } from '../typing-pose'
 
 export type TouchRegion = 'head' | 'arm' | 'leg' | 'chest' | 'belly' | 'buttocks'
@@ -896,6 +897,10 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
     // ── Mouse tracking ────────────────────────────────────────────────────────
     const mouse = new THREE.Vector2(0, 0)
+    // Damped idle head-turn angles (radians); eased back to neutral whenever
+    // the pet isn't idle so dances and actions own the head.
+    let headTurnYaw = 0
+    let headTurnPitch = 0
 
     const _raycaster = new THREE.Raycaster()
     const _mouseVec = new THREE.Vector2()
@@ -1476,6 +1481,17 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         }
         const musicPose = musicMotionRef.current.step(delta, performance.now() / 1000, musicOptions, listening, musicPreviewRef.current, workingTargetRef.current, sipBlend, effSpeed('music'))
         if (typingCache && !motion?.actionPlaying && !motion?.isDancing) applyMusicAngles(typingCache, musicPose.pitch, musicPose.roll)
+        // 1.8. Idle head-turn: glance slightly toward the cursor while the pet
+        // is idle (mouse tracking, no dance/action, faded out while working).
+        // Damped every frame so it eases in, follows, and settles to neutral.
+        if (typingCache) {
+          const idle = trackingModeRef.current === 'mouse' && !motion?.isDancing && !motion?.actionPlaying
+          const amount = idle ? 1 - workingBlend : 0
+          const target = headTurnTarget(mouse.x, mouse.y)
+          headTurnYaw = dampAngle(headTurnYaw, target.yaw * amount, delta)
+          headTurnPitch = dampAngle(headTurnPitch, target.pitch * amount, delta)
+          applyHeadTurn(typingCache, headTurnYaw, headTurnPitch)
+        }
         // 2. Humanoid update
         vrm.humanoid?.update()
         // 2.5. Pets follow the final pose; props ride their bones.

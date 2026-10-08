@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {
-  createPetConfig, createPropConfig, describeCompanionAction, normalizeCompanionAction,
+  MAX_PETS, createPetConfig, createPropConfig, describeCompanionAction, normalizeCompanionAction,
   normalizeCompanionActions, normalizePet, normalizePetSettings, normalizeProp, normalizePropSettings,
   resolveExpressionParts, suggestPetSetup, uniqueCompanionId,
   type CompanionAction,
@@ -45,6 +45,17 @@ async function main() {
     ],
   })
   assert.equal(settings.pets.length, 2, 'Path escape dropped, duplicate id uniquified')
+  assert.equal(settings.pets[0].enabled, true, 'First entry stays the active pet')
+  assert.equal(settings.pets[1].enabled, false, 'One pet at a time: the rest load disabled')
+  // A visible entry wins over an earlier enabled-but-hidden one.
+  const picked = normalizePetSettings({ pets: [
+    { id: 'a', file: 'a.glb', asset: CHAO_ASSET, enabled: true, visible: false },
+    { id: 'b', file: 'b.glb', asset: CHAO_ASSET, enabled: true, visible: true },
+  ] })
+  assert.equal(picked.pets.find(p => p.enabled)?.id, 'b')
+  // The cap moved with MAX_PETS so a full chao library survives reloads.
+  const many = Array.from({ length: MAX_PETS + 6 }, (_, i) => ({ id: `p${i}`, file: `p${i}.glb`, asset: CHAO_ASSET }))
+  assert.equal(normalizePetSettings({ pets: many }).pets.length, MAX_PETS)
   assert.equal(settings.pets[0].size, 1.5)
   assert.equal(settings.pets[0].turn, 180)
   assert.equal(settings.pets[0].clip, '')

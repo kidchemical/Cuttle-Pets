@@ -88,6 +88,30 @@ async function post(path: string, body: BodyInit, headers: Record<string, string
 
 export interface ImportedAsset { file: string; name: string; asset: AssetInfo }
 
+/** A GLB already stored in the companion library (server `asset_list`). */
+export interface LibraryAsset { name: string; size: number; url: string }
+
+/** Files stored under DATA_DIR/pets or DATA_DIR/props. */
+export async function listCompanionAssets(kind: CompanionKind): Promise<LibraryAsset[]> {
+  const response = await fetch(petUrl(`/assets/${folder(kind)}/list`))
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok || data.ok === false) throw new Error(data.error || `Library request failed (${response.status})`)
+  return Array.isArray(data.assets) ? data.assets as LibraryAsset[] : []
+}
+
+/** Library files with no pet/prop config pointing at them yet. */
+export function unconfiguredAssets(library: LibraryAsset[], configuredFiles: string[]): LibraryAsset[] {
+  const used = new Set(configuredFiles)
+  return library.filter(asset => !used.has(asset.name))
+}
+
+/** Analyze an already-imported GLB so it can be added as a pet/prop config
+ * without re-converting: same GLTFLoader + analyzeAsset as the import path. */
+export async function analyzeStoredAsset(kind: CompanionKind, file: string): Promise<AssetInfo> {
+  const gltf = await new GLTFLoader().loadAsync(companionAssetUrl(kind, file))
+  return analyzeAsset(gltf.scene, gltf.animations ?? [])
+}
+
 /**
  * Import a local model file as a pet or prop GLB. GLB files are stored as-is;
  * glTF/FBX/DAE are loaded with three.js (textures from the same folder) and

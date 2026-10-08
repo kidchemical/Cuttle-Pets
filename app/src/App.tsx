@@ -271,7 +271,8 @@ export default function App() {
     const managed = behaviorPlaybackRef.current
     const state = managed.owned && managed.state ? managed.state
       : resolvePetState({ dancing: playback.dancing, working, music: musicEnabled && musicPlaying })
-    const snapshot = { state, actionId: playback.actionId, danceId: playback.danceId, working: playback.working, sipping: playback.sipping, musicMotion: playback.musicMotion, behaviorEntries: reactionRef.current ? [] : managed.owned ? managed.entries : [], reaction: reactionRef.current?.playing }
+    const companions = sceneRef.current?.snapshotCompanions()?.pets
+    const snapshot = { state, actionId: playback.actionId, danceId: playback.danceId, working: playback.working, sipping: playback.sipping, musicMotion: playback.musicMotion, behaviorEntries: reactionRef.current ? [] : managed.owned ? managed.entries : [], reaction: reactionRef.current?.playing, companions: companions ? Object.fromEntries(Object.entries(companions).map(([id, pet]) => [id, { shown: pet.shown }])) : {} }
     const key = JSON.stringify(snapshot)
     const now = Date.now()
     if (force || key !== statusSnapshotRef.current.key || now - statusSnapshotRef.current.at >= 1000) {

@@ -156,6 +156,14 @@ export function applyTypingPose(cache: TypingPoseCache, time: number, amount: nu
   }
 }
 
+/** Idle glance toward the cursor: small additive head yaw/pitch on top of
+ * whatever pose layer ran this frame (same bases map, so frame restore
+ * still removes it). Angles are pre-damped radians; zero is a no-op. */
+export function applyHeadTurn(cache: TypingPoseCache, yaw: number, pitch: number) {
+  if (!cache.head || (yaw === 0 && pitch === 0)) return
+  offset(cache, cache.head, pitch, yaw, 0, 1)
+}
+
 /**
  * World-space out-of-the-face direction. Located from the eye bones, which
  * sit on the face by construction on every rig — never from the model root

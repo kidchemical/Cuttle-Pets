@@ -1,34 +1,47 @@
-import { useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useFileDrop, singleModelPath } from '../hooks/useFileDrop'
 import { FileDropHint } from './FileDropHint'
 import { invoke } from '@tauri-apps/api/core'
 import { Plus, Trash2 } from 'lucide-react'
 import {
-  PET_ANCHORS, PET_IDLE_STYLES, PET_MOVES, createPetConfig, normalizePet,
+  MAX_PETS, PET_ANCHORS, PET_IDLE_STYLES, PET_MOVES, createPetConfig, normalizePet,
   uniqueCompanionId, type CompanionAction, type PetConfig,
 } from '../companions'
-import { deleteCompanionAsset, importCompanionAsset } from '../asset-import'
+import {
+  analyzeStoredAsset, importCompanionAsset, listCompanionAssets,
+  unconfiguredAssets, type LibraryAsset,
+} from '../asset-import'
 import { EMOTION_OPTIONS } from '../behavior'
-import { cCard, cMuted, cRow, cSelect, cSmallButton, NumField, SliderField } from './CompanionForm'
+import type { PetStatusPayload } from '../window-sync'
+import { cMuted, cRow, cSelect, cSmallButton, NumField, SliderField } from './CompanionForm'
+import { labelStyle, sectionStyle, selectStyle } from './settings-styles'
 
 interface PetsPanelProps {
   pets: PetConfig[]
   onChange: (pets: PetConfig[]) => void
   language?: 'zh' | 'en'
   onTest?: (action: CompanionAction) => void
+  status?: PetStatusPayload | null
+  statusText?: string
 }
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-export function PetsPanel({ pets, onChange, language = 'zh', onTest }: PetsPanelProps) {
+export function PetsPanel({ pets, onChange, language = 'zh', onTest, status, statusText }: PetsPanelProps) {
   const t = (zh: string, en: string) => language === 'en' ? en : zh
-  const [openId, setOpenId] = useState<string | null>(pets[0]?.id ?? null)
+  const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [importStatus, setImportStatus] = useState('')
   const [importPath, setImportPath] = useState('')
   const [busy, setBusy] = useState(false)
   const importing = useRef(false)
+  const [library, setLibrary] = useState<LibraryAsset[]>([])
+  const refreshLibrary = useCallback(async () => {
+    try { setLibrary(await listCompanionAssets('pet')) } catch { /* selector falls back to configured pets */ }
+  }, [])
+  useEffect(() => { void refreshLibrary() }, [refreshLibrary])
+  const available = unconfiguredAssets(library, pets.map(p => p.file))
 
   const commit = (next: PetConfig[]) => {
     onChange(next.map(p => normalizePet(p, p.id)).filter((p): p is PetConfig => p !== null))
@@ -42,9 +55,15 @@ export function PetsPanel({ pets, onChange, language = 'zh', onTest }: PetsPanel
     }))
   }
 
+  /** One pet at a time: the chosen file becomes the only enabled entry. */
+  const activatePet = (file: string, base: PetConfig[] = pets) => {
+    setSelectedFile(file)
+    commit(base.map(pet => pet.file === file ? { ...pet, enabled: true, visible: true } : { ...pet, enabled: false }))
+  }
+
   const runImport = async (path: string) => {
     if (!path || importing.current) return
-    if (pets.length >= 12) { setImportStatus('Library limit reached.'); return }
+    if (pets.length >= MAX_PETS) { setImportStatus('Library limit reached.'); return }
     importing.current = true
     setBusy(true)
     setImportStatus(t('正在导入…', 'Importing…'))
@@ -52,10 +71,32 @@ export function PetsPanel({ pets, onChange, language = 'zh', onTest }: PetsPanel
       const imported = await importCompanionAsset('pet', path, setImportStatus)
       const id = uniqueCompanionId(imported.name, pets.map(p => p.id))
       const config = createPetConfig(id, imported.name.slice(0, 60) || id, imported.file, imported.asset)
-      onChange([...pets, config])
-      setOpenId(id)
       setImportPath('')
       setImportStatus(t('已导入', 'Imported'))
+      void refreshLibrary()
+      activatePet(imported.file, [...pets, config])
+    } catch (error) {
+      setImportStatus(String(error instanceof Error ? error.message : error))
+    } finally {
+      importing.current = false
+      setBusy(false)
+    }
+  }
+
+  const addFromLibrary = async (file: string) => {
+    if (!file || importing.current) return
+    if (pets.some(p => p.file === file)) { activatePet(file); return }
+    if (pets.length >= MAX_PETS) { setImportStatus('Library limit reached.'); return }
+    importing.current = true
+    setBusy(true)
+    setImportStatus(t('正在添加…', 'Adding…'))
+    try {
+      const asset = await analyzeStoredAsset('pet', file)
+      const stem = file.replace(/\.glb$/i, '')
+      const id = uniqueCompanionId(stem, pets.map(p => p.id))
+      const config = createPetConfig(id, stem.slice(0, 60) || id, file, asset)
+      setImportStatus(t('已添加', 'Added'))
+      activatePet(file, [...pets, config])
     } catch (error) {
       setImportStatus(String(error instanceof Error ? error.message : error))
     } finally {
@@ -77,70 +118,88 @@ export function PetsPanel({ pets, onChange, language = 'zh', onTest }: PetsPanel
     }
   }
 
-  const removePet = async (id: string) => {
-    const target = pets.find(p => p.id === id)
-    const rest = pets.filter(p => p.id !== id)
-    onChange(rest)
-    if (openId === id) setOpenId(rest[0]?.id ?? null)
-    if (target && !rest.some(p => p.file === target.file)) {
-      try { await deleteCompanionAsset('pet', target.file) } catch { /* entry is gone either way */ }
-    }
+  /** Removing drops the config only — the GLB stays in the library, so a
+   * misclick never destroys an import; pick it again from the dropdown. */
+  const removePet = (id: string) => {
+    onChange(pets.filter(p => p.id !== id))
+    setSelectedFile(null)
   }
 
-  return <div style={{ display: 'grid', gap: 12, fontSize: 14 }}>
-    <div>
-      <strong style={{ fontSize: 15 }}>{t('宠物', 'Pets')}</strong>
-      <div style={cMuted}>{t(
-        '常驻的小伙伴：浮在肩旁、坐在头顶或在身边跟随。有自己的待机动作、表情和点击反应；行为和自定义反应里可以让它登场、表演、退场。',
-        'Persistent little companions: float by the shoulder, sit on the head, or follow alongside. They idle, emote, and react to clicks; behaviors and reactions can show, play, and hide them.')}</div>
-    </div>
-    <FileDropHint dragging={dragging}>{t('拖放模型到此页面导入（GLB / glTF / FBX / DAE）', 'Drop a model anywhere on this page to import (GLB / glTF / FBX / DAE).')}</FileDropHint>
-    <div style={cRow}>
-      <button style={cSmallButton} disabled={busy || pets.length >= 12} onClick={() => void pickFile()} title={t('GLB 最快；FBX/DAE 会自动转换', 'GLB is fastest; FBX/DAE convert automatically')}>
-        <Plus size={12} style={{ verticalAlign: -2 }} /> {t('导入模型…', 'Import model…')}
-      </button>
-      <span style={cMuted}>GLB / glTF / FBX / DAE</span>
-    </div>
-    <div style={cRow}>
-      <input aria-label={t('模型路径', 'Model path')} value={importPath} onChange={e => setImportPath(e.target.value)}
-        placeholder={t('/path/to/chao.fbx（无文件框时用）', '/path/to/chao.fbx (when no file dialog)')}
-        style={{ flex: '1 1 200px', minWidth: 0, background: '#262c38', border: '1px solid #505665', borderRadius: 7, color: 'white', padding: '6px 10px', fontSize: 13 }} />
-      <button style={cSmallButton} disabled={busy || !importPath.trim()} onClick={() => void runImport(importPath.trim())}>{t('导入路径', 'Import path')}</button>
-    </div>
-    {importStatus && <div role="status" style={{ color: '#9fd6ff', fontSize: 13 }}>{importStatus}</div>}
-    {pets.length === 0 && <span style={cMuted}>{t('还没有宠物 — 导入一个 GLB（或 FBX/DAE，会自动转成 GLB）。', 'No pets yet — import a GLB (or FBX/DAE, auto-converted to GLB).')}</span>}
-    {pets.map(pet => <PetCard key={pet.id} pet={pet} open={openId === pet.id}
-      onToggleOpen={() => setOpenId(openId === pet.id ? null : pet.id)}
-      onPatch={fn => patchPet(pet.id, fn)} onRemove={() => void removePet(pet.id)}
-      onTest={onTest ? action => onTest({ ...action, kind: 'pet', id: pet.id }) : undefined} t={t} />)}
-  </div>
-}
+  // Every known model, like the Models page: configured pets first, then
+  // library files with no config yet (choosing one adds + activates it).
+  const knownFiles = [...pets.map(p => p.file), ...available.map(a => a.name)]
+  const preferred = pets.find(p => p.enabled && p.visible) ?? pets.find(p => p.enabled) ?? pets[0] ?? null
+  const activeFile = selectedFile && knownFiles.includes(selectedFile)
+    ? selectedFile
+    : preferred?.file ?? null
+  const activePet = pets.find(p => p.file === activeFile) ?? null
+  const fileLabel = (file: string) => pets.find(p => p.file === file)?.name ?? file.replace(/\.glb$/i, '')
+  const liveShown = activePet ? status?.companions?.[activePet.id]?.shown : undefined
 
-function PetCard({ pet, open, onToggleOpen, onPatch, onRemove, onTest, t }: {
-  pet: PetConfig; open: boolean; onToggleOpen: () => void
-  onPatch: (fn: (pet: PetConfig) => void) => void; onRemove: () => void
-  onTest?: (action: Omit<CompanionAction, 'kind' | 'id'>) => void
-  t: (zh: string, en: string) => string
-}) {
-  return <article aria-label={`Pet ${pet.name}`} style={cCard}>
-    <div style={cRow}>
-      <input type="checkbox" aria-label={t('启用', 'Enabled')} title={t('启用', 'Enabled')} checked={pet.enabled}
-        onChange={e => onPatch(next => { next.enabled = e.target.checked })} />
-      <button onClick={onToggleOpen} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', padding: 0, fontSize: 15, flex: '1 1 120px', textAlign: 'left' }}>
-        <strong>{pet.name}</strong> <span style={cMuted}>{pet.file}</span>
-      </button>
-      <label style={{ ...cMuted, display: 'flex', gap: 4, alignItems: 'center' }} title={t('启动时可见', 'Visible at startup')}>
-        <input type="checkbox" checked={pet.visible} onChange={e => onPatch(next => { next.visible = e.target.checked })} />{t('显示', 'Show')}
-      </label>
-      {onTest && <>
-        <button style={cSmallButton} onClick={() => onTest({ action: 'show' })}>{t('预览', 'Preview')}</button>
-        <button style={cSmallButton} onClick={() => onTest({ action: 'hide' })}>{t('隐藏', 'Hide')}</button>
-      </>}
-      <button style={cSmallButton} onClick={onRemove} title={t('删除', 'Delete')} aria-label={`Delete ${pet.name}`}><Trash2 size={12} /></button>
+  return <div style={{ display: 'grid', gap: 12, fontSize: 14 }}>
+    <div role="status" style={{ display: 'flex', gap: 8, alignItems: 'center', background: '#22303f', border: '1px solid #39465c', borderRadius: 8, padding: '9px 12px', flexWrap: 'wrap' }}>
+      <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%', background: liveShown ? '#8cf2d7' : '#78869b', display: 'inline-block' }} />
+      <span>Now: <strong>{statusText ?? 'Connecting to pet…'}</strong></span>
+      {activePet && <span style={{ marginLeft: 'auto', color: liveShown ? '#a1f2df' : '#adb5c8', fontSize: 12, fontWeight: 600 }}>
+        {liveShown === undefined ? t('状态未知', 'State unavailable') : liveShown ? t('显示中', 'Visible') : t('已隐藏', 'Hidden')}
+      </span>}
     </div>
-    {!open && <div style={cMuted}>{PET_ANCHORS.find(a => a.id === pet.anchor)?.label} · {Math.round(pet.size * 100)}% · {pet.expressions.length} {t('表情', 'expressions')}</div>}
-    {open && <PetEditor pet={pet} onPatch={onPatch} onTest={onTest} t={t} />}
-  </article>
+    <div style={sectionStyle}>
+      <div style={labelStyle}>{t('宠物模型', 'Pet Models')}</div>
+      {knownFiles.length === 0 ? (
+        <span style={cMuted}>{t('还没有导入的模型 — 从下面导入一个。', 'No imported models yet — import one below.')}</span>
+      ) : (
+        <select
+          aria-label="Pet models"
+          value={activeFile ?? ''}
+          disabled={busy}
+          onChange={(e) => {
+            const file = e.target.value
+            if (!file) return
+            if (pets.some(p => p.file === file)) activatePet(file)
+            else void addFromLibrary(file)
+          }}
+          style={selectStyle}
+        >
+          {!activeFile && <option value="" disabled>{t('未选择', 'Not selected')}</option>}
+          {knownFiles.map((file) => (
+            <option key={file} value={file}>{fileLabel(file)}</option>
+          ))}
+        </select>
+      )}
+    </div>
+    <div style={{ ...sectionStyle, border: '1px solid #39465c', borderRadius: 9, padding: 12, background: '#1a2130' }}>
+      <div style={labelStyle}>{t('导入宠物模型', 'Import Pet Models')}</div>
+      <FileDropHint dragging={dragging}>{t('拖放模型到此页面导入（GLB / glTF / FBX / DAE）', 'Drop a model anywhere on this page to import (GLB / glTF / FBX / DAE).')}</FileDropHint>
+      <div style={cRow}>
+        <button style={cSmallButton} disabled={busy || pets.length >= MAX_PETS} onClick={() => void pickFile()} title={t('GLB 最快；FBX/DAE 会自动转换', 'GLB is fastest; FBX/DAE convert automatically')}>
+          <Plus size={12} style={{ verticalAlign: -2 }} /> {t('浏览本地文件…', 'Browse local files…')}
+        </button>
+        <span style={cMuted}>GLB / glTF / FBX / DAE</span>
+      </div>
+      <div style={cRow}>
+        <input aria-label={t('模型路径', 'Model path')} value={importPath} onChange={e => setImportPath(e.target.value)}
+          placeholder={t('/path/to/chao.fbx（无文件框时用）', '/path/to/chao.fbx (when no file dialog)')}
+          style={{ flex: '1 1 200px', minWidth: 0, background: '#262c38', border: '1px solid #505665', borderRadius: 7, color: 'white', padding: '6px 10px', fontSize: 13 }} />
+        <button style={cSmallButton} disabled={busy || !importPath.trim()} onClick={() => void runImport(importPath.trim())}>{t('导入路径', 'Import path')}</button>
+      </div>
+    </div>
+    {activePet && <>
+      <article aria-label={`${activePet.name} settings`} style={{ display: 'grid', gap: 12, border: '1px solid #39465c', borderRadius: 9, padding: 12, background: '#1a2130' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong style={{ fontSize: 15, flex: 1, minWidth: 120 }}>{activePet.name}</strong>
+          {onTest && <>
+            <button style={cSmallButton} onClick={() => onTest({ kind: 'pet', id: activePet.id, action: 'show' })}>{t('预览', 'Preview')}</button>
+            <button style={cSmallButton} onClick={() => onTest({ kind: 'pet', id: activePet.id, action: 'hide' })}>{t('隐藏', 'Hide')}</button>
+          </>}
+          <button style={cSmallButton} onClick={() => removePet(activePet.id)} title={t('删除设置（模型文件保留在库中）', 'Remove settings (model file stays in the library)')} aria-label={`Remove ${activePet.name}`}><Trash2 size={12} /> {t('移除', 'Remove')}</button>
+        </div>
+        <PetEditor pet={activePet} onPatch={fn => patchPet(activePet.id, fn)}
+          onTest={onTest ? action => onTest({ ...action, kind: 'pet', id: activePet.id }) : undefined} t={t} />
+      </article>
+    </>}
+    {importStatus && <div role="status" style={{ color: '#9fd6ff', fontSize: 13 }}>{importStatus}</div>}
+  </div>
 }
 
 function PetEditor({ pet, onPatch, onTest, t }: {

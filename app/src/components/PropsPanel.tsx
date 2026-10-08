@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useFileDrop, singleModelPath } from '../hooks/useFileDrop'
 import { FileDropHint } from './FileDropHint'
 import { invoke } from '@tauri-apps/api/core'
@@ -7,8 +7,11 @@ import {
   PROP_ANCHORS, createPropConfig, normalizeProp,
   uniqueCompanionId, type CompanionAction, type PropConfig,
 } from '../companions'
-import { deleteCompanionAsset, importCompanionAsset } from '../asset-import'
-import { cCard, cMuted, cRow, cSelect, cSmallButton, NumField, SliderField } from './CompanionForm'
+import {
+  analyzeStoredAsset, importCompanionAsset, listCompanionAssets,
+  unconfiguredAssets, type LibraryAsset,
+} from '../asset-import'
+import { CompanionLibraryPicker, cCard, cMuted, cRow, cSelect, cSmallButton, NumField, SliderField } from './CompanionForm'
 
 interface PropsPanelProps {
   props: PropConfig[]
@@ -28,6 +31,12 @@ export function PropsPanel({ props, onChange, language = 'zh', onTest }: PropsPa
   const [importPath, setImportPath] = useState('')
   const [busy, setBusy] = useState(false)
   const importing = useRef(false)
+  const [library, setLibrary] = useState<LibraryAsset[]>([])
+  const refreshLibrary = useCallback(async () => {
+    try { setLibrary(await listCompanionAssets('prop')) } catch { /* picker hides when offline */ }
+  }, [])
+  useEffect(() => { void refreshLibrary() }, [refreshLibrary])
+  const available = unconfiguredAssets(library, props.map(p => p.file))
 
   const commit = (next: PropConfig[]) => {
     onChange(next.map(p => normalizeProp(p, p.id)).filter((p): p is PropConfig => p !== null))
@@ -55,6 +64,29 @@ export function PropsPanel({ props, onChange, language = 'zh', onTest }: PropsPa
       setOpenId(id)
       setImportPath('')
       setImportStatus(t('已导入', 'Imported'))
+      void refreshLibrary()
+    } catch (error) {
+      setImportStatus(String(error instanceof Error ? error.message : error))
+    } finally {
+      importing.current = false
+      setBusy(false)
+    }
+  }
+
+  const addFromLibrary = async (file: string) => {
+    if (!file || importing.current) return
+    if (props.length >= 40) { setImportStatus('Library limit reached.'); return }
+    importing.current = true
+    setBusy(true)
+    setImportStatus(t('正在添加…', 'Adding…'))
+    try {
+      const asset = await analyzeStoredAsset('prop', file)
+      const stem = file.replace(/\.glb$/i, '')
+      const id = uniqueCompanionId(stem, props.map(p => p.id))
+      const config = createPropConfig(id, stem.slice(0, 60) || id, file, asset)
+      onChange([...props, config])
+      setOpenId(id)
+      setImportStatus(t('已添加', 'Added'))
     } catch (error) {
       setImportStatus(String(error instanceof Error ? error.message : error))
     } finally {
@@ -76,14 +108,11 @@ export function PropsPanel({ props, onChange, language = 'zh', onTest }: PropsPa
     }
   }
 
-  const removeProp = async (id: string) => {
-    const target = props.find(p => p.id === id)
+  /** Removing drops the config only — the GLB stays in the library. */
+  const removeProp = (id: string) => {
     const rest = props.filter(p => p.id !== id)
     onChange(rest)
     if (openId === id) setOpenId(rest[0]?.id ?? null)
-    if (target && !rest.some(p => p.file === target.file)) {
-      try { await deleteCompanionAsset('prop', target.file) } catch { /* entry is gone either way */ }
-    }
   }
 
   return <div style={{ display: 'grid', gap: 12, fontSize: 14 }}>
@@ -106,6 +135,7 @@ export function PropsPanel({ props, onChange, language = 'zh', onTest }: PropsPa
         style={{ flex: '1 1 200px', minWidth: 0, background: '#262c38', border: '1px solid #505665', borderRadius: 7, color: 'white', padding: '6px 10px', fontSize: 13 }} />
       <button style={cSmallButton} disabled={busy || !importPath.trim()} onClick={() => void runImport(importPath.trim())}>{t('导入路径', 'Import path')}</button>
     </div>
+    {available.length > 0 && <CompanionLibraryPicker files={available} busy={busy} onAdd={file => void addFromLibrary(file)} t={t} />}
     {importStatus && <div role="status" style={{ color: '#9fd6ff', fontSize: 13 }}>{importStatus}</div>}
     {props.length === 0 && <span style={cMuted}>{t('还没有道具 — 导入一个 GLB 帽子试试。', 'No props yet — import a GLB hat to try.')}</span>}
     {props.map(prop => {

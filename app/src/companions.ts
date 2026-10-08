@@ -52,6 +52,8 @@ export const PET_MOVES: { id: PetMove; label: string }[] = [
   { id: 'wiggle', label: 'Wiggle' },
   { id: 'bounce', label: 'Bounce' },
 ]
+/** Cap on configured pets (library itself is unbounded). */
+export const MAX_PETS = 24
 export const PET_IDLE_STYLES: { id: PetIdleStyle; label: string }[] = [
   { id: 'float', label: 'Float and bob' },
   { id: 'hop', label: 'Hop in place' },
@@ -360,8 +362,12 @@ function uniqueList<T extends { id: string }>(items: (T | null)[]): T[] {
 
 export function normalizePetSettings(value: unknown): PetSettings {
   const v = value && typeof value === 'object' ? value as Record<string, unknown> : {}
-  const pets = Array.isArray(v.pets) ? v.pets.map((p, i) => normalizePet(p, `pet-${i + 1}`)) : []
-  return { version: 1, pets: uniqueList(pets).slice(0, 12) }
+  const pets = uniqueList(Array.isArray(v.pets) ? v.pets.map((p, i) => normalizePet(p, `pet-${i + 1}`)) : []).slice(0, MAX_PETS)
+  // One pet at a time: a single model loads, so only the preferred entry
+  // stays enabled — the visible one, else the first enabled one.
+  const active = pets.find(p => p.enabled && p.visible) ?? pets.find(p => p.enabled)
+  for (const pet of pets) pet.enabled = pet === active
+  return { version: 1, pets }
 }
 
 export function normalizePropSettings(value: unknown): PropSettings {

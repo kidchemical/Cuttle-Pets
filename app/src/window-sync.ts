@@ -42,6 +42,7 @@ export interface PetStatusPayload {
   musicMotion?: boolean
   behaviorEntries?: BehaviorEntryLocation[]
   reaction?: { id: string; index: number }
+  companions?: Record<string, { shown: boolean }>
 }
 const STATUS_CACHE = 'cuttle-pet-playback-status-v1'
 /** Last real snapshot only; stale data is shown as connecting instead. */

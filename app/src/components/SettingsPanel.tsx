@@ -1,5 +1,6 @@
 import { useFileDrop, singleModelPath } from '../hooks/useFileDrop'
 import { FileDropHint } from './FileDropHint'
+import { labelStyle, sectionStyle, selectStyle } from './settings-styles'
 import './settings.css'
 import { normalizeCustomDances } from '../custom-dances'
 import { AnimationSettingsPanel } from './AnimationSettingsPanel'
@@ -647,7 +648,7 @@ export function SettingsPanel({
             </div>
           )}
           {tab === 'behavior' && <BehaviorPanel status={petStatus} settings={behaviorSettings} onChange={onBehaviorSettingsChange} customDances={customDances} statusText={petStatusText} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} pets={petSettings.pets} props={propSettings.props} onCompanionTest={testCompanion} />}
-          {tab === 'pets' && <PetsPanel pets={petSettings.pets} onChange={pets => onPetSettingsChange({ ...petSettings, pets })} language={language} onTest={testCompanion} />}
+          {tab === 'pets' && <PetsPanel pets={petSettings.pets} onChange={pets => onPetSettingsChange({ ...petSettings, pets })} language={language} onTest={testCompanion} status={petStatus} statusText={petStatusText} />}
           {tab === 'props' && <PropsPanel props={propSettings.props} onChange={props => onPropSettingsChange({ ...propSettings, props })} language={language} onTest={testCompanion} />}
           {tab === 'cuttle' && <CuttleConnection />}
           {tab === 'general' && (
@@ -1653,18 +1654,6 @@ const contentStyle: React.CSSProperties = {
   minHeight: 120,
 }
 
-const sectionStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 8,
-}
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 13,
-  color: '#aebbd0',
-  marginBottom: 2,
-}
-
 const toggleStyle: React.CSSProperties = {
   width: 40,
   height: 22,
@@ -1707,20 +1696,6 @@ const modelBtnStyle: React.CSSProperties = {
 
 const inputStyle: React.CSSProperties = {
   flex: 1,
-  height: 32,
-  boxSizing: 'border-box',
-  border: '1px solid rgba(255, 255, 255, 0.2)',
-  borderRadius: 6,
-  background: 'rgba(0, 0, 0, 0.3)',
-  color: '#fff',
-  fontSize: 13,
-  padding: '0 8px',
-  outline: 'none',
-  fontFamily: '"Segoe UI", "Microsoft YaHei", sans-serif',
-}
-
-const selectStyle: React.CSSProperties = {
-  width: '100%',
   height: 32,
   boxSizing: 'border-box',
   border: '1px solid rgba(255, 255, 255, 0.2)',

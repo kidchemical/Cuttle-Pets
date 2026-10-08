@@ -1,4 +1,5 @@
-import type { CSSProperties } from 'react'
+import { useState, type CSSProperties } from 'react'
+import type { LibraryAsset } from '../asset-import'
 
 /** Shared controls for the Pets / Props panels and the behavior action editor. */
 export const cButton: CSSProperties = { padding: '9px 12px', border: '1px solid #505665', borderRadius: 7, background: '#303645', color: 'white', cursor: 'pointer', textAlign: 'left' }
@@ -25,6 +26,34 @@ export function NumField({ label, value, min, max, step = 1, width, onCommit }: 
       }}
       style={width ? { ...cNumberInput, width } : cNumberInput} />
   </label>
+}
+
+/**
+ * Library dropdown shared by the Pets and Props pages (mirrors the Models
+ * page: pick an already-imported model, then add it). Lists only files with
+ * no config yet; callers pass the filtered list and create the config in
+ * onAdd with the same create*Config path as file import.
+ */
+export function CompanionLibraryPicker({ files, busy, onAdd, t }: {
+  files: LibraryAsset[]
+  busy: boolean
+  onAdd: (file: string) => void
+  t: (zh: string, en: string) => string
+}) {
+  const [selected, setSelected] = useState('')
+  if (files.length === 0) return null
+  const current = files.some(f => f.name === selected) ? selected : files[0].name
+  return <div style={cRow}>
+    <label style={{ ...cMuted, display: 'grid', gap: 4 }}>{t('已导入的模型', 'Imported models')}
+      <select aria-label={t('已导入的模型', 'Imported models')} value={current}
+        onChange={e => setSelected(e.target.value)} style={cSelect}>
+        {files.map(f => <option key={f.name} value={f.name}>{f.name}</option>)}
+      </select>
+    </label>
+    <button style={cSmallButton} disabled={busy || !current} onClick={() => onAdd(current)}>
+      {t('添加', 'Add')}
+    </button>
+  </div>
 }
 
 export function SliderField({ label, value, min, max, step, format, onChange }: {
