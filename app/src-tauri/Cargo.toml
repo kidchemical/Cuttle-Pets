@@ -1,6 +1,6 @@
 [package]
 name = "claw-sama"
-version = "0.4.2"
+version = "0.4.3"
 description = "Claw Sama Desktop Pet"
 authors = []
 edition = "2021"

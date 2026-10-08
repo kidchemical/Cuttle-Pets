@@ -473,6 +473,15 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 }
                 "settings" | "more-models" | "more-animations" | "update" => { let _ = open_settings_window(app.clone()); }
                 "quit" => {
+                    // Orderly shutdown: exiting with live WebViews makes
+                    // WebKitWebProcess crash on Linux ("stopped
+                    // unexpectedly"). Stop cursor polling, destroy the
+                    // windows first so page unload handlers run and the
+                    // renderers release their GL contexts, then exit.
+                    MONITORING.store(false, Ordering::Relaxed);
+                    for (_, window) in app.webview_windows() {
+                        let _ = window.destroy();
+                    }
                     app.exit(0);
                 }
                 id if id.starts_with("animation:") => {
@@ -589,6 +598,18 @@ pub fn run() {
             }
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Stop cursor polling once the main window is gone so the X11
+            // thread doesn't emit to a destroyed window during teardown.
+            if window.label() == "main"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+                )
+            {
+                MONITORING.store(false, Ordering::Relaxed);
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

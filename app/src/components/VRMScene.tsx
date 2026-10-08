@@ -1,4 +1,5 @@
 import { alphaInputRegions } from '../input-regions'
+import { createExitShutdown } from '../exit-shutdown'
 import { applyGazeGain, cursorPayloadToClient, DEFAULT_GAZE_GAIN, type CursorPositionPayload } from '../cursor-gaze'
 import { intersectAnimatedModel } from '../mesh-hit-test'
 import { FramePacer } from '../frame-pacer'
@@ -1481,6 +1482,35 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       }
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
+    // Synchronous teardown for app exit. Quitting with a live WebGL context
+    // presenting frames makes WebKitWebProcess crash on Linux ("stopped
+    // unexpectedly" dialog). beforeunload/pagehide run before WebKit tears
+    // down the page: stop presenting and release the GL context here, while
+    // the context is still current. Async disposal (see effect cleanup below)
+    // never runs on an abrupt exit, so this path must be fully synchronous.
+    // Idempotent: the effect cleanup sets the same disposed flag.
+    const shutdownForExit = createExitShutdown({
+      stopFrames: () => {
+        if (disposed) return
+        disposed = true
+        captureScreenshotRef.current = () => null
+        cancelAnimationFrame(animFrameId)
+        pendingHitTest?.resolve(true)
+        pendingHitTest = null
+        activeHitResolve?.(true)
+        activeHitResolve = null
+      },
+      dispose: () => {
+        hitTarget.dispose()
+        inputTarget.dispose()
+        renderer.dispose()
+      },
+      // Drop the underlying GL context so the web process has nothing in
+      // flight while the native window is destroyed.
+      loseContext: () => renderer.forceContextLoss(),
+    })
+    window.addEventListener('beforeunload', shutdownForExit)
+    window.addEventListener('pagehide', shutdownForExit)
     if (!renderingPaused) {
       animFrameId = requestAnimationFrame(animate)
     }
@@ -1494,6 +1524,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       ;(window as any).__clawDragging = false
       suspendFnRef.current = () => {}
       document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('beforeunload', shutdownForExit)
+      window.removeEventListener('pagehide', shutdownForExit)
       // Snapshot the view so a model reload restores it verbatim — but only
       // when this run actually framed a model. An unmount before the load
       // finishes (StrictMode double-mount, fast model switches) must not
