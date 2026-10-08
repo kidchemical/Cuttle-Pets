@@ -9,6 +9,7 @@ import { normalizeBehaviorSettings } from '../behavior'
 import { normalizePetSettings, normalizePropSettings } from '../companions'
 import { DEFAULT_MUSIC, DEFAULT_FIT, normalizeMusic, normalizeFit, modelFitKey } from '../music-settings'
 import { normalizeQualitySettings } from '../render-quality'
+import { normalizeCursorLight, normalizeGlobalLighting } from '../lighting'
 import { normalizeBubbleSettings } from '../bubble-settings'
 import { requestScreenshot, sendPetCommand, subscribeWindowEvent } from '../window-sync'
 
@@ -46,6 +47,8 @@ export function SettingsWindow() {
   const behaviorSettings = useMemo(() => normalizeBehaviorSettings(settings.behaviorSettings, settings.musicSettings), [settings.behaviorSettings, settings.musicSettings])
   const petSettings = useMemo(() => normalizePetSettings(settings.petSettings), [settings.petSettings])
   const propSettings = useMemo(() => normalizePropSettings(settings.propSettings), [settings.propSettings])
+  const lightingSettings = useMemo(() => normalizeGlobalLighting(settings.lighting), [settings.lighting])
+  const cursorLightSettings = useMemo(() => normalizeCursorLight(settings.cursorLight), [settings.cursorLight])
   if (!ready) return <div style={{ background: '#1b1d25', color: 'white', height: '100vh', padding: 24 }}>Loading settings…</div>
   return <SettingsPanel
     standalone visible onClose={() => { sendPetCommand({ type: 'music-preview', active: false }); if (isTauri()) void getCurrentWindow().close(); else window.close() }}
@@ -80,5 +83,7 @@ export function SettingsWindow() {
     behaviorSettings={behaviorSettings} onBehaviorSettingsChange={behaviorSettings => patch({ behaviorSettings })}
     petSettings={petSettings} onPetSettingsChange={petSettings => patch({ petSettings })}
     propSettings={propSettings} onPropSettingsChange={propSettings => patch({ propSettings })}
+    lightingSettings={lightingSettings} onLightingSettingsChange={lighting => patch({ lighting })}
+    cursorLightSettings={cursorLightSettings} onCursorLightSettingsChange={cursorLight => patch({ cursorLight })}
   />
 }

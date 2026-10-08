@@ -24,6 +24,7 @@ import { isTauri, invoke } from '@tauri-apps/api/core'
 import type { DancePreset } from '../motion-controller'
 import { RENDER_QUALITIES, presetSettings, resolvePreset, type QualityDetails, type QualitySettings } from '../render-quality'
 import { BUBBLE_PREVIEW_TEXT, DEFAULT_BUBBLE_SETTINGS, FONT_CHOICES, type BubbleSettings } from '../bubble-settings'
+import { CURSOR_LIGHT_MOTIONS, CURSOR_LIGHT_PRESET_IDS, DEFAULT_CURSOR_LIGHT, DEFAULT_GLOBAL_LIGHTING, applyCursorLightPreset, normalizeCursorLight, normalizeGlobalLighting, type CursorLightMotion, type CursorLightPreset, type CursorLightSettings, type GlobalLightingSettings } from '../lighting'
 
 interface DanceItem {
   id: string
@@ -92,9 +93,13 @@ interface SettingsPanelProps {
   onPetSettingsChange: (v: PetSettings) => void
   propSettings: PropSettings
   onPropSettingsChange: (v: PropSettings) => void
+  lightingSettings: GlobalLightingSettings
+  onLightingSettingsChange: (v: GlobalLightingSettings) => void
+  cursorLightSettings: CursorLightSettings
+  onCursorLightSettingsChange: (v: CursorLightSettings) => void
 }
 
-type Tab = 'animations' | 'behavior' | 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'quality' | 'display' | 'pets' | 'props'
+type Tab = 'animations' | 'behavior' | 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'quality' | 'display' | 'lighting' | 'pets' | 'props'
 
 const BUILTIN_MODELS = ['/model1.vrm', '/model2.vrm', '/model3.vrm', '/model4.vrm', '/model5.vrm']
 
@@ -166,6 +171,8 @@ export function SettingsPanel({
   behaviorSettings, onBehaviorSettingsChange,
   petSettings, onPetSettingsChange,
   propSettings, onPropSettingsChange,
+  lightingSettings, onLightingSettingsChange,
+  cursorLightSettings, onCursorLightSettingsChange,
 }: SettingsPanelProps) {
   const testCompanion = (action: CompanionAction) => sendPetCommand({ type: 'companion', action })
   const t = (zh: string, en: string) => language === 'en' ? en : zh
@@ -183,6 +190,14 @@ export function SettingsPanel({
     onQualitySettingsChange({ ...details, preset: resolvePreset(details) })
   }, [qualitySettings, onQualitySettingsChange])
   const presetLabel = (q: string) => q === 'mid' ? t('中', 'Mid') : q === 'low' ? t('低', 'Low') : q === 'high' ? t('高', 'High') : q === 'ultra' ? t('超高', 'Ultra') : t('自定义', 'Custom')
+  const cursorPresetLabel = (p: CursorLightPreset) => p === 'white' ? t('白光', 'White') : p === 'soft' ? t('柔光', 'Soft') : p === 'colored' ? t('彩色', 'Colored') : p === 'rgb' ? 'RGB' : p === 'flame' ? t('火焰', 'Flame') : p === 'lightning' ? t('闪电', 'Lightning') : t('萤火虫', 'Fireflies')
+  const cursorMotionLabel = (m: CursorLightMotion) => m === 'still' ? t('静止', 'Still') : m === 'bob' ? t('浮动', 'Bob') : m === 'orbit' ? t('环绕', 'Orbit') : m === 'swirl' ? t('旋转', 'Swirl') : t('萤火虫', 'Fireflies')
+  const setCursorLight = useCallback((patch: Partial<CursorLightSettings>) => {
+    onCursorLightSettingsChange(normalizeCursorLight({ ...cursorLightSettings, ...patch }))
+  }, [cursorLightSettings, onCursorLightSettingsChange])
+  const setGlobalLighting = useCallback((patch: Partial<GlobalLightingSettings>) => {
+    onLightingSettingsChange(normalizeGlobalLighting({ ...lightingSettings, ...patch }))
+  }, [lightingSettings, onLightingSettingsChange])
   const [modelImportError, setModelImportError] = useState('')
   const [models, setModels] = useState<{ name: string; url: string }[]>([])
   const [soulContent, setSoulContent] = useState('')
@@ -501,21 +516,21 @@ export function SettingsPanel({
 
         {/* Tabs */}
         <nav className="settings-tabs" aria-label="Settings sections" style={tabBarStyle}>
-          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'animations', 'behavior', 'pets', 'props', 'quality', 'display'] as const).map((tb) => (
+          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'animations', 'behavior', 'pets', 'props', 'quality', 'display', 'lighting'] as const).map((tb) => (
             <button
               key={tb}
               className="settings-tab" aria-current={tab === tb ? "page" : undefined}
               onClick={() => setTab(tb)}
               style={{ ...tabStyle, ...(tab === tb ? activeTabStyle : {}) }}
             >
-              {{ animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), quality: t('画质', 'Quality'), display: t('显示', 'Display'), pets: t('宠物', 'Pets'), props: t('道具', 'Props') }[tb]}
+              {{ animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), quality: t('画质', 'Quality'), display: t('显示', 'Display'), lighting: t('灯光', 'Lighting'), pets: t('宠物', 'Pets'), props: t('道具', 'Props') }[tb]}
             </button>
           ))}
         </nav>
 
         {/* Tab content */}
         <div className="settings-content" style={{ ...contentStyle, maxHeight: standalone ? undefined : tab === 'music' && musicPreview ? '32vh' : '60vh', ...(standalone ? { flex: 1, minHeight: 0 } : {}), overflowY: 'auto', paddingRight: 4 }}>
-          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), pets: t('宠物', 'Pets'), props: t('道具', 'Props'), quality: t('画质', 'Quality'), display: t('显示', 'Display') }[tab]}</h2><p>{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</p></div>}
+          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), pets: t('宠物', 'Pets'), props: t('道具', 'Props'), quality: t('画质', 'Quality'), display: t('显示', 'Display'), lighting: t('灯光', 'Lighting') }[tab]}</h2><p>{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</p></div>}
           {tab === 'music'  && <MusicSettingsPanel fit={headphoneFit} music={musicSettings} enabled={musicEnabled} onFitChange={onHeadphoneFitChange} onMusicChange={onMusicSettingsChange} onEnabledChange={onMusicEnabledChange} onPreview={handlePreview} />}
           {tab === 'animations' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1030,6 +1045,317 @@ export function SettingsPanel({
               </label>
               <p className="settings-help">{t('较低的帧率降低资源使用。此限制独立于画质预设。', 'Lower caps use fewer resources. Frame rate is independent of the visual preset.')}</p>
               <ToggleRow label={t('弹簧骨骼（耳朵/头发）', 'Spring bones (ears/hair)')} value={qualitySettings.springBones} onChange={(v) => updateQualityDetails({ springBones: v })} />
+            </div>
+          )}
+          {tab === 'lighting' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={sectionStyle}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={labelStyle}>{t('跟随鼠标的灯', 'Cursor light')}</div>
+                  <button
+                    onClick={() => onCursorLightSettingsChange({ ...DEFAULT_CURSOR_LIGHT, enabled: cursorLightSettings.enabled })}
+                    style={{ ...smallBtnStyle }}
+                  >
+                    {t('重置', 'Reset')}
+                  </button>
+                </div>
+                <ToggleRow label={t('启用', 'Enabled')} value={cursorLightSettings.enabled} onChange={(v) => setCursorLight({ enabled: v })} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14 }}>{t('预设', 'Preset')}</span>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {CURSOR_LIGHT_PRESET_IDS.map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => onCursorLightSettingsChange(applyCursorLightPreset({ ...cursorLightSettings, enabled: true }, p))}
+                        style={{
+                          ...smallBtnStyle,
+                          background: cursorLightSettings.preset === p ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                          borderColor: cursorLightSettings.preset === p ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                        }}
+                      >
+                        {cursorPresetLabel(p)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14 }}>{t('类型', 'Type')}</span>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {(['point', 'spot'] as const).map((k) => (
+                      <button
+                        key={k}
+                        onClick={() => setCursorLight({ kind: k, preset: cursorLightSettings.preset })}
+                        style={{
+                          ...smallBtnStyle,
+                          background: cursorLightSettings.kind === k ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                          borderColor: cursorLightSettings.kind === k ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                        }}
+                      >
+                        {k === 'point' ? t('点光', 'Point') : t('聚光', 'Spot')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14 }}>{t('跟随方式', 'Follow')}</span>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {(['hard', 'soft'] as const).map((a) => (
+                      <button
+                        key={a}
+                        onClick={() => setCursorLight({ anchor: a })}
+                        style={{
+                          ...smallBtnStyle,
+                          background: cursorLightSettings.anchor === a ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                          borderColor: cursorLightSettings.anchor === a ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                        }}
+                      >
+                        {a === 'hard' ? t('硬跟随', 'Hard') : t('柔跟随', 'Soft')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {cursorLightSettings.anchor === 'soft' && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14 }}>{t('跟随速度', 'Follow speed')}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        type="range"
+                        min={1}
+                        max={30}
+                        step={1}
+                        value={cursorLightSettings.followSpeed}
+                        onChange={(e) => setCursorLight({ followSpeed: Number(e.target.value) })}
+                        style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                      />
+                      <span style={{ fontSize: 12, color: '#aebbd0', width: 28, textAlign: 'right' }}>{cursorLightSettings.followSpeed}</span>
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14 }}>{t('颜色', 'Color')}</span>
+                  <input
+                    type="color"
+                    aria-label="Cursor light color"
+                    value={cursorLightSettings.color}
+                    onChange={(e) => setCursorLight({ color: e.target.value })}
+                    style={{ width: 44, height: 28, padding: 0, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, background: 'transparent' }}
+                  />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14 }}>{t('亮度', 'Intensity')}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input
+                      type="range"
+                      min={0}
+                      max={20}
+                      step={0.1}
+                      value={cursorLightSettings.intensity}
+                      onChange={(e) => setCursorLight({ intensity: Number(e.target.value) })}
+                      style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                    />
+                    <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{cursorLightSettings.intensity.toFixed(1)}</span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14 }}>{t('大小（0=无限）', 'Size (0=infinite)')}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input
+                      type="range"
+                      min={0}
+                      max={20}
+                      step={0.1}
+                      value={cursorLightSettings.distance}
+                      onChange={(e) => setCursorLight({ distance: Number(e.target.value) })}
+                      style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                    />
+                    <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{cursorLightSettings.distance.toFixed(1)}</span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14 }}>{t('边缘（越高越聚）', 'Edge (higher=tighter)')}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input
+                      type="range"
+                      min={0}
+                      max={4}
+                      step={0.1}
+                      value={cursorLightSettings.decay}
+                      onChange={(e) => setCursorLight({ decay: Number(e.target.value) })}
+                      style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                    />
+                    <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{cursorLightSettings.decay.toFixed(1)}</span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14 }}>{t('光晕大小（0=无）', 'Glow size (0=off)')}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input
+                      type="range"
+                      min={0}
+                      max={0.6}
+                      step={0.01}
+                      value={cursorLightSettings.glowSize}
+                      onChange={(e) => setCursorLight({ glowSize: Number(e.target.value) })}
+                      style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                    />
+                    <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{cursorLightSettings.glowSize.toFixed(2)}</span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14 }}>{t('动态', 'Motion')}</span>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {CURSOR_LIGHT_MOTIONS.map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setCursorLight({ motion: m })}
+                        style={{
+                          ...smallBtnStyle,
+                          background: cursorLightSettings.motion === m ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                          borderColor: cursorLightSettings.motion === m ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                        }}
+                      >
+                        {cursorMotionLabel(m)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14 }}>{t('灯数量', 'Lights')}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input
+                      type="range"
+                      min={1}
+                      max={6}
+                      step={1}
+                      value={cursorLightSettings.lightCount}
+                      onChange={(e) => setCursorLight({ lightCount: Number(e.target.value) })}
+                      style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                    />
+                    <span style={{ fontSize: 12, color: '#aebbd0', width: 28, textAlign: 'right' }}>{cursorLightSettings.lightCount}</span>
+                  </div>
+                </div>
+                {cursorLightSettings.motion !== 'still' && (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 14 }}>{t('活动范围', 'Motion radius')}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1.5}
+                          step={0.05}
+                          value={cursorLightSettings.motionRadius}
+                          onChange={(e) => setCursorLight({ motionRadius: Number(e.target.value) })}
+                          style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                        />
+                        <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{cursorLightSettings.motionRadius.toFixed(2)}</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 14 }}>{t('活动速度', 'Motion speed')}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input
+                          type="range"
+                          min={0.1}
+                          max={5}
+                          step={0.1}
+                          value={cursorLightSettings.motionSpeed}
+                          onChange={(e) => setCursorLight({ motionSpeed: Number(e.target.value) })}
+                          style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                        />
+                        <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{cursorLightSettings.motionSpeed.toFixed(1)}</span>
+                      </div>
+                    </div>
+                  </>
+                )}
+                {cursorLightSettings.kind === 'spot' && (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 14 }}>{t('锥角', 'Cone angle')}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input
+                          type="range"
+                          min={5}
+                          max={90}
+                          step={1}
+                          value={cursorLightSettings.angle}
+                          onChange={(e) => setCursorLight({ angle: Number(e.target.value) })}
+                          style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                        />
+                        <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{Math.round(cursorLightSettings.angle)}°</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 14 }}>{t('边缘柔化', 'Edge softness')}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          value={cursorLightSettings.penumbra}
+                          onChange={(e) => setCursorLight({ penumbra: Number(e.target.value) })}
+                          style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                        />
+                        <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{Math.round(cursorLightSettings.penumbra * 100)}%</span>
+                      </div>
+                    </div>
+                  </>
+                )}
+                {['rgb', 'flame', 'lightning'].includes(cursorLightSettings.preset) && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14 }}>{t('特效速度', 'Effect speed')}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        type="range"
+                        min={0.1}
+                        max={5}
+                        step={0.1}
+                        value={cursorLightSettings.effectSpeed}
+                        onChange={(e) => setCursorLight({ effectSpeed: Number(e.target.value) })}
+                        style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                      />
+                      <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{cursorLightSettings.effectSpeed.toFixed(1)}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div style={sectionStyle}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={labelStyle}>{t('全局灯光', 'Stage lighting')}</div>
+                  <button onClick={() => onLightingSettingsChange({ ...DEFAULT_GLOBAL_LIGHTING })} style={{ ...smallBtnStyle }}>
+                    {t('重置', 'Reset')}
+                  </button>
+                </div>
+                {([
+                  { key: 'ambient', zh: '环境光', en: 'Ambient' },
+                  { key: 'key', zh: '主光', en: 'Key' },
+                  { key: 'fill', zh: '补光', en: 'Fill' },
+                ] as const).map(({ key, zh, en }) => (
+                  <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 14 }}>{t(zh, en)}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        type="color"
+                        aria-label={`${en} color`}
+                        value={lightingSettings[`${key}Color` as const]}
+                        onChange={(e) => setGlobalLighting({ [`${key}Color`]: e.target.value } as Partial<GlobalLightingSettings>)}
+                        style={{ width: 44, height: 28, padding: 0, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, background: 'transparent' }}
+                      />
+                      <input
+                        type="range"
+                        min={0}
+                        max={key === 'ambient' ? 3 : 5}
+                        step={0.05}
+                        value={lightingSettings[`${key}Intensity` as const]}
+                        onChange={(e) => setGlobalLighting({ [`${key}Intensity`]: Number(e.target.value) } as Partial<GlobalLightingSettings>)}
+                        style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
+                      />
+                      <span style={{ fontSize: 12, color: '#aebbd0', width: 36, textAlign: 'right' }}>{(lightingSettings[`${key}Intensity` as const] as number).toFixed(2)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
           {tab === 'display' && (

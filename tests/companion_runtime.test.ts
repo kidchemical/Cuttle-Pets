@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { AnimationClip, Bone, BoxGeometry, Group, Mesh, MeshStandardMaterial, Quaternion, QuaternionKeyframeTrack, Scene, Vector3 } from '../app/node_modules/three/build/three.module.js'
+import { AnimationClip, Bone, BoxGeometry, DataTexture, Group, Mesh, MeshBasicMaterial, MeshStandardMaterial, Quaternion, QuaternionKeyframeTrack, Scene, Vector3 } from '../app/node_modules/three/build/three.module.js'
 import { CompanionLayer } from '../app/src/companion-runtime'
 import { createPetConfig, normalizePet } from '../app/src/companions'
+import { DEFAULT_GLOBAL_LIGHTING } from '../app/src/lighting'
 
 async function makeLayer(clips: AnimationClip[] = []) {
   const scene = new Scene()
@@ -31,6 +32,17 @@ async function main() {
   assert.notEqual(material, pet.sourceMaterial)
   assert.ok(material.emissiveIntensity > 0)
   assert.equal(pet.sourceMaterial.emissive.getHex(), 0, 'Lighting does not modify shared source material')
+  const darkStage = { ...DEFAULT_GLOBAL_LIGHTING, ambientIntensity: 0, keyIntensity: 0, fillIntensity: 0 }
+  pet.layer.setStageLighting(darkStage)
+  assert.equal(material.emissive.getHex(), 0, 'Stage off removes artificial self illumination')
+  pet.layer.configure([pet.cfg], [])
+  assert.equal(material.emissive.getHex(), 0, 'Settings sync does not restore fill on a dark stage')
+  pet.layer.setStageLighting({ ...DEFAULT_GLOBAL_LIGHTING, ambientColor: '#ff0000', keyColor: '#ff0000', fillColor: '#ff0000' })
+  assert.ok(material.emissive.r > 0)
+  assert.equal(material.emissive.g, 0, 'Fill follows stage color')
+  assert.equal(material.emissive.b, 0)
+  pet.layer.setStageLighting(DEFAULT_GLOBAL_LIGHTING)
+  assert.ok(material.emissive.toArray().every((v, i) => Math.abs(v - material.color.toArray()[i]) < 1e-12), 'Default stage preserves the existing shadow lift')
   pet.model.updateMatrixWorld(true)
   const direction = pet.hand.getWorldPosition(new Vector3()).sub(pet.arm.getWorldPosition(new Vector3())).normalize()
   assert.ok(direction.y < -0.5, 'Horizontal bind arms relax downward')
@@ -69,6 +81,91 @@ async function main() {
   assert.equal(animated.holder.visible, false)
   for (const fixture of [pet, other, animated]) fixture.layer.dispose()
   assert.equal(pet.scene.children.some(c => c.name === 'companions'), false)
+
+  // Unlit (basic) pet materials ignore every scene light, so attach upgrades
+  // them to matte PBR with tint and transparency preserved; the cached
+  // source stays untouched and the albedo fill applies like any lit pet.
+  const basicScene = new Scene()
+  const basicRigRoot = new Group()
+  basicScene.add(basicRigRoot)
+  const basicSource = new MeshBasicMaterial({ color: 0xdd8844, transparent: true, opacity: 0.7 })
+  basicSource.name = 'chao-body'
+  const basicModel = new Group()
+  basicModel.add(new Mesh(new BoxGeometry(1, 1, 1), basicSource))
+  const basicLayer = new CompanionLayer(basicScene, async () => ({ scene: basicModel, animations: [] }) as any, () => '')
+  basicLayer.setCharacter({ root: basicRigRoot, height: 2, floorY: 0, topY: 2, bone: () => null })
+  const basicCfg = createPetConfig('basic', 'Basic', 'basic.glb', { bones: [], clips: [], parts: [], materials: [] })
+  basicCfg.occasional.enabled = false
+  basicLayer.configure([basicCfg], [])
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const converted = (basicModel.children[0] as Mesh).material as MeshStandardMaterial
+  assert.notEqual(converted, basicSource)
+  assert.ok(converted.isMeshStandardMaterial, 'Basic pet material upgrades to lit PBR')
+  assert.equal(converted.name, 'chao-body')
+  assert.equal(converted.color.getHex(), 0xdd8844)
+  assert.equal(converted.transparent, true)
+  assert.equal(converted.opacity, 0.7)
+  assert.equal(converted.roughness, 1)
+  assert.ok(basicSource.isMeshBasicMaterial, 'Shared source material is not converted')
+  assert.equal(basicSource.color.getHex(), 0xdd8844)
+  assert.equal(converted.emissiveIntensity, basicCfg.lighting, 'Upgraded pet joins the albedo fill')
+  basicLayer.dispose()
+
+  // Stage settings may arrive before asynchronous GLB loading finishes.
+  // Imported emission remains authored; only our artificial fill follows lights.
+  const delayedModel = new Group()
+  const emissiveSource = new MeshStandardMaterial({ emissive: 0x113355, emissiveIntensity: 0.8 })
+  const emissiveTexture = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1)
+  emissiveSource.emissiveMap = emissiveTexture
+  delayedModel.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial()))
+  delayedModel.add(new Mesh(new BoxGeometry(), emissiveSource))
+  let finishLoad!: (gltf: any) => void
+  const delayedLayer = new CompanionLayer(new Scene(), () => new Promise(resolve => { finishLoad = resolve }), () => '')
+  delayedLayer.setStageLighting(darkStage)
+  delayedLayer.configure([basicCfg], [])
+  finishLoad({ scene: delayedModel, animations: [] })
+  await Promise.resolve()
+  const delayedFill = (delayedModel.children[0] as Mesh).material as MeshStandardMaterial
+  const authoredEmission = (delayedModel.children[1] as Mesh).material as MeshStandardMaterial
+  assert.equal(delayedFill.emissive.getHex(), 0, 'Late loaded pet starts with the current stage illumination')
+  assert.ok(authoredEmission.emissive.equals(emissiveSource.emissive), 'Authored emission color is preserved')
+  assert.equal(authoredEmission.emissiveIntensity, 0.8)
+  assert.equal(authoredEmission.emissiveMap, emissiveTexture)
+  delayedLayer.setStageLighting(DEFAULT_GLOBAL_LIGHTING)
+  assert.ok(delayedFill.emissive.toArray().every((v, i) => Math.abs(v - delayedFill.color.toArray()[i]) < 1e-12))
+  assert.ok(authoredEmission.emissive.equals(emissiveSource.emissive))
+  delayedLayer.dispose()
+
+  // Fully metallic PBR with no env map renders near-black (diffuse ~0), so
+  // stage and cursor lights can't reach it either — metalness drops unless a
+  // metalness map authors the metal look. The cached source stays metallic.
+  const metalScene = new Scene()
+  const metalRigRoot = new Group()
+  metalScene.add(metalRigRoot)
+  const metalSource = new MeshStandardMaterial({ color: 0x88aacc, metalness: 1, roughness: 0.85 })
+  const metalMap = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1)
+  metalMap.needsUpdate = true
+  const mappedSource = new MeshStandardMaterial({ color: 0x88aacc, metalness: 1, metalnessMap: metalMap })
+  const metalModel = new Group()
+  metalModel.add(new Mesh(new BoxGeometry(1, 1, 1), metalSource))
+  metalModel.add(new Mesh(new BoxGeometry(1, 1, 1), mappedSource))
+  const metalLayer = new CompanionLayer(metalScene, async () => ({ scene: metalModel, animations: [] }) as any, () => '')
+  metalLayer.setCharacter({ root: metalRigRoot, height: 2, floorY: 0, topY: 2, bone: () => null })
+  const metalCfg = createPetConfig('metal', 'Metal', 'metal.glb', { bones: [], clips: [], parts: [], materials: [] })
+  metalCfg.occasional.enabled = false
+  metalLayer.configure([metalCfg], [])
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const [plain, mapped] = (metalModel.children as Mesh[]).map(m => m.material as MeshStandardMaterial)
+  assert.equal(plain.metalness, 0, 'Unmapped full metal becomes dielectric')
+  assert.equal(plain.roughness, 0.85, 'Authored roughness survives')
+  assert.equal(mapped.metalness, 1, 'Authored metalness map keeps its metal')
+  assert.equal(metalSource.metalness, 1, 'Shared source stays metallic')
+  // Pets attached before the fix keep stale materials across hot reloads;
+  // the next configure heals them without a model reload.
+  plain.metalness = 1
+  metalLayer.configure([metalCfg], [])
+  assert.equal(plain.metalness, 0, 'Reconfigure heals stale full metal')
+  metalLayer.dispose()
 
   const normalized = normalizePet({ file: 'old.glb', followLag: Infinity, lighting: 99, limbMotion: -3 }, 'old')!
   assert.equal(normalized.followLag, 0.6, 'Old/invalid settings gain the loose follow default')

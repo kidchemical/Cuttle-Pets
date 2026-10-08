@@ -10,6 +10,7 @@ import { CompanionLayer } from '../companion-runtime'
 import { companionAssetUrl } from '../asset-import'
 import type { CompanionAction, PetConfig, PropConfig } from '../companions'
 import { DEFAULT_MUSIC, DEFAULT_FIT, type MusicSettings, type HeadphoneFit } from '../music-settings'
+import { DEFAULT_CURSOR_LIGHT, DEFAULT_GLOBAL_LIGHTING, MAX_CURSOR_LIGHTS, cursorLightOffset, fireflyBlink, normalizeCursorLight, normalizeGlobalLighting, type CursorLightSettings, type GlobalLightingSettings } from '../lighting'
 import { useEffect, useRef, useImperativeHandle, forwardRef, useState, useCallback } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import * as THREE from 'three'
@@ -33,6 +34,8 @@ interface VRMSceneProps {
   qualitySettings?: QualitySettings
   idleAnimationPath?: string
   gazeGain?: number
+  lightingSettings?: GlobalLightingSettings
+  cursorLightSettings?: CursorLightSettings
   onTouch?: (region: TouchRegion) => void
   pets?: PetConfig[]
   props?: PropConfig[]
@@ -234,6 +237,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   qualitySettings,
   idleAnimationPath = '/idle_loop.vrma',
   gazeGain = DEFAULT_GAZE_GAIN,
+  lightingSettings = DEFAULT_GLOBAL_LIGHTING,
+  cursorLightSettings = DEFAULT_CURSOR_LIGHT,
   onTouch,
   pets = NO_PETS,
   props = NO_PROPS,
@@ -258,6 +263,10 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   const trackingModeRef = useRef<TrackingMode>('mouse')
   const gazeGainRef = useRef(gazeGain)
   gazeGainRef.current = gazeGain
+  const lightingRef = useRef(normalizeGlobalLighting(lightingSettings))
+  lightingRef.current = normalizeGlobalLighting(lightingSettings)
+  const cursorLightRef = useRef(normalizeCursorLight(cursorLightSettings))
+  cursorLightRef.current = normalizeCursorLight(cursorLightSettings)
   const motionRef = useRef<MotionController | null>(null)
   const panCameraRef = useRef<((dx: number, dy: number) => void) | null>(null)
   const rotateCameraRef = useRef<((dx: number, dy: number) => void) | null>(null)
@@ -540,13 +549,81 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     updateCameraOrbit()
 
     // ── Lights ────────────────────────────────────────────────────────────────
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6))
+    // Global rig (ambient wash + key + fill) with the same defaults as
+    // before; colors/intensities are driven per-frame from lightingRef so
+    // the settings panel can customize them live.
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
+    scene.add(ambientLight)
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.2)
     dirLight.position.set(1, 2, 3)
     scene.add(dirLight)
     const fillLight = new THREE.DirectionalLight(0xffffff, 0.4)
     fillLight.position.set(-2, 1, -1)
     scene.add(fillLight)
+    // Cursor light rig: up to MAX_CURSOR_LIGHTS point lights plus the same
+    // number of spotlights following the mouse (point = glow around the
+    // cursor, spot = beams from the cursor onto the pet). Only the active
+    // kind's first `lightCount` entries are visible. No shadows: keeps the
+    // extra lights cheap.
+    const cursorPoints: THREE.PointLight[] = []
+    const cursorSpots: THREE.SpotLight[] = []
+    for (let i = 0; i < MAX_CURSOR_LIGHTS; i++) {
+      const point = new THREE.PointLight(0xffffff, 2, 0, 2)
+      point.visible = false
+      scene.add(point)
+      cursorPoints.push(point)
+      const spot = new THREE.SpotLight(0xffffff, 6, 0, THREE.MathUtils.degToRad(30), 0.5, 2)
+      spot.visible = false
+      scene.add(spot)
+      scene.add(spot.target)
+      cursorSpots.push(spot)
+    }
+    // Soft additive glow orbs marking each rig light (size from settings).
+    const glowTexture = (() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = canvas.height = 128
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        const gradient = ctx.createRadialGradient(64, 64, 0, 64, 64, 64)
+        gradient.addColorStop(0, 'rgba(255,255,255,1)')
+        gradient.addColorStop(0.35, 'rgba(255,255,255,0.5)')
+        gradient.addColorStop(1, 'rgba(255,255,255,0)')
+        ctx.fillStyle = gradient
+        ctx.fillRect(0, 0, 128, 128)
+      }
+      return new THREE.CanvasTexture(canvas)
+    })()
+    const cursorGlows: THREE.Sprite[] = []
+    for (let i = 0; i < MAX_CURSOR_LIGHTS; i++) {
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: glowTexture,
+        color: 0xffffff,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }))
+      sprite.visible = false
+      scene.add(sprite)
+      cursorGlows.push(sprite)
+    }
+    const applyGlobalLighting = () => {
+      const g = lightingRef.current
+      ambientLight.color.set(g.ambientColor)
+      ambientLight.intensity = g.ambientIntensity
+      dirLight.color.set(g.keyColor)
+      dirLight.intensity = g.keyIntensity
+      fillLight.color.set(g.fillColor)
+      fillLight.intensity = g.fillIntensity
+      companionsRef.current?.setStageLighting(g)
+    }
+    applyGlobalLighting()
+    // Cursor anchor state: world target on a plane through the model focus,
+    // plus the focus point itself (model center once loaded, origin fallback).
+    // cursorLightBase is the eased anchor; rig lights add motion offsets to it.
+    const cursorLightTarget = new THREE.Vector3(0, 1, 1)
+    const cursorLightBase = new THREE.Vector3(0, 1, 1)
+    const lightFocus = new THREE.Vector3(0, 1, 0)
+    let lightningUntil = 0
 
     // ── Loader ───────────────────────────────────────────────────────────────
     const loader = new GLTFLoader()
@@ -556,6 +633,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     const companionLoader = new GLTFLoader()
     const companions = new CompanionLayer(scene, url => companionLoader.loadAsync(url), companionAssetUrl)
     companionsRef.current = companions
+    companions.setStageLighting(lightingRef.current)
     companions.configure(companionConfigRef.current.pets, companionConfigRef.current.props)
 
     // ── State ─────────────────────────────────────────────────────────────────
@@ -621,6 +699,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         const modelCenter = new THREE.Vector3()
         box.getSize(modelSize)
         box.getCenter(modelCenter)
+        // Cursor spotlight aims here; the cursor-light anchor plane passes
+        // through it so the light sits at the pet's depth on any model.
+        lightFocus.copy(modelCenter)
 
         const framing = defaultViewFromBounds(modelSize, modelCenter, FOV)
         pivot.set(framing.pivot[0], framing.pivot[1], framing.pivot[2])
@@ -827,14 +908,28 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       mouse.x = (clientX / window.innerWidth) * 2 - 1
       mouse.y = -(clientY / window.innerHeight) * 2 + 1
 
-      if (trackingModeRef.current !== 'mouse') return
-
-      // Compute lookAt target like airi's lookAtMouse, amplified so small
-      // cursor moves read clearly (VRM eye limits still cap the extremes)
       _mouseVec.set(mouse.x, mouse.y)
       _raycaster.setFromCamera(_mouseVec, camera)
       const camDir = new THREE.Vector3()
       camera.getWorldDirection(camDir)
+      // Cursor light anchor runs in every tracking mode: intersect the cursor
+      // ray with a plane through the model focus so the light sits at the
+      // pet's depth, nudged toward the camera so it lights the front instead
+      // of the interior.
+      {
+        const focusPlane = new THREE.Plane()
+        focusPlane.setFromNormalAndCoplanarPoint(camDir, lightFocus)
+        const hit = new THREE.Vector3()
+        if (_raycaster.ray.intersectPlane(focusPlane, hit)) {
+          const towardCamera = camDir.clone().multiplyScalar(-0.6)
+          cursorLightTarget.copy(hit.add(towardCamera))
+        }
+      }
+
+      if (trackingModeRef.current !== 'mouse') return
+
+      // Compute lookAt target like airi's lookAtMouse, amplified so small
+      // cursor moves read clearly (VRM eye limits still cap the extremes)
       const planeCenter = camera.position.clone().add(camDir)
       const plane = new THREE.Plane()
       plane.setFromNormalAndCoplanarPoint(camDir, planeCenter)
@@ -867,6 +962,86 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       )
       updateGazeFromClient(clientX, clientY)
     })
+
+    // ── Cursor light ─────────────────────────────────────────────────────────
+    // Eases the shared anchor toward the cursor target, then positions each
+    // rig light around it (motion offset) and animates the preset's effect.
+    // Runs even with no model loaded so the light still responds while a
+    // character downloads.
+    const scratchColor = new THREE.Color()
+    const flameHot = new THREE.Color('#ff2a00')
+    const strikeColor = new THREE.Color('#e8f2ff')
+    function stepCursorLight(delta: number, elapsed: number) {
+      const cl = cursorLightRef.current
+      const count = cl.enabled ? Math.min(cl.lightCount, MAX_CURSOR_LIGHTS) : 0
+      const isSpot = cl.kind === 'spot'
+      // Anchor: hard snaps, soft eases toward the target each frame.
+      if (cl.anchor === 'hard') cursorLightBase.copy(cursorLightTarget)
+      else cursorLightBase.lerp(cursorLightTarget, 1 - Math.exp(-delta * cl.followSpeed))
+      // Lightning strikes are rig-wide: every light flashes together.
+      let striking = elapsed < lightningUntil
+      if (cl.enabled && cl.preset === 'lightning' && !striking
+        && Math.random() < delta * (0.4 + cl.effectSpeed * 0.6)) {
+        lightningUntil = elapsed + 0.08 + Math.random() * 0.12
+        striking = true
+      }
+      for (let i = 0; i < MAX_CURSOR_LIGHTS; i++) {
+        const on = i < count
+        const light = isSpot ? cursorSpots[i] : cursorPoints[i]
+        const other = isSpot ? cursorPoints[i] : cursorSpots[i]
+        other.visible = false
+        light.visible = on
+        const glow = cursorGlows[i]
+        if (!on) { glow.visible = false; continue }
+        const [ox, oy, oz] = cursorLightOffset(cl.motion, i, count, cl.motionRadius, cl.motionSpeed, elapsed)
+        light.position.set(
+          cursorLightBase.x + ox,
+          cursorLightBase.y + oy,
+          cursorLightBase.z + oz,
+        )
+        light.distance = cl.distance
+        light.decay = cl.decay
+        // Base color/intensity; effects below modulate them per light.
+        let intensity = cl.intensity
+        scratchColor.set(cl.color)
+        if (cl.preset === 'rgb') {
+          // Extras spread evenly around the hue wheel from light 0's phase.
+          scratchColor.setHSL((elapsed * 0.12 * cl.effectSpeed + i / count) % 1, 0.85, 0.6)
+        } else if (cl.preset === 'flame') {
+          const t = elapsed * (4 + cl.effectSpeed * 4) + i * 1.7
+          const flicker = 0.78
+            + 0.12 * Math.sin(t * 1.0)
+            + 0.07 * Math.sin(t * 2.7 + 1.3)
+            + 0.05 * Math.sin(t * 6.1 + 4.1)
+          intensity *= flicker
+          scratchColor.lerp(flameHot, 0.25 + 0.2 * Math.sin(t * 0.7))
+        } else if (cl.preset === 'lightning') {
+          // Mostly a dim charge glow, broken by brief full-power strikes.
+          if (striking) {
+            scratchColor.copy(strikeColor)
+            intensity *= 1.6
+          } else {
+            intensity *= 0.12
+          }
+        }
+        if (cl.motion === 'fireflies') intensity *= fireflyBlink(elapsed, cl.motionSpeed, i)
+        light.color.copy(scratchColor)
+        light.intensity = intensity
+        if (isSpot) {
+          const spot = light as THREE.SpotLight
+          spot.angle = THREE.MathUtils.degToRad(cl.angle)
+          spot.penumbra = cl.penumbra
+          spot.target.position.copy(lightFocus)
+          spot.target.updateMatrixWorld()
+        }
+        glow.visible = cl.glowSize > 0.001
+        if (glow.visible) {
+          glow.position.copy(light.position)
+          glow.scale.set(cl.glowSize, cl.glowSize, 1)
+          ;(glow.material as THREE.SpriteMaterial).color.copy(scratchColor)
+        }
+      }
+    }
 
     // ── Scroll zoom ──────────────────────────────────────────────────────────
     const MIN_RADIUS = 0.8
@@ -1341,6 +1516,10 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           vrm.springBoneManager?.update(delta)
         }
       }
+
+      // 9. Lights: global rig follows settings; cursor light tracks the mouse.
+      applyGlobalLighting()
+      stepCursorLight(delta, performance.now() / 1000)
 
       renderer.render(scene, camera)
 

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { VRMScene } from './components/VRMScene'
 import type { VRMSceneHandle, TouchRegion } from './components/VRMScene'
 import { normalizeQuality, normalizeQualitySettings, presetSettings, type QualitySettings } from './render-quality'
+import { DEFAULT_CURSOR_LIGHT, DEFAULT_GLOBAL_LIGHTING, normalizeCursorLight, normalizeGlobalLighting } from './lighting'
 import { DEFAULT_BUBBLE_SETTINGS, normalizeBubbleSettings, type BubbleSettings } from './bubble-settings'
 import { TextBubble } from './components/TextBubble'
 import type { OnVrmMessage } from './components/TextBubble'
@@ -88,6 +89,8 @@ export default function App() {
   const [pinned, setPinned] = useState(true)
   const [tracking, setTracking] = useState<'mouse' | 'camera'>('mouse')
   const [gazeGain, setGazeGain] = useState(DEFAULT_GAZE_GAIN)
+  const [lightingSettings, setLightingSettings] = useState(DEFAULT_GLOBAL_LIGHTING)
+  const [cursorLightSettings, setCursorLightSettings] = useState(DEFAULT_CURSOR_LIGHT)
   const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => presetSettings('high'))
   const qualitySettingsRef = useRef(qualitySettings)
   qualitySettingsRef.current = qualitySettings
@@ -149,6 +152,8 @@ export default function App() {
     if (s.hideUI !== undefined) setHideUI(s.hideUI)
     if (s.tracking) { setTracking(s.tracking); sceneRef.current?.setTrackingMode(s.tracking) }
     if (s.gazeGain !== undefined) setGazeGain(normalizeGazeGain(s.gazeGain))
+    if (s.lighting !== undefined) setLightingSettings(normalizeGlobalLighting(s.lighting))
+    if (s.cursorLight !== undefined) setCursorLightSettings(normalizeCursorLight(s.cursorLight))
     if (s.quality !== undefined) setQualitySettings(normalizeQualitySettings(s.quality))
     if (s.volume !== undefined) { setVolume(s.volume); LipSync.getInstance().setVolume(s.volume); sceneRef.current?.setBgmVolume(s.volume) }
     if (s.uiAlign) setUiAlign(s.uiAlign)
@@ -555,7 +560,7 @@ export default function App() {
       {modelError && <div role="alert" data-no-passthrough style={{ position: 'absolute', top: 20, left: 16, right: 16, zIndex: 1000, background: '#402020', color: 'white', padding: 12, borderRadius: 8 }}>
         {modelError}<button onClick={() => { setModelError(''); setModelPath(DEFAULT_MODEL); saveSettings({ modelPath: DEFAULT_MODEL }) }}>Use default model</button>
       </div>}
-      <VRMScene animationSettings={animationSettings} ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} gazeGain={gazeGain} pets={petSettings.pets} props={propSettings.props} onTouch={handleTouch} onModelError={message => { setSceneReady(false); setModelError(message) }} onModelLoaded={() => { setSceneReady(true); setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
+      <VRMScene animationSettings={animationSettings} ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} gazeGain={gazeGain} lightingSettings={lightingSettings} cursorLightSettings={cursorLightSettings} pets={petSettings.pets} props={propSettings.props} onTouch={handleTouch} onModelError={message => { setSceneReady(false); setModelError(message) }} onModelLoaded={() => { setSceneReady(true); setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
       <div style={hoverControlsStyle}>{!hideMood && <MoodIndicator uiAlign={uiAlign} />}</div>
       <TextBubble onMessage={handleVrmMessage} enabled={showText} ttsEnabled={ttsEnabled} bubble={bubbleSettings} />
       <div style={hoverControlsStyle}>{!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}</div>

@@ -210,6 +210,8 @@ VRM, Animations accepts VMD/VRMA/FBX and matching MP3 music, and Pets/Props acce
 GLB/glTF/FBX/DAE (converted to GLB when needed).
 
 The **Pets** page includes **Lighting fill**, **Limb motion**, and **Follow lag**.
+Lighting fill lifts shadows using the stage's brightness and color; switching
+all stage lights off also removes this fill, letting cursor lights shade the pet.
 Higher follow lag lets a companion trail more loosely behind its anchor. Float
 idle adds gentle sideways/depth drift and rotation; supported arm and foot bones
 relax and move procedurally when no authored animation clip is playing. Set limb
@@ -335,6 +337,7 @@ python tests/browser/settings_window.py --base-url http://127.0.0.1:1431
 python tests/browser/settings_imports.py --base-url http://127.0.0.1:1431
 python tests/browser/music_polling.py --base-url http://127.0.0.1:1431
 python tests/browser/render_readback.py --base-url http://127.0.0.1:1431
+python tests/browser/companion_lighting.py --base-url http://127.0.0.1:1431
 ```
 
 The settings browser smoke test mocks all pet-server calls, checks persistence and

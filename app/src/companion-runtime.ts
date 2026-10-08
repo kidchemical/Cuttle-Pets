@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { GLTF } from 'three/addons/loaders/GLTFLoader.js'
 import { intersectAnimatedModel } from './mesh-hit-test'
+import { DEFAULT_GLOBAL_LIGHTING, type GlobalLightingSettings } from './lighting'
 import {
   resolveExpressionParts,
   type CompanionAction, type CompanionKind, type PetAnchor, type PetConfig, type PetMove, type PropAnchor, type PropConfig,
@@ -60,6 +61,40 @@ interface LimbRest extends BoneRest {
 }
 type PetMaterial = THREE.Material & { color?: THREE.Color; emissive?: THREE.Color; emissiveIntensity?: number; emissiveMap?: THREE.Texture | null; map?: THREE.Texture | null }
 
+/** Companion GLBs arrive with whatever the exporter wrote, and two shapes
+ * ignore scene lights entirely: unlit (basic) materials, and fully metallic
+ * PBR (glTF defaults metallicFactor to 1 when absent) with no environment
+ * map to reflect — diffuse drops to ~0, so stage and cursor lights can't
+ * reach the pet. Normalize both to matte dielectric PBR; the albedo emissive
+ * fill in PetInstance.configure then applies uniformly. Authored tints, maps
+ * (including metalness maps), transparency, and facing carry over, and the
+ * cached source is untouched. */
+function normalizeCompanionMaterial(material: THREE.Material): THREE.Material {
+  const basic = material as THREE.MeshBasicMaterial
+  let lit: THREE.Material
+  if (!basic.isMeshBasicMaterial) {
+    lit = material.clone()
+  } else {
+    const converted = new THREE.MeshStandardMaterial()
+    converted.name = basic.name
+    converted.color.copy(basic.color)
+    if (basic.map) converted.map = basic.map
+    converted.transparent = basic.transparent
+    converted.opacity = basic.opacity
+    converted.alphaTest = basic.alphaTest
+    converted.side = basic.side
+    converted.vertexColors = basic.vertexColors
+    converted.roughness = 1
+    converted.metalness = 0
+    lit = converted
+  }
+  const standard = lit as THREE.MeshStandardMaterial
+  if (standard.isMeshStandardMaterial && !standard.metalnessMap && standard.metalness > 0.5) {
+    standard.metalness = 0
+  }
+  return lit
+}
+
 class PetInstance {
   readonly holder = new THREE.Group()
   readonly pivot = new THREE.Group()
@@ -79,6 +114,7 @@ class PetInstance {
   modelHeight = 1
   placed = false
   file: string
+  private stageFill = new THREE.Color(1, 1, 1)
 
   constructor(public cfg: PetConfig, public state: PetState) {
     this.file = cfg.file
@@ -140,8 +176,9 @@ class PetInstance {
       const mesh = object as THREE.Mesh
       if (mesh.isMesh) {
         // Clone so per-pet tints never leak into other instances or the cache.
+        // Unlit source materials are upgraded so lights can reach the pet.
         const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-        const cloned = list.map(material => material.clone())
+        const cloned = list.map(normalizeCompanionMaterial)
         mesh.material = Array.isArray(mesh.material) ? cloned : cloned[0]
         for (const material of cloned as PetMaterial[]) {
           if (!material.color) continue
@@ -158,26 +195,48 @@ class PetInstance {
     this.cfg = cfg
     for (const [name, entries] of this.materials) {
       const hex = cfg.colors[name]
-      for (const { material, original, emissive, intensity, emissiveMap } of entries) {
-        material.color?.copy(hex ? new THREE.Color(hex) : original)
-        // Standard GLBs use PBR while the main VRM uses bright toon shading.
-        // A small albedo-colored fill lifts the shadows without bleaching the
-        // texture or changing lights/materials on the main character.
-        if (material.emissive && emissive) {
-          const hasEmission = emissive.getHex() !== 0 || !!emissiveMap
-          material.emissive.copy(hasEmission ? emissive : material.color!)
-          material.emissiveIntensity = hasEmission ? intensity : cfg.lighting
-          const map = hasEmission ? emissiveMap : material.map
-          if (material.emissiveMap !== map) { material.emissiveMap = map; material.needsUpdate = true }
+      for (const { material, original } of entries) {
+        // Pets attached before the metalness normalization existed keep
+        // their materials across hot reloads (the scene effect doesn't
+        // re-run), so heal in place here too: without this, lights can't
+        // reach them until the model reloads.
+        const standard = material as THREE.MeshStandardMaterial
+        if (standard.isMeshStandardMaterial && !standard.metalnessMap && standard.metalness > 0.5) {
+          standard.metalness = 0
         }
+        material.color?.copy(hex ? new THREE.Color(hex) : original)
       }
     }
+    this.applyLighting()
     if (this.mixer) {
       const clip = cfg.clip ? this.clips.find(c => c.name === cfg.clip) : undefined
       if (this.idleAction?.getClip() !== clip) {
         this.idleAction?.stop()
         this.resetProceduralPose()
         this.idleAction = clip ? this.mixer.clipAction(clip).play() : null
+      }
+    }
+  }
+
+  setStageFill(fill: THREE.Color) {
+    if (this.stageFill.equals(fill)) return
+    this.stageFill.copy(fill)
+    this.applyLighting()
+  }
+
+  private applyLighting() {
+    for (const entries of this.materials.values()) {
+      for (const { material, emissive, intensity, emissiveMap } of entries) {
+        if (!material.emissive || !emissive) continue
+        const hasEmission = emissive.getHex() !== 0 || !!emissiveMap
+        // The optional shadow lift follows stage illumination. A constant
+        // emissive albedo makes companions look unlit when the stage is dark
+        // and washes out colored cursor lights. Authored emission stays intact.
+        material.emissive.copy(hasEmission ? emissive : material.color!)
+        if (!hasEmission) material.emissive.multiply(this.stageFill)
+        material.emissiveIntensity = hasEmission ? intensity : this.cfg.lighting
+        const map = hasEmission ? emissiveMap : material.map
+        if (material.emissiveMap !== map) { material.emissiveMap = map; material.needsUpdate = true }
       }
     }
   }
@@ -242,7 +301,7 @@ class PropInstance {
       const mesh = object as THREE.Mesh
       if (!mesh.isMesh) return
       const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-      const cloned = list.map(material => material.clone())
+      const cloned = list.map(normalizeCompanionMaterial)
       mesh.material = Array.isArray(mesh.material) ? cloned : cloned[0]
       for (const material of cloned as (THREE.Material & { color?: THREE.Color })[]) {
         if (!material.color) continue
@@ -289,12 +348,29 @@ export class CompanionLayer {
   private propShown = new Map<string, boolean>()
   private disposed = false
   private time = 0
+  private stageFill = new THREE.Color(1, 1, 1)
+  private lightColor = new THREE.Color()
+  private nextStageFill = new THREE.Color()
   /** Bind-pose head bone → top of head. */
   private headTop = 0
 
   constructor(scene: THREE.Scene, private load: LoadModel, private urlFor: (kind: CompanionKind, file: string) => string) {
     this.root.name = 'companions'
     scene.add(this.root)
+  }
+
+  /** Shadow lift tracks the stage, while cursor lights shade surfaces normally. */
+  setStageLighting(settings: GlobalLightingSettings) {
+    const defaults = DEFAULT_GLOBAL_LIGHTING
+    const total = defaults.ambientIntensity + defaults.keyIntensity + defaults.fillIntensity
+    const fill = this.nextStageFill.setRGB(0, 0, 0)
+    for (const key of ['ambient', 'key', 'fill'] as const) {
+      this.lightColor.set(settings[`${key}Color`]).multiplyScalar(settings[`${key}Intensity`] / total)
+      fill.add(this.lightColor)
+    }
+    if (this.stageFill.equals(fill)) return
+    this.stageFill.copy(fill)
+    for (const pet of this.pets.values()) pet.setStageFill(fill)
   }
 
   setCharacter(rig: CharacterRig | null) {
@@ -322,6 +398,7 @@ export class CompanionLayer {
       if (existing && existing.file === cfg.file) { existing.configure(cfg); continue }
       existing?.dispose()
       const pet = new PetInstance(cfg, state)
+      pet.setStageFill(this.stageFill)
       this.pets.set(cfg.id, pet)
       this.root.add(pet.holder)
       void this.load(this.urlFor('pet', cfg.file)).then(gltf => {

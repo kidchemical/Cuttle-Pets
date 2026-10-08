@@ -79,7 +79,7 @@ export interface PetConfig {
   idle: { style: PetIdleStyle; speed: number; amount: number }
   /** Follow time constant in seconds; larger values trail more loosely. */
   followLag: number
-  /** Texture-colored fill light for standard GLB materials (0–1). */
+  /** Texture-colored shadow lift, scaled by stage illumination (0–1). */
   lighting: number
   /** Relaxed procedural arms/feet; 0 retains the imported bind pose. */
   limbMotion: number

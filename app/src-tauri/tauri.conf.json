@@ -1,6 +1,6 @@
 {
   "productName": "Claw Sama",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "identifier": "com.claw.sama",
   "build": {
     "frontendDist": "../dist",

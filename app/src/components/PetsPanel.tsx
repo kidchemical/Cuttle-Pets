@@ -195,6 +195,7 @@ function PetEditor({ pet, onPatch, onTest, t }: {
       <SliderField label={t('肢体动作', 'Limb motion')} value={pet.limbMotion} min={0} max={2} step={0.1} format={v => `×${v.toFixed(1)}`} onChange={v => onPatch(next => { next.limbMotion = v })} />
       <SliderField label={t('跟随延迟（越大越松）', 'Follow lag (higher is looser)')} value={pet.followLag} min={0.05} max={2} step={0.05} format={v => `${v.toFixed(2)}s`} onChange={v => onPatch(next => { next.followLag = v })} />
       <SliderField label={t('补光', 'Lighting fill')} value={pet.lighting} min={0} max={1} step={0.05} format={v => `${Math.round(v * 100)}%`} onChange={v => onPatch(next => { next.lighting = v })} />
+      <p style={{ fontSize: 11, color: '#8a9ab4' }}>{t('补光跟随舞台灯的亮度和颜色；关闭舞台灯时补光也会关闭。', 'Fill follows stage brightness and color; turning stage lights off also turns fill off.')}</p>
     </div>
 
     {pet.groups.length > 0 && <div style={{ display: 'grid', gap: 6 }}>
