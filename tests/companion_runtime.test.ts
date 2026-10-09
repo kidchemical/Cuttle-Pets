@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { AnimationClip, Bone, BoxGeometry, DataTexture, Group, Mesh, MeshBasicMaterial, MeshStandardMaterial, Quaternion, QuaternionKeyframeTrack, Scene, Vector3 } from '../app/node_modules/three/build/three.module.js'
+import { AnimationClip, Bone, BoxGeometry, DataTexture, Group, Mesh, MeshBasicMaterial, MeshStandardMaterial, Quaternion, QuaternionKeyframeTrack, Scene, Texture, Vector3 } from '../app/node_modules/three/build/three.module.js'
 import { CompanionLayer } from '../app/src/companion-runtime'
 import { createPetConfig, normalizePet } from '../app/src/companions'
 import { DEFAULT_GLOBAL_LIGHTING } from '../app/src/lighting'
@@ -165,12 +165,30 @@ async function main() {
   plain.metalness = 1
   metalLayer.configure([metalCfg], [])
   assert.equal(plain.metalness, 0, 'Reconfigure heals stale full metal')
+  // Shiny finish: shared reflection map built once, scaled by the stage.
+  let envBuilds = 0, envDisposed = false
+  metalLayer.setEnvironment(() => { envBuilds++; const t = new Texture(); t.dispose = () => { envDisposed = true }; return t })
+  const shinyCfg = { ...metalCfg, shiny: { enabled: true, metalness: 0.8, smoothness: 0.7, reflection: 1.5 } }
+  metalLayer.configure([shinyCfg], [])
+  assert.equal(plain.metalness, 0.8, 'Shiny sets metalness')
+  assert.ok(Math.abs(plain.roughness - 0.3) < 1e-9, 'Smoothness maps to roughness')
+  assert.ok(plain.envMap && plain.envMap === mapped.envMap, 'Reflection map is shared')
+  assert.equal(plain.envMapIntensity, 1.5, 'Default stage reflects at full strength')
+  metalLayer.setStageLighting({ ...DEFAULT_GLOBAL_LIGHTING, ambientIntensity: 0, keyIntensity: 0, fillIntensity: 0 })
+  assert.equal(plain.envMapIntensity, 0, 'Stage lights off removes reflections')
+  metalLayer.configure([metalCfg], [])
+  assert.equal(plain.metalness, 0, 'Shiny off restores the matte finish')
+  assert.equal(plain.roughness, 0.85)
+  assert.equal(plain.envMap, null)
+  assert.equal(envBuilds, 1)
   metalLayer.dispose()
+  assert.ok(envDisposed, 'Layer disposes the shared reflection map')
 
   const normalized = normalizePet({ file: 'old.glb', followLag: Infinity, lighting: 99, limbMotion: -3 }, 'old')!
   assert.equal(normalized.followLag, 0.6, 'Old/invalid settings gain the loose follow default')
   assert.equal(normalized.lighting, 1)
   assert.equal(normalized.limbMotion, 0)
+  assert.deepEqual(normalized.shiny, { enabled: false, metalness: 0.8, smoothness: 0.7, reflection: 1 }, 'Old pets stay matte')
   console.log('Companion runtime passed: lighting isolation, relaxed moving limbs, 3D drift, frame-independent trailing, clip precedence, visibility, disposal.')
 }
 main().catch(error => { console.error(error); process.exit(1) })

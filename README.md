@@ -77,12 +77,19 @@ bash start_pet.sh                     # Linux
 powershell -ExecutionPolicy Bypass -File .\start_pet.ps1   # Windows
 ```
 
-On Linux with the NVIDIA driver loaded, the app defaults to WebKitGTK's
-DMA-BUF compatibility fallback to avoid a known graphics-driver crash path.
-This applies to direct binary launches too. An explicit
-`WEBKIT_DISABLE_DMABUF_RENDERER` environment value overrides the default
-(`0` opts back into DMA-BUF). The fallback can affect rendering performance
-and transparency; see [Tauri's NVIDIA compatibility report](https://github.com/tauri-apps/tauri/issues/9394).
+On Linux with the NVIDIA driver loaded, the app keeps WebKitGTK's DMA-BUF
+renderer but forces shared-memory buffers (`WEBKIT_FORCE_DMABUF_RENDERER=1`,
+`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`). NVIDIA's GBM rejects the renderer's
+hardware buffers, which otherwise shows a blank window or crashes; the older
+workaround, `WEBKIT_DISABLE_DMABUF_RENDERER=1`, avoids that but falls back to
+non-composited CPU painting, which held a large pet window near 25 fps where
+shared-memory buffers reached about 60 fps at lower CPU. Setting any of these
+three variables yourself overrides the default (for example
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` restores the old fallback). See
+[Tauri's Linux graphics notes](https://v2.tauri.app/develop/debug/linux-graphics/).
+With NVIDIA the app also defaults `__GL_YIELD=USLEEP`: the driver otherwise
+busy-waits on every WebGL frame and keeps a full CPU core busy even for an
+empty scene. An explicit `__GL_YIELD` value overrides it.
 
 ### Try it
 
@@ -219,13 +226,29 @@ motion to zero to keep the imported bind pose.
 
 **Quality → Frame rate limit** controls the FPS cap separately from visual presets.
 Choose a cap from 15–240 FPS or **Uncapped**; saved custom caps are also preserved.
+The cap is an upper limit: actual FPS also depends on the system webview's frame
+clock and graphics workload. On Linux, an unsupported DRM vblank query now uses
+a native software clock paced to the current monitor, avoiding WebKitGTK's fixed
+60 Hz fallback. `python3 cli/cuttle_pet.py stats` reports rendered FPS, browser
+callback rate, native paints, monitor refresh, callback gaps, and frame work. See
+[frame pacing diagnostics](.cuttle/docs/frame-pacing.md). While resizing settings,
+the pet briefly uses a 30 FPS budget to keep the controls responsive and returns
+to the selected limit 250 ms after resizing stops.
+
+**Display → Text speed** changes how quickly speech and Cuttle status text appear.
+Choose 0.25–8× or **Instant**. The default is 1×; this does not change audio playback.
+Settings explanations live behind **ⓘ** icons, shown on hover, keyboard focus or tap.
 
 The **Animations** tab has a global speed multiplier and a searchable, scrollable
 list of idle, gesture, dance, imported dance, and procedural animations. Select an
 animation to adjust its individual speed; the effective speed is global × individual.
 Clips also have a transition duration, and gestures have a held-pose duration for
 interactions that request a hold. Use **Preview on pet**, **Stop preview**, and the
-reset buttons to try changes. Procedural music motion can also be previewed from the
+reset buttons to try changes. **Anchor feet to floor** is a per-clip toggle that
+lowers the hips to keep the lowest foot, toe or knee on the model's standing floor.
+It defaults on for **Pray**, **Sitting idle** and **Sitting talk**; jumps and dances
+retain their authored vertical motion by default. Turning it off restores the
+original in-place retargeting. Procedural music motion can also be previewed from the
 Music tab. Speech remains synchronized to its audio; music beat matching works best
 at 1×. At effective speeds below 0.0625×, dance audio stays at 0.0625× (the browser's
 minimum playback rate).
@@ -335,6 +358,7 @@ npm --prefix app run dev -- --port 1431
 # In another terminal:
 python tests/browser/settings_window.py --base-url http://127.0.0.1:1431
 python tests/browser/settings_imports.py --base-url http://127.0.0.1:1431
+python tests/browser/text_bubble.py --base-url http://127.0.0.1:1431
 python tests/browser/music_polling.py --base-url http://127.0.0.1:1431
 python tests/browser/render_readback.py --base-url http://127.0.0.1:1431
 python tests/browser/companion_lighting.py --base-url http://127.0.0.1:1431

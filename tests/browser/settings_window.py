@@ -155,6 +155,7 @@ with sync_playwright() as p:
     page.get_by_role('button', name='Auto Generate', exact=True).click()
     peer.wait_for_function("commands.some(c => c.type==='screenshot')")
     page.set_viewport_size({'width': 480, 'height': 500})
+    peer.wait_for_function("commands.some(c => c.type==='settings-resizing')")
     for tab in ['General','Music','Cuttle','Voice','Model','Persona','Behavior','Quality','Display','Animations']:
         page.get_by_role('button', name=tab, exact=True).click()
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), tab

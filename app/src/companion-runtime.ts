@@ -60,6 +60,7 @@ interface LimbRest extends BoneRest {
   arm: boolean
 }
 type PetMaterial = THREE.Material & { color?: THREE.Color; emissive?: THREE.Color; emissiveIntensity?: number; emissiveMap?: THREE.Texture | null; map?: THREE.Texture | null }
+interface PetMaterialEntry { material: PetMaterial; original: THREE.Color; emissive?: THREE.Color; intensity: number; emissiveMap?: THREE.Texture | null; metalness: number; roughness: number }
 
 /** Companion GLBs arrive with whatever the exporter wrote, and two shapes
  * ignore scene lights entirely: unlit (basic) materials, and fully metallic
@@ -109,7 +110,9 @@ class PetInstance {
   limbs: LimbRest[] = []
   idleTime = 0
   phase = 0
-  materials = new Map<string, { material: PetMaterial; original: THREE.Color; emissive?: THREE.Color; intensity: number; emissiveMap?: THREE.Texture | null }[]>()
+  materials = new Map<string, PetMaterialEntry[]>()
+  /** Shared reflection map for the shiny finish (owned by the layer). */
+  environment: () => THREE.Texture | null = () => null
   /** Bind-pose model height (model units) and the origin shift to bottom-center. */
   modelHeight = 1
   placed = false
@@ -183,7 +186,9 @@ class PetInstance {
         for (const material of cloned as PetMaterial[]) {
           if (!material.color) continue
           const entries = this.materials.get(material.name) ?? []
-          entries.push({ material, original: material.color.clone(), emissive: material.emissive?.clone(), intensity: material.emissiveIntensity ?? 1, emissiveMap: material.emissiveMap })
+          const standard = material as THREE.MeshStandardMaterial
+          entries.push({ material, original: material.color.clone(), emissive: material.emissive?.clone(), intensity: material.emissiveIntensity ?? 1, emissiveMap: material.emissiveMap,
+            metalness: standard.metalness ?? 0, roughness: standard.roughness ?? 1 })
           this.materials.set(material.name, entries)
         }
       }
@@ -195,17 +200,7 @@ class PetInstance {
     this.cfg = cfg
     for (const [name, entries] of this.materials) {
       const hex = cfg.colors[name]
-      for (const { material, original } of entries) {
-        // Pets attached before the metalness normalization existed keep
-        // their materials across hot reloads (the scene effect doesn't
-        // re-run), so heal in place here too: without this, lights can't
-        // reach them until the model reloads.
-        const standard = material as THREE.MeshStandardMaterial
-        if (standard.isMeshStandardMaterial && !standard.metalnessMap && standard.metalness > 0.5) {
-          standard.metalness = 0
-        }
-        material.color?.copy(hex ? new THREE.Color(hex) : original)
-      }
+      for (const { material, original } of entries) material.color?.copy(hex ? new THREE.Color(hex) : original)
     }
     this.applyLighting()
     if (this.mixer) {
@@ -225,8 +220,20 @@ class PetInstance {
   }
 
   private applyLighting() {
+    const { shiny } = this.cfg
+    const environment = shiny.enabled ? this.environment() : null
+    // Reflections follow the stage like the fill, so lights off stays dark.
+    const reflection = shiny.reflection * Math.max(this.stageFill.r, this.stageFill.g, this.stageFill.b)
     for (const entries of this.materials.values()) {
-      for (const { material, emissive, intensity, emissiveMap } of entries) {
+      for (const entry of entries) {
+        const standard = entry.material as unknown as THREE.MeshStandardMaterial
+        if (standard.isMeshStandardMaterial) {
+          standard.metalness = shiny.enabled ? shiny.metalness : entry.metalness
+          standard.roughness = shiny.enabled ? 1 - shiny.smoothness : entry.roughness
+          standard.envMapIntensity = reflection
+          if (standard.envMap !== environment) { standard.envMap = environment; standard.needsUpdate = true }
+        }
+        const { material, emissive, intensity, emissiveMap } = entry
         if (!material.emissive || !emissive) continue
         const hasEmission = emissive.getHex() !== 0 || !!emissiveMap
         // The optional shadow lift follows stage illumination. A constant
@@ -266,6 +273,8 @@ class PetInstance {
       if (!mesh.isMesh) return
       mesh.geometry?.dispose()
       for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        // The reflection map is shared by every pet; the layer disposes it.
+        ;(material as THREE.MeshStandardMaterial).envMap = null
         for (const value of Object.values(material)) if (value instanceof THREE.Texture) value.dispose()
         material.dispose()
       }
@@ -353,6 +362,8 @@ export class CompanionLayer {
   private nextStageFill = new THREE.Color()
   /** Bind-pose head bone → top of head. */
   private headTop = 0
+  private environment: THREE.Texture | null = null
+  private makeEnvironment: (() => THREE.Texture) | null = null
 
   constructor(scene: THREE.Scene, private load: LoadModel, private urlFor: (kind: CompanionKind, file: string) => string) {
     this.root.name = 'companions'
@@ -371,6 +382,16 @@ export class CompanionLayer {
     if (this.stageFill.equals(fill)) return
     this.stageFill.copy(fill)
     for (const pet of this.pets.values()) pet.setStageFill(fill)
+  }
+
+  /** Reflection map for shiny pets, built on first use. */
+  setEnvironment(make: () => THREE.Texture) {
+    this.makeEnvironment = make
+  }
+
+  private sharedEnvironment = () => {
+    if (!this.environment && this.makeEnvironment && !this.disposed) this.environment = this.makeEnvironment()
+    return this.environment
   }
 
   setCharacter(rig: CharacterRig | null) {
@@ -398,6 +419,7 @@ export class CompanionLayer {
       if (existing && existing.file === cfg.file) { existing.configure(cfg); continue }
       existing?.dispose()
       const pet = new PetInstance(cfg, state)
+      pet.environment = this.sharedEnvironment
       pet.setStageFill(this.stageFill)
       this.pets.set(cfg.id, pet)
       this.root.add(pet.holder)
@@ -722,6 +744,8 @@ export class CompanionLayer {
     for (const prop of this.props.values()) prop.dispose()
     this.pets.clear()
     this.props.clear()
+    this.environment?.dispose()
+    this.environment = null
     this.root.removeFromParent()
   }
 }

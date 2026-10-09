@@ -33,6 +33,7 @@ export class LipSync {
   private smoothState: Record<LipKey, number> = { A: 0, E: 0, I: 0, O: 0, U: 0 }
   private lastActiveAt = 0
   private currentSource: AudioBufferSourceNode | null = null
+  private speakingUntil = 0
   private ready = false
   private initPromise: Promise<void> | null = null
 
@@ -101,6 +102,7 @@ export class LipSync {
     source.connect(this.gainNode!)
     this.currentSource = source
     source.start()
+    this.speakingUntil = performance.now() + audioBuffer.duration * 1000
 
     return audioBuffer.duration * 1000
   }
@@ -167,8 +169,12 @@ export class LipSync {
     }
   }
 
+  /** True while speech audio is playing. */
+  get speaking() { return performance.now() < this.speakingUntil }
+
   /** Stop current audio playback immediately. */
   stopAudio() {
+    this.speakingUntil = 0
     if (this.currentSource) {
       try { this.currentSource.stop() } catch {}
       try { this.currentSource.disconnect() } catch {}

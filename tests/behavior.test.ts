@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import {
   EMOTION_OPTIONS, RANDOM_ACTION, animationLabel, applyBaseById, applyEmotion,
-  defaultBehaviorProfile, describeStatus, normalizeBehaviorSettings, normalizeProfile,
-  pickRandomAction, pickRandomEmotion, pickWeightedEntry, playOnceById, resolveMain, resolvePetState,
+  defaultBehaviorProfile, describeStatus, entryCursorFollow, motionKey, normalizeBehaviorSettings, normalizeProfile,
+  pickRandomAction, pickRandomEmotion, pickWeightedEntry, playOnceById, resolveCursorFollow, resolveMain, resolvePetState,
   type BehaviorScene,
 } from '../app/src/behavior'
 
@@ -34,6 +34,31 @@ async function main() {
   assert.deepEqual(defaults.current.states.working.occasionals[0], { animation: 'sip', everyMin: 40, everyMax: 90, chance: 1 })
   assert.equal(defaults.current.states.dancing.base.animation, 'dance:jile', 'Dancing base mirrors the first rotation entry for legacy readers')
   assert.deepEqual(defaults.profiles, [])
+
+  // Cursor follow is per entry: idle and the music sway follow by default,
+  // typing / actions / dances look ahead, and explicit values are clamped.
+  assert.deepEqual(entryCursorFollow(defaults.current.states.idle.mains[0]), { eyes: 2, head: 1 })
+  assert.deepEqual(entryCursorFollow(defaults.current.states.music.mains[0]), { eyes: 2, head: 1 })
+  assert.deepEqual(entryCursorFollow(defaults.current.states.working.mains[0]), { eyes: 0, head: 0 })
+  assert.deepEqual(entryCursorFollow(defaults.current.states.dancing.mains[0]), { eyes: 0, head: 0 })
+  const tuned = normalizeProfile({ states: {
+    working: { mains: [{ animation: 'typing', weight: 1, follow: { eyes: 9, head: 0.5 } }], start: [], occasionals: [], end: [] },
+    idle: { mains: [{ animation: 'idle', weight: 1, follow: { eyes: 'x', head: -1 } }], start: [], occasionals: [], end: [] },
+  } }, 'fb')
+  assert.deepEqual(tuned.states.working.mains[0].follow, { eyes: 4, head: 0.5 }, 'Explicit follow survives normalization, clamped')
+  assert.deepEqual(tuned.states.idle.mains[0].follow, { eyes: 2, head: 0 }, 'Invalid follow fields fall back to the animation default')
+  assert.equal(normalizeProfile({ states: { idle: { mains: [{ animation: 'idle', weight: 1 }] } } }, 'fb').states.idle.mains[0].follow, undefined, 'No follow key stays default')
+
+  // The innermost playing entry decides; references and empty playback defer to the renderer.
+  assert.deepEqual(resolveCursorFollow(tuned, [{ state: 'working', phase: 'mains', index: 0 }]), { eyes: 4, head: 0.5 })
+  assert.deepEqual(resolveCursorFollow(defaults.current, [
+    { state: 'idle', phase: 'mains', index: 0 },
+    { state: 'idle', phase: 'occasionals', index: 0 },
+  ]), { eyes: 0, head: 0 }, 'A random-action occasional looks ahead over the idle loop')
+  assert.equal(resolveCursorFollow(defaults.current, [{ state: 'music', phase: 'occasionals', index: 0 }]), null, 'Behavior reference defers')
+  assert.equal(resolveCursorFollow(defaults.current, []), null)
+  assert.equal(resolveCursorFollow(defaults.current, [{ state: 'idle', phase: 'end', index: 3 }]), null, 'Stale location defers')
+  assert.equal(motionKey({ animation: 'idle', follow: { eyes: 1, head: 1 } }), motionKey({ animation: 'idle' }), 'Follow tuning is not a motion change')
 
   // Validation: unknown ids dropped, ranges clamped, lists capped, bad base falls back.
   const dirty = normalizeBehaviorSettings({

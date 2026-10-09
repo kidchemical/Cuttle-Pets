@@ -20,8 +20,16 @@ async function main() {
   const settings = normalizeAnimations({ speed: 2, overrides: { 'action:happy': { speed: .5, transition: 9, hold: -5 }, bad: null } })
   assert.equal(animationSpeed(settings, 'action:happy'), 1)
   assert.equal(animationSpeed(settings, 'idle'), 2)
-  assert.deepEqual(animationOptions(settings, 'action:happy'), { speed: .5, transition: 3, hold: 0 })
+  assert.deepEqual(animationOptions(settings, 'action:happy'), { speed: .5, transition: 3, hold: 0, groundFeet: false })
   assert.equal(normalizeAnimations({ speed: Infinity }).speed, 1)
+
+  assert.equal(animationOptions(settings, 'action:praying').groundFeet, true)
+  assert.equal(animationOptions(settings, 'action:sittingIdle').groundFeet, true)
+  assert.equal(animationOptions(settings, 'action:sittingTalk').groundFeet, true)
+  assert.equal(animationOptions(settings, 'action:joyfulJump').groundFeet, false)
+  const noGround = normalizeAnimations({ overrides: { 'action:praying': { groundFeet: false } } })
+  assert.equal(animationOptions(noGround, 'action:praying').groundFeet, false, 'Explicit opt-out persists')
+  assert.equal(animationOptions(normalizeAnimations({ overrides: { 'action:praying': { speed: 2 } } }), 'action:praying').groundFeet, true, 'Existing overrides receive default grounding')
 
   // Procedural (additive) layers ignore the global multiplier: other sliders
   // must never change their tempo (e.g. typing/global speeding up music nod).

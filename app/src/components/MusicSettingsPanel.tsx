@@ -1,3 +1,4 @@
+import { SettingsHelp } from './SettingsHelp'
 import { useEffect, useState } from 'react'
 import { petUrl } from '../config'
 import { musicReadout, type MusicAnalysis } from '../music-readout'
@@ -28,20 +29,17 @@ export function MusicSettingsPanel({ fit, music, enabled, onFitChange, onMusicCh
       {slider('Bass analysis band upper limit', music.cutoff, 40, 200, 5, v => onMusicChange({ ...music, cutoff: v }), ' Hz')}
       {slider('Peak threshold (lower = more sensitive)', music.sensitivity, 1.05, 4, .05, v => onMusicChange({ ...music, sensitivity: v }), '×')}
       {slider('Fallback tempo', music.manualBpm, 40, 240, 1, v => onMusicChange({ ...music, manualBpm: v }), ' BPM')}
-      <p className="music-note">Yellow: calculating. Green: locked. The estimate stays visible while analysis settles. Motion uses fallback tempo until a beat grid is available.</p>
-      <p className="music-note">Audio is analyzed locally in memory. No recordings are saved.</p>
+
     </section>
-    <section aria-label="Music motion"><h3>Music motion</h3>
+    <section aria-label="Music motion"><h3>Music motion<SettingsHelp label="Music motion help">Automatic dances and end reactions are configured in Behavior → Music.</SettingsHelp></h3>
       {slider('Forward / back nod', music.nod, 0, 45, 1, v => onMusicChange({ ...music, nod: v }), '°')}
       {slider('Side sway', music.sway, 0, 15, .5, v => onMusicChange({ ...music, sway: v }), '°')}
       <label><input type="checkbox" checked={music.amplitudeReactive} onChange={e => onMusicChange({ ...music, amplitudeReactive: e.target.checked })} /> Nod more strongly with louder music</label>
       {slider('Amplitude response', music.amplitudeGain, .5, 12, .25, v => onMusicChange({ ...music, amplitudeGain: v }), '×')}
-      <p className="music-note">Automatic dances and end reactions are configured in Behavior → Music.</p>
       <button onClick={() => onMusicChange({ ...DEFAULT_MUSIC })}>Reset music settings</button>
     </section>
     <section className="music-headphone-fit" aria-label="Headphone fit">
-      <h3>Headphone fit — current model</h3>
-      <p className="music-note">Saved separately for each model. Offsets are a percentage of character height.</p>
+      <h3>Headphone fit — current model<SettingsHelp label="Headphone fit help">Saved separately for each model. Offsets are a percentage of character height.</SettingsHelp></h3>
       <label><input type="checkbox" checked={preview} onChange={e => { setPreview(e.target.checked); onPreview(e.target.checked) }} /> Preview headphones and nodding without music</label>
       {(['x', 'y', 'z'] as const).map((key, i) => <div key={key}>{slider(['Left / right', 'Up / down', 'Forward / back'][i], fit[key], -40, 40, .25, v => onFitChange({ ...fit, [key]: v }), '%')}</div>)}
       {(['scale', 'width', 'height', 'depth'] as const).map(key => <div key={key}>{slider(key === 'scale' ? 'Overall scale' : key[0].toUpperCase() + key.slice(1), fit[key], .2, 4, .025, v => onFitChange({ ...fit, [key]: v }), '×')}</div>)}
@@ -85,7 +83,7 @@ function MusicAnalysisReadout({ enabled }: { enabled: boolean }) {
   }, [])
   return (
     <div className="music-bpm-card" data-state={readout.state}>
-      <div className="music-bpm-heading"><h3>Desktop playback BPM</h3><span className="music-bpm-state" role="status">{readout.label}</span></div>
+      <div className="music-bpm-heading"><h3>Desktop playback BPM<SettingsHelp label="BPM analysis help">Yellow: calculating. Green: locked. The estimate stays visible while analysis settles. Motion uses fallback tempo until a beat grid is available. Audio is analyzed locally in memory; no recordings are saved.</SettingsHelp></h3><span className="music-bpm-state" role="status">{readout.label}</span></div>
       <div className="music-bpm-value" aria-label={readout.bpm === null ? 'BPM estimate pending' : `${Math.round(readout.bpm)} BPM ${readout.current ? 'current' : 'last'} estimate`}>
         <strong>{readout.bpm === null ? '—' : Math.round(readout.bpm)}</strong><span>BPM</span>
       </div>

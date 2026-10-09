@@ -1,3 +1,4 @@
+import { SettingsHelp } from './SettingsHelp'
 import { useEffect, useState } from 'react'
 import { petUrl } from '../config'
 
@@ -60,8 +61,7 @@ export function CuttleConnection() {
 
   const inputStyle = { padding: 8, borderRadius: 6, border: '1px solid #666', background: '#252530', color: '#fff', width: '100%', boxSizing: 'border-box' as const }
   return <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-    <h3 style={{ margin: 0 }}>Connect to Cuttle</h3>
-    <p style={{ margin: 0, fontSize: 13 }}>Sign in once to make your pet react to all your Cuttle chats. Your connection is remembered across launches and reboots. Your password is never saved.</p>
+    <h3 style={{ margin: 0 }}>Connect to Cuttle<SettingsHelp label="Cuttle connection help">Sign in once to make your pet react to all your Cuttle chats. Your connection is remembered across launches and reboots. Your password is never saved.</SettingsHelp></h3>
     <div role="status" aria-live="polite">
       {checking ? 'Checking connection…' : connection.state === 'connected' ? `Connected as ${connection.username}` : connection.state === 'offline' ? 'Cuttle is offline — reconnecting automatically.' : connection.state === 'expired' ? 'Sign-in expired. Please reconnect.' : 'Not connected'}
     </div>
@@ -75,6 +75,6 @@ export function CuttleConnection() {
       </form>}
     {(connection.state === 'connected' || connection.state === 'offline' || connection.state === 'expired') &&
       <button disabled={busy} onClick={() => void update(true)}>{busy ? 'Please wait…' : 'Disconnect'}</button>}
-    {connection.state === 'connected' && <p style={{ margin: 0, fontSize: 13 }}>Watching all chats when launched with start_pet.sh. If Cuttle expires or revokes your login, reconnect here.</p>}
+    {connection.state === 'connected' && <SettingsHelp>Watching all chats when launched with start_pet.sh. If Cuttle expires or revokes your login, reconnect here.</SettingsHelp>}
   </section>
 }

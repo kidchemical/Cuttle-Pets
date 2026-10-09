@@ -1,3 +1,4 @@
+import { AnimationGrounding } from './animation-grounding'
 import { DEFAULT_ANIMATIONS, normalizeAnimations, animationSpeed, animationOptions, type AnimationSettings } from './animation-settings'
 /**
  * MotionController — unified animation system supporting VRMA, VMD, and FBX.
@@ -97,7 +98,9 @@ function reAnchorRootPositionTrack(clip: THREE.AnimationClip, vrm: VRM) {
 
   hipNode.updateMatrixWorld(true)
   const defaultHipPos = new THREE.Vector3()
-  hipNode.getWorldPosition(defaultHipPos)
+  const restPosition = vrm.humanoid?.normalizedRestPose?.hips?.position
+  if (restPosition) defaultHipPos.fromArray(restPosition)
+  else defaultHipPos.copy(hipNode.position)
 
   const hipsTrack = clip.tracks.find(
     (t) =>
@@ -139,6 +142,7 @@ export class MotionController {
     for (const [action, id] of this.actionKeys) action.setEffectiveTimeScale(animationSpeed(this.animationSettings, id))
     if (this.bgmAudio) this.bgmAudio.playbackRate = Math.max(.0625, animationSpeed(this.animationSettings, this.danceKey))
   }
+  private grounding: AnimationGrounding
   private vrm: VRM
   private mixer: THREE.AnimationMixer | null = null
   private idleClip: THREE.AnimationClip | null = null
@@ -162,6 +166,7 @@ export class MotionController {
 
   constructor(vrm: VRM) {
     this.vrm = vrm
+    this.grounding = new AnimationGrounding(vrm)
     this.mixer = new THREE.AnimationMixer(vrm.scene)
     this.gltfLoader = new GLTFLoader()
     this.gltfLoader.register((parser) => new VRMAnimationLoaderPlugin(parser))
@@ -186,6 +191,7 @@ export class MotionController {
   }
 
   update(delta: number) {
+    this.grounding.restore()
     if (this.mixer) this.mixer.update(delta)
     const watch = this.safetyWatch
     if (watch) {
@@ -193,6 +199,11 @@ export class MotionController {
       if (watch.elapsed >= watch.duration + 1) watch.settle()
     }
     if (this._ikActive) this.ikHandler.update()
+    let groundedWeight = 0
+    for (const [action, id] of this.actionKeys) {
+      if (action.enabled && animationOptions(this.animationSettings, id).groundFeet) groundedWeight += action.getEffectiveWeight()
+    }
+    this.grounding.apply(groundedWeight)
   }
 
   // ── CrossFade helper ─────────────────────────────────────────────────────
@@ -452,6 +463,7 @@ export class MotionController {
 
   /** Cleanup when controller is being destroyed (model reload etc.) */
   dispose() {
+    this.grounding.restore()
     this.stopBgm()
     this.clearTimers()
     this.disableIK()

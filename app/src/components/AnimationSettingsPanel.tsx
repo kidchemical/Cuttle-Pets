@@ -1,3 +1,4 @@
+import { SettingsHelp } from './SettingsHelp'
 import { activeAnimationIds } from '../playback-highlights'
 import type { PetStatusPayload } from '../window-sync'
 import { useState } from 'react'
@@ -31,15 +32,14 @@ export function AnimationSettingsPanel({ settings, onChange, customDances, onPre
   const item = items.find(item => item.id === selected) ?? items[0]
   const options = animationOptions(settings, item.id)
   const update = (patch: Partial<typeof options>) => onChange({ ...settings, overrides: { ...settings.overrides, [item.id]: { ...options, ...patch } } })
-  const slider = (label: string, value: number, min: number, max: number, step: number, change: (n: number) => void, unit = '×') => (
-    <label style={{ display: 'grid', gap: 8 }}>{label}<div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+  const slider = (label: string, value: number, min: number, max: number, step: number, change: (n: number) => void, unit = '×', help?: string) => (
+    <label style={{ display: 'grid', gap: 8 }}><span>{label}{help && <SettingsHelp label={`${label} help`}>{help}</SettingsHelp>}</span><div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
       <input aria-label={label} type="range" min={min} max={max} step={step} value={value} onChange={e => change(Number(e.target.value))} style={{ flex: 1, minWidth: 0 }} />
       <output style={{ minWidth: 54 }}>{value.toFixed(2)}{unit}</output>
     </div></label>
   )
   return <div style={{ display: 'grid', gap: 18, fontSize: 14 }}>
-    {slider('Global animation speed', settings.speed, .1, 4, .05, speed => onChange({ ...settings, speed }))}
-    <p style={{ color: '#adb5c8', lineHeight: 1.5 }}>Global and individual speeds multiply for base clips (idle, actions, dances). Procedural layers (typing, music nod, eyes, blink, …) use only their individual speed. Changes apply immediately. Speech audio stays synchronized; music beat matching works best at 1×.</p>
+    {slider('Global animation speed', settings.speed, .1, 4, .05, speed => onChange({ ...settings, speed }), '×', 'Global and individual speeds multiply for base clips (idle, actions, dances). Procedural layers (typing, music nod, eyes, blink, …) use only their individual speed. Changes apply immediately. Speech audio stays synchronized; music beat matching works best at 1×.')}
     <input aria-label="Search animations" placeholder="Search animations…" value={query} onChange={e => setQuery(e.target.value)} style={{ ...button, width: '100%' }} />
     <div className="animation-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 1.65fr) minmax(150px, 0.85fr)', gap: 16, alignItems: 'stretch' }}>
       <div className="animation-list" role="listbox" aria-label="Animations" style={{ overflowY: 'auto', height: '100%', minHeight: 330, display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -60,8 +60,11 @@ export function AnimationSettingsPanel({ settings, onChange, customDances, onPre
         {slider('Individual speed', options.speed, .1, 4, .05, speed => update({ speed }))}
         <span>Effective speed: {(item.procedural ? proceduralSpeed(settings, item.id) : settings.speed * options.speed).toFixed(2)}×{item.procedural ? ' (individual only)' : ''}</span>
         {!item.procedural && slider('Transition duration', options.transition, 0, 3, .05, transition => update({ transition }), 's')}
-        {item.id.startsWith('action:') && slider('Held pose duration', options.hold, 0, 60, 1, hold => update({ hold }), 's')}
-        {item.id.startsWith('action:') && <small style={{ color: '#adb5c8' }}>Held duration applies when an interaction requests a held pose.</small>}
+        {!item.procedural && <label>
+          <input aria-label="Anchor feet to floor" type="checkbox" checked={options.groundFeet ?? false} onChange={e => update({ groundFeet: e.target.checked })} /> Anchor feet to floor
+          <SettingsHelp label="Animation grounding help">Use the lowest foot, toe or knee as the floor anchor, letting the hips descend in sitting and kneeling poses. Enabled by default for Pray and Sitting. Turn off for jumping or airborne motion.</SettingsHelp>
+        </label>}
+        {item.id.startsWith('action:') && slider('Held pose duration', options.hold, 0, 60, 1, hold => update({ hold }), 's', 'Held duration applies when an interaction requests a held pose.')}
         <button style={button} onClick={() => onPreview?.(item.id, item.preset, 'once')}>Preview on pet</button>
         <button style={button} onClick={() => onPreview?.(item.id, item.preset, 'loop')}>Preview looped</button>
         <button style={button} onClick={onStop}>Stop preview / return to idle</button>

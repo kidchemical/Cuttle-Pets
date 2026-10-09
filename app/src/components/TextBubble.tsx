@@ -113,7 +113,9 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [zoomedSrc, setZoomedSrc] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const typewriterRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const typewriterRef = useRef<number | null>(null)
+  const textSpeedRef = useRef(bs.textSpeed)
+  textSpeedRef.current = bs.textSpeed
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Split text into grapheme clusters
@@ -165,7 +167,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
     pendingAppendRef.current = []
     replyDoneRef.current = true
     pendingReplyDoneRef.current = false
-    if (typewriterRef.current) { clearInterval(typewriterRef.current); typewriterRef.current = null }
+    if (typewriterRef.current) { cancelAnimationFrame(typewriterRef.current); typewriterRef.current = null }
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
   }, [])
 
@@ -218,6 +220,27 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
     return () => { delete (window as any).__clawInterruptAudio }
   }, [interruptAudio])
 
+  // Batch character reveals to the display clock instead of scheduling one
+  // React render per 6ms character. Elapsed time preserves pace under load.
+  const startTypewriter = useCallback(() => {
+    if (typewriterRef.current !== null) return
+    let previous = performance.now()
+    let revealed = charCountRef.current
+    const tick = (now: number) => {
+      const speed = textSpeedRef.current
+      revealed = speed === 0 ? chars.current.length : revealed + Math.max(0, now - previous) * speed / charRateRef.current
+      previous = now
+      const count = Math.min(chars.current.length, Math.floor(revealed))
+      if (count !== charCountRef.current) { charCountRef.current = count; setCharCount(count) }
+      if (count >= chars.current.length) {
+        typewriterRef.current = null
+        tryScheduleHideRef.current()
+      } else typewriterRef.current = requestAnimationFrame(tick)
+    }
+    if (textSpeedRef.current === 0) tick(previous)
+    else typewriterRef.current = requestAnimationFrame(tick)
+  }, [])
+
   const playNextAudio = useCallback(() => {
     if (audioPlayingRef.current) return
     const nextIdx = audioNextIndexRef.current
@@ -239,22 +262,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
       chars.current = [...chars.current, ...newGraphemes]
       fullTextRef.current = fullTextRef.current + pendingText
       setText(fullTextRef.current)
-      if (!typewriterRef.current) {
-        // Restart typewriter from current position
-        let idx = charCountRef.current
-        typewriterRef.current = setInterval(() => {
-          idx++
-          if (idx >= chars.current.length) {
-            setCharCount(chars.current.length)
-            charCountRef.current = chars.current.length
-            clearInterval(typewriterRef.current!); typewriterRef.current = null
-            tryScheduleHide()
-          } else {
-            setCharCount(idx)
-            charCountRef.current = idx
-          }
-        }, charRateRef.current)
-      }
+      if (typewriterRef.current === null) startTypewriter()
       // else: typewriter is running and will pick up new chars via chars.current.length
     }
 
@@ -271,7 +279,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
     lipSync.playAudio(url).then((durationMs) => {
       setTimeout(onDone, durationMs)
     }).catch(onDone)
-  }, [tryScheduleHide])
+  }, [tryScheduleHide, startTypewriter])
 
   // Use refs for callback dependencies to keep handleMessage stable
   const onMessageRef = useRef(onMessage)
@@ -353,7 +361,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
     if (!msg.text && msg.imageUrl) {
       setText('')
       setCharCount(0)
-      if (typewriterRef.current) { clearInterval(typewriterRef.current); typewriterRef.current = null }
+      if (typewriterRef.current) { cancelAnimationFrame(typewriterRef.current); typewriterRef.current = null }
       setImageUrl(msg.imageUrl)
       setVisible(true)
       if (timerRef.current) clearTimeout(timerRef.current)
@@ -377,7 +385,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
 
     // Cancel pending hide — new text arrived
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
-    if (typewriterRef.current) { clearInterval(typewriterRef.current); typewriterRef.current = null }
+    if (typewriterRef.current) { cancelAnimationFrame(typewriterRef.current); typewriterRef.current = null }
 
     // sendFirstTts: queue if something is currently playing, otherwise reset and play
     if (msg.sendFirstTts) {
@@ -432,22 +440,10 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
     if (graphemes.length === 0) {
       tryScheduleHideRef.current()
     } else {
-      const emotionDuration = graphemes.length * baseRate + 5000
+      const emotionDuration = (textSpeedRef.current === 0 ? 0 : graphemes.length * baseRate / textSpeedRef.current) + 5000
       if (!msg.reactionStep) setTimeout(() => onMessageRef.current?.({ ...msg, emotionDuration }), 1000)
 
-      let idx = 0
-      typewriterRef.current = setInterval(() => {
-        idx++
-        if (idx >= chars.current.length) {
-          setCharCount(chars.current.length)
-          charCountRef.current = chars.current.length
-          if (typewriterRef.current) { clearInterval(typewriterRef.current); typewriterRef.current = null }
-          tryScheduleHideRef.current()
-        } else {
-          setCharCount(idx)
-          charCountRef.current = idx
-        }
-      }, baseRate)
+      startTypewriter()
     }
 
     // All audio goes through the queue via playNextAudio.
@@ -473,7 +469,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
         const data = JSON.parse(e.data)
         if (data.clearText) {
           if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
-          if (typewriterRef.current) { clearInterval(typewriterRef.current); typewriterRef.current = null }
+          if (typewriterRef.current) { cancelAnimationFrame(typewriterRef.current); typewriterRef.current = null }
           setText('')
           setCharCount(0)
           setThinking(false)
@@ -513,10 +509,11 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
     return () => {
       es.close()
       if (timerRef.current) clearTimeout(timerRef.current)
-      if (typewriterRef.current) clearInterval(typewriterRef.current)
+      if (typewriterRef.current) cancelAnimationFrame(typewriterRef.current)
     }
   }, [handleMessage])
 
+  const words = useMemo(() => bubbleWords(chars.current, bs.textSpeed === 0), [text, bs.textSpeed === 0])
   const showBubble = enabled && visible && (!!text || !!imageUrl)
 
   return (
@@ -535,7 +532,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
             )}
             {text && (
               <div style={textStyle}>
-                {renderWords(chars.current, charCount)}
+                {renderWords(words, charCount)}
               </div>
             )}
           </div>
@@ -628,38 +625,34 @@ const wordStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-function renderWords(chars: string[], charCount: number) {
+interface BubbleWord { start: number; end: number; node: React.ReactNode; glyphs?: React.ReactNode[]; unbroken?: boolean }
+function bubbleWords(chars: string[], instant: boolean): BubbleWord[] {
+  const out: BubbleWord[] = []
+  let start = 0
+  const style = instant ? { ...popCharStyle, animation: 'none' } : popCharStyle
+  while (start < chars.length) {
+    const ch = chars[start]
+    if (ch === '\n' || ch === ' ' || ch === '\t') {
+      out.push({ start, end: start + 1, node: ch === '\n' ? <br key={start} /> : <span key={start}>{ch}</span> })
+      start++
+      continue
+    }
+    let end = start + 1
+    while (end < chars.length && !['\n', ' ', '\t'].includes(chars[end])) end++
+    const unbroken = end - start <= MAX_UNBROKEN_WORD_LEN && !CJK_WORD_RE.test(chars.slice(start, end).join(''))
+    const glyphs = chars.slice(start, end).map((ch, i) => <span key={start + i} style={style}>{ch}</span>)
+    out.push({ start, end, glyphs, unbroken, node: <span key={start} style={unbroken ? wordStyle : undefined}>{glyphs}</span> })
+    start = end
+  }
+  return out
+}
+function renderWords(words: BubbleWord[], charCount: number) {
   const out: React.ReactNode[] = []
-  let word: { ch: string; i: number }[] = []
-  const flushWord = () => {
-    if (word.length === 0) return
-    const text = word.map((w) => w.ch).join('')
-    const key = word[0].i
-    if (word.length > MAX_UNBROKEN_WORD_LEN || CJK_WORD_RE.test(text)) {
-      for (const w of word) out.push(<span key={w.i} style={popCharStyle}>{w.ch}</span>)
-    } else {
-      out.push(
-        <span key={key} style={wordStyle}>
-          {word.map((w) => <span key={w.i} style={popCharStyle}>{w.ch}</span>)}
-        </span>
-      )
-    }
-    word = []
+  for (const word of words) {
+    if (word.start >= charCount) break
+    if (word.end <= charCount) out.push(word.node)
+    else out.push(<span key={word.start} style={word.unbroken ? wordStyle : undefined}>{word.glyphs?.slice(0, charCount - word.start)}</span>)
   }
-  const n = Math.min(charCount, chars.length)
-  for (let i = 0; i < n; i++) {
-    const ch = chars[i]
-    if (ch === '\n') {
-      flushWord()
-      out.push(<br key={i} />)
-    } else if (ch === ' ' || ch === '\t') {
-      flushWord()
-      out.push(<span key={i}>{ch}</span>)
-    } else {
-      word.push({ ch, i })
-    }
-  }
-  flushWord()
   return out
 }
 

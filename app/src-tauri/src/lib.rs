@@ -4,12 +4,34 @@ use tauri::{
     menu::{Menu, MenuItem, CheckMenuItem, Submenu, IsMenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
 };
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[cfg(target_os = "macos")]
 mod speech_macos;
 
+#[cfg(target_os = "linux")]
+mod linux_frame_clock;
+
+#[tauri::command]
+fn native_frame_stats(window: tauri::Window) -> Option<serde_json::Value> {
+    #[cfg(target_os = "linux")]
+    return linux_frame_clock::stats(window.label()).and_then(|stats| serde_json::to_value(stats).ok());
+    #[cfg(not(target_os = "linux"))]
+    { let _ = window; None }
+}
+
 static MONITORING: AtomicBool = AtomicBool::new(false);
 static PINNED: AtomicBool = AtomicBool::new(true);
+
+const WINDOW_STATE_FLAGS: StateFlags = StateFlags::POSITION.union(StateFlags::SIZE);
+
+fn save_window_state(app: &tauri::AppHandle) {
+    // Save while native windows still exist. Teardown can bypass the plugin's
+    // exit callback, and destroyed windows can no longer report their geometry.
+    if let Err(error) = app.save_window_state(WINDOW_STATE_FLAGS) {
+        eprintln!("[Cuttle Pets] Could not save window position: {error}");
+    }
+}
 
 fn raise_settings_window(window: &tauri::WebviewWindow) -> Result<(), String> {
     // Queue unminimize/show before focus: the Linux backend can otherwise
@@ -52,6 +74,8 @@ fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
         .center()
         .focused(true)
         .build().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    linux_frame_clock::configure(&window);
     raise_settings_window(&window)
 }
 
@@ -70,7 +94,7 @@ fn show_main(window: &tauri::WebviewWindow) {
     }
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, PartialEq, serde::Serialize)]
 struct CursorPosition {
     x: i32,
     y: i32,
@@ -191,6 +215,9 @@ async fn start_cursor_monitor(window: tauri::Window) -> Result<(), String> {
                 MONITORING.store(false, Ordering::Relaxed);
                 return;
             }
+            // Linux only needs this feed for eye tracking (silhouette input
+            // regions own click-through), so a still cursor sends nothing.
+            let mut last: Option<CursorPosition> = None;
             while MONITORING.load(Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_millis(32));
                 let scale = window.scale_factor().unwrap_or(1.0);
@@ -221,17 +248,19 @@ async fn start_cursor_monitor(window: tauri::Window) -> Result<(), String> {
                     continue;
                 }
 
-                let _ = window.emit(
-                    "cursor-position",
-                    CursorPosition {
-                        x: (root_x as f64 / scale) as i32,
-                        y: (root_y as f64 / scale) as i32,
-                        window_x: (pos.x as f64 / scale) as i32,
-                        window_y: (pos.y as f64 / scale) as i32,
-                        window_w: (size.width as f64 / scale) as u32,
-                        window_h: (size.height as f64 / scale) as u32,
-                    },
-                );
+                let position = CursorPosition {
+                    x: (root_x as f64 / scale) as i32,
+                    y: (root_y as f64 / scale) as i32,
+                    window_x: (pos.x as f64 / scale) as i32,
+                    window_y: (pos.y as f64 / scale) as i32,
+                    window_w: (size.width as f64 / scale) as u32,
+                    window_h: (size.height as f64 / scale) as u32,
+                };
+                if last.as_ref() == Some(&position) {
+                    continue;
+                }
+                let _ = window.emit("cursor-position", position.clone());
+                last = Some(position);
             }
             unsafe {
                 (xlib.XCloseDisplay)(display);
@@ -473,6 +502,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 }
                 "settings" | "more-models" | "more-animations" | "update" => { let _ = open_settings_window(app.clone()); }
                 "quit" => {
+                    save_window_state(app);
                     // Orderly shutdown: exiting with live WebViews makes
                     // WebKitWebProcess crash on Linux ("stopped
                     // unexpectedly"). Stop cursor polling, destroy the
@@ -499,16 +529,31 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // WebKitGTK's DMA-BUF compositing path can crash in the proprietary
-    // NVIDIA EGL driver. Set this before GTK/WebKit creates any threads or
-    // windows, including when launching the installed binary directly.
-    // An explicit environment value always takes precedence.
+    // NVIDIA's GBM rejects the hardware buffers WebKitGTK's DMA-BUF renderer
+    // allocates ("Failed to create GBM buffer ... Invalid argument"), so its
+    // default path renders nothing or crashes. Disabling the renderer avoids
+    // that but drops WebKit to non-composited CPU painting (~25 fps on a large
+    // pet window). Keep the renderer and use shared-memory buffers instead:
+    // GPU compositing without GBM allocation; measured ~60 fps at lower CPU.
+    // Set before GTK/WebKit starts; any explicit WebKit renderer variable wins.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+    if std::path::Path::new("/proc/driver/nvidia/version").exists()
+        && ["WEBKIT_DISABLE_DMABUF_RENDERER", "WEBKIT_FORCE_DMABUF_RENDERER", "WEBKIT_DMABUF_RENDERER_FORCE_SHM"]
+            .iter().all(|name| std::env::var_os(name).is_none())
+    {
+        std::env::set_var("WEBKIT_FORCE_DMABUF_RENDERER", "1");
+        std::env::set_var("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1");
+        eprintln!("[Cuttle Pets] NVIDIA detected: WebKit DMA-BUF renderer with shared-memory buffers");
+    }
+    // NVIDIA's GL driver busy-waits (sched_yield + clock polling) while the
+    // web process waits on each WebGL frame, pinning a full core even for a
+    // blank canvas. Sleeping instead cuts web-process CPU about 3x at the same
+    // frame rate. Read by the driver at load time; an explicit value wins.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("__GL_YIELD").is_none()
         && std::path::Path::new("/proc/driver/nvidia/version").exists()
     {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        eprintln!("[Cuttle Pets] NVIDIA detected: using WebKit's DMA-BUF compatibility fallback");
+        std::env::set_var("__GL_YIELD", "USLEEP");
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -520,10 +565,11 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::default()
-            .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION | tauri_plugin_window_state::StateFlags::SIZE)
+            .with_state_flags(WINDOW_STATE_FLAGS)
             .build())
         .invoke_handler(tauri::generate_handler![
             open_settings_window,
+            native_frame_stats,
             set_pinned,
             update_tray_models,
             pick_vrm_file,
@@ -538,6 +584,10 @@ pub fn run() {
             stop_speech_recognition,
         ])
         .setup(|app| {
+            #[cfg(target_os = "linux")]
+            if let Some(window) = app.get_webview_window("main") {
+                linux_frame_clock::configure(&window);
+            }
             // macOS: activate as foreground app (needed when running as raw binary outside .app bundle)
             #[cfg(target_os = "macos")]
             {
@@ -600,6 +650,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                save_window_state(window.app_handle());
+            }
             // Stop cursor polling once the main window is gone so the X11
             // thread doesn't emit to a destroyed window during teardown.
             if window.label() == "main"

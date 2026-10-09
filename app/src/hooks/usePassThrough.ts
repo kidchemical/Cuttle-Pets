@@ -50,11 +50,23 @@ export function usePassThrough(enabled: boolean, onHover?: (inside: boolean) => 
       void invoke('start_cursor_monitor').catch(console.error)
       void win.setIgnoreCursorEvents(false)
       ;(window as any).__clawInputRegionsEnabled = true
+      // Reshaping the native window is not free; send only changes, plus a
+      // periodic refresh in case a hide/show cycle reset the shape.
+      let lastKey = ''
+      let lastSentAt = 0
+      const send = (regions: InputRegion[] | null) => {
+        const key = JSON.stringify(regions)
+        const now = performance.now()
+        if (key === lastKey && now - lastSentAt < 2000) return
+        lastKey = key
+        lastSentAt = now
+        void invoke('set_input_regions', { regions }).catch(console.error)
+      }
       const publish = () => {
         if (disposed) return
         const regions = (window as any).__clawInputRegions as InputRegion[] | undefined
         if ((window as any).__clawDragging || !regions) {
-          void invoke('set_input_regions', { regions: null }).catch(console.error)
+          send(null)
           return
         }
         const ui = [...document.querySelectorAll('button, input, textarea, [data-no-passthrough]')]
@@ -62,7 +74,7 @@ export function usePassThrough(enabled: boolean, onHover?: (inside: boolean) => 
           .map(el => el.getBoundingClientRect())
           .filter(r => r.width > 0 && r.height > 0)
           .map(r => ({ x: Math.floor(r.x), y: Math.floor(r.y), width: Math.ceil(r.width), height: Math.ceil(r.height) }))
-        void invoke('set_input_regions', { regions: [...regions, ...ui] }).catch(console.error)
+        send([...regions, ...ui])
       }
       publish()
       regionTimer = setInterval(publish, 100)

@@ -150,3 +150,21 @@
 .live-entry[data-active="true"][aria-selected="true"] { outline: 1px solid #84b6ff; outline-offset: 1px; }
 .playback-badge { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 600; color: #a1f2df; }
 .playback-badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #8cf2d7; }
+
+/* Static help popovers avoid repaint loops in the separate settings webview. */
+:is(.pet-settings-window, .pet-settings-panel) button.settings-info {
+  display: inline-flex; vertical-align: middle; align-items: center; justify-content: center;
+  margin-left: 6px; padding: 2px !important; width: 22px; height: 22px;
+  border: 0 !important; background: transparent !important; color: #aebbd0;
+  flex: 0 0 auto;
+}
+.settings-tooltip {
+  position: fixed; z-index: 20000; width: max-content; max-width: min(300px, calc(100vw - 40px));
+  max-height: 45vh; overflow: auto; padding: 10px 12px; border: 1px solid #52627c;
+  border-radius: 8px; background: #202838; color: #edf2fb; font: 12px/1.5 "Segoe UI", system-ui, sans-serif;
+  box-shadow: 0 4px 16px #0005; pointer-events: none; white-space: normal;
+}
+.behavior-timing-interval { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.behavior-chance { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.behavior-chance output { flex: 0 0 4ch; text-align: right; white-space: nowrap; }
+.behavior-chance input { flex: 1; min-width: 0; width: 0; }

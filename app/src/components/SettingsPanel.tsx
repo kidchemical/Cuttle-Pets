@@ -1,3 +1,4 @@
+import { SettingsHelp } from './SettingsHelp'
 import { useFileDrop, singleModelPath } from '../hooks/useFileDrop'
 import { FileDropHint } from './FileDropHint'
 import { labelStyle, sectionStyle, selectStyle } from './settings-styles'
@@ -5,7 +6,6 @@ import './settings.css'
 import { normalizeCustomDances } from '../custom-dances'
 import { AnimationSettingsPanel } from './AnimationSettingsPanel'
 import type { AnimationSettings } from '../animation-settings'
-import { MAX_GAZE_GAIN, normalizeGazeGain } from '../cursor-gaze'
 import { MusicSettingsPanel } from './MusicSettingsPanel'
 import type { MusicSettings, HeadphoneFit } from '../music-settings'
 import { CuttleConnection } from './CuttleConnection'
@@ -23,7 +23,7 @@ import { getLastPetStatus, sendPetCommand, subscribeWindowEvent, type PetStatusP
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isTauri, invoke } from '@tauri-apps/api/core'
 import type { DancePreset } from '../motion-controller'
-import { RENDER_QUALITIES, presetSettings, resolvePreset, type QualityDetails, type QualitySettings } from '../render-quality'
+import { FPS_POSITIONS, RENDER_QUALITIES, applyPreset, resolvePreset, type FpsPosition, type QualitySettings } from '../render-quality'
 import { BUBBLE_PREVIEW_TEXT, DEFAULT_BUBBLE_SETTINGS, FONT_CHOICES, type BubbleSettings } from '../bubble-settings'
 import { CURSOR_LIGHT_MOTIONS, CURSOR_LIGHT_PRESET_IDS, DEFAULT_CURSOR_LIGHT, DEFAULT_GLOBAL_LIGHTING, applyCursorLightPreset, normalizeCursorLight, normalizeGlobalLighting, type CursorLightMotion, type CursorLightPreset, type CursorLightSettings, type GlobalLightingSettings } from '../lighting'
 
@@ -62,8 +62,6 @@ interface SettingsPanelProps {
   onTtsEnabledChange: (v: boolean) => void
   tracking: 'mouse' | 'camera'
   onTrackingChange: (v: 'mouse' | 'camera') => void
-  gazeGain: number
-  onGazeGainChange: (v: number) => void
   qualitySettings: QualitySettings
   onQualitySettingsChange: (v: QualitySettings) => void
   volume: number
@@ -156,7 +154,6 @@ export function SettingsPanel({
   showText, onShowTextChange,
   ttsEnabled, onTtsEnabledChange,
   tracking, onTrackingChange,
-  gazeGain, onGazeGainChange,
   qualitySettings, onQualitySettingsChange,
   volume, onVolumeChange,
   uiAlign, onUiAlignChange,
@@ -181,14 +178,9 @@ export function SettingsPanel({
   const [tab, setTab] = useState<Tab>('general')
   const [musicPreview, setMusicPreview] = useState(false)
   const handlePreview = useCallback((v: boolean) => { setMusicPreview(v); onMusicPreview(v) }, [onMusicPreview])
-  const updateQualityDetails = useCallback((patch: Partial<QualityDetails>) => {
-    const details: QualityDetails = {
-      pixelRatioCap: qualitySettings.pixelRatioCap,
-      maxFps: qualitySettings.maxFps,
-      springBones: qualitySettings.springBones,
-      ...patch,
-    }
-    onQualitySettingsChange({ ...details, preset: resolvePreset(details) })
+  const updateQualityDetails = useCallback((patch: Partial<QualitySettings>) => {
+    const next = { ...qualitySettings, ...patch }
+    onQualitySettingsChange({ ...next, preset: resolvePreset(next) })
   }, [qualitySettings, onQualitySettingsChange])
   const presetLabel = (q: string) => q === 'mid' ? t('中', 'Mid') : q === 'low' ? t('低', 'Low') : q === 'high' ? t('高', 'High') : q === 'ultra' ? t('超高', 'Ultra') : t('自定义', 'Custom')
   const cursorPresetLabel = (p: CursorLightPreset) => p === 'white' ? t('白光', 'White') : p === 'soft' ? t('柔光', 'Soft') : p === 'colored' ? t('彩色', 'Colored') : p === 'rgb' ? 'RGB' : p === 'flame' ? t('火焰', 'Flame') : p === 'lightning' ? t('闪电', 'Lightning') : t('萤火虫', 'Fireflies')
@@ -531,7 +523,7 @@ export function SettingsPanel({
 
         {/* Tab content */}
         <div className="settings-content" style={{ ...contentStyle, maxHeight: standalone ? undefined : tab === 'music' && musicPreview ? '32vh' : '60vh', ...(standalone ? { flex: 1, minHeight: 0 } : {}), overflowY: 'auto', paddingRight: 4 }}>
-          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), pets: t('宠物', 'Pets'), props: t('道具', 'Props'), quality: t('画质', 'Quality'), display: t('显示', 'Display'), lighting: t('灯光', 'Lighting') }[tab]}</h2><p>{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</p></div>}
+          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), pets: t('宠物', 'Pets'), props: t('道具', 'Props'), quality: t('画质', 'Quality'), display: t('显示', 'Display'), lighting: t('灯光', 'Lighting') }[tab]}<SettingsHelp label="Settings help">{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</SettingsHelp></h2></div>}
           {tab === 'music'  && <MusicSettingsPanel fit={headphoneFit} music={musicSettings} enabled={musicEnabled} onFitChange={onHeadphoneFitChange} onMusicChange={onMusicSettingsChange} onEnabledChange={onMusicEnabledChange} onPreview={handlePreview} />}
           {tab === 'animations' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -540,10 +532,9 @@ export function SettingsPanel({
                 <span>Now: <strong>{petStatusText}</strong></span>
               </div>}
               <div style={sectionStyle}>
-                  <div style={labelStyle}>{t('导入的动作', 'Imported Motion')}</div>
-                  <div style={{ fontSize: 12, color: '#aebbd0', marginBottom: 8 }}>
+                  <div style={labelStyle}>{t('导入的动作', 'Imported Motion')}<SettingsHelp>
                     {t('内置舞蹈见下方动画列表（含预览）。这里只管理你导入的动作文件。', 'Built-in dances live in the animation list below (with previews). This section is only for your imported motion files.')}
-                  </div>
+                  </SettingsHelp></div>
                   {customDances.length > 0 && (
                     <div style={{ marginTop: 12 }}>
                       <div style={labelStyle}>{t('自定义舞蹈', 'Custom Dances')}</div>
@@ -578,7 +569,7 @@ export function SettingsPanel({
                               <div>
                                 <div>{dance.label}</div>
                                 {dance.bgmUrl && (
-                                  <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 1 }}>{t('含BGM', 'w/ BGM')}</div>
+                                  <small>{t('含BGM', 'w/ BGM')}</small>
                                 )}
                               </div>
                             </div>
@@ -639,9 +630,9 @@ export function SettingsPanel({
                         : <Upload size={14} />}
                       {importingDance ? t('导入中…', 'Importing…') : t('选择动作文件… (.vmd/.vrma/.fbx)', 'Select motion file… (.vmd/.vrma/.fbx)')}
                     </button>
-                    <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 4 }}>
+                    <SettingsHelp>
                       {t('选择动作文件后，可选择配套 .mp3 音乐文件', 'Select a motion file, then optionally pick a matching .mp3')}
-                    </div>
+                    </SettingsHelp>
                   </div>
               </div>
               <AnimationSettingsPanel status={petStatus} settings={animationSettings} onChange={onAnimationSettingsChange} customDances={customDances} onPreview={onAnimationPreview} onStop={onAnimationStop} language={language} />
@@ -688,7 +679,9 @@ export function SettingsPanel({
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 14 }}>{t('视线跟随', 'Eye Tracking')}</span>
+                <span style={{ fontSize: 14 }}>{t('视线跟随', 'Eye Tracking')}
+                  <SettingsHelp>{t('鼠标跟随强度在“行为”中按条目设置', 'Mouse follow strength is set per entry in Behavior')}</SettingsHelp>
+                </span>
                 <div style={{ display: 'flex', gap: 4 }}>
                   {(['mouse', 'camera'] as const).map((m) => (
                     <button
@@ -703,21 +696,6 @@ export function SettingsPanel({
                       {m === 'mouse' ? t('鼠标', 'Mouse') : t('镜头', 'Camera')}
                     </button>
                   ))}
-                </div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 14 }}>{t('视线幅度', 'Gaze strength')}</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <input
-                    type="range"
-                    min={0}
-                    max={MAX_GAZE_GAIN}
-                    step={0.1}
-                    value={gazeGain}
-                    onChange={(e) => onGazeGainChange(normalizeGazeGain(Number(e.target.value)))}
-                    style={{ width: 100, accentColor: 'rgba(100, 160, 255, 0.8)' }}
-                  />
-                  <span style={{ fontSize: 12, color: '#aebbd0', width: 28, textAlign: 'right' }}>{gazeGain.toFixed(1)}</span>
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -816,9 +794,9 @@ export function SettingsPanel({
                       placeholder="sk-..."
                       style={{ ...inputStyle, width: '100%' }}
                     />
-                    <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 4 }}>
+                    <SettingsHelp>
                       {t('从阿里云百炼控制台获取 API Key', 'Get API Key from Alibaba Cloud console')}
-                    </div>
+                    </SettingsHelp>
                   </div>
                   <div>
                     <div style={labelStyle}>{t('语音模型', 'Voice Model')}</div>
@@ -855,7 +833,7 @@ export function SettingsPanel({
                     >
                       <div>
                         <div>{v.label}</div>
-                        <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 1 }}>{v.id}</div>
+                        <small>{v.id}</small>
                       </div>
                       <div
                         onClick={(e) => { e.stopPropagation(); preview(v.id) }}
@@ -933,9 +911,9 @@ export function SettingsPanel({
                 >
                   {t('浏览本地文件…', 'Browse local files…')}
                 </button>
-                <div style={{ fontSize: 11, color: '#aebbd0', marginTop: 4 }}>
+                <SettingsHelp>
                   {t('选择 .vrm 文件导入宠物模型库', 'Choose a .vrm file to import into your pet model library. Files in this project’s models folder also appear above.')}
-                </div>
+                </SettingsHelp>
               </div>
             </div>
           )}
@@ -991,9 +969,9 @@ export function SettingsPanel({
                   {personaSaving ? t('保存中…', 'Saving…') : t('保存', 'Save')}
                 </button>
               </div>
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', marginTop: 4 }}>
+              <SettingsHelp>
                 {t('关联工作区根目录的 IDENTITY.md 和 SOUL.md', 'Linked to IDENTITY.md and SOUL.md in workspace root')}
-              </div>
+              </SettingsHelp>
             </div>
           )}
 
@@ -1005,7 +983,7 @@ export function SettingsPanel({
                   {RENDER_QUALITIES.map((q) => (
                     <button
                       key={q}
-                      onClick={() => onQualitySettingsChange({ ...presetSettings(q), maxFps: qualitySettings.maxFps })}
+                      onClick={() => onQualitySettingsChange(applyPreset(qualitySettings, q))}
                       style={{
                         ...smallBtnStyle,
                         background: qualitySettings.preset === q ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
@@ -1044,8 +1022,24 @@ export function SettingsPanel({
                   <option value={0}>{t('无限制', 'Uncapped')}</option>
                 </select>
               </label>
-              <p className="settings-help">{t('较低的帧率降低资源使用。此限制独立于画质预设。', 'Lower caps use fewer resources. Frame rate is independent of the visual preset.')}</p>
+              <label className="settings-control-row"><span>{t('空闲帧率', 'Idle frame rate')}</span>
+                <select aria-label="Idle frame rate" value={qualitySettings.idleFps} onChange={e => updateQualityDetails({ idleFps: Number(e.target.value) })} style={{ ...selectStyle, width: 170 }}>
+                  {![0, 10, 15, 20, 24].includes(qualitySettings.idleFps) && <option value={qualitySettings.idleFps}>{qualitySettings.idleFps} FPS</option>}
+                  <option value={0}>{t('同帧率限制', 'Same as limit')}</option>
+                  {[10, 15, 20, 24].map(fps => <option key={fps} value={fps}>{fps} FPS</option>)}
+                </select>
+              </label>
+              <SettingsHelp label="Frame rate help">{t('较低的帧率降低资源使用。空闲帧率在 2 秒内无鼠标移动、说话或动作后生效。帧率独立于画质预设。调整设置窗口大小时，宠物暂时限制为 30 FPS，停止后自动恢复。', 'Lower caps use fewer resources. The idle rate applies after 2 seconds without cursor movement, speech, or motion. Frame rates are independent of the visual preset and limited by the display clock and graphics workload. While resizing settings, the pet briefly uses a 30 FPS budget, then returns to your selected limit.')}</SettingsHelp>
               <ToggleRow label={t('弹簧骨骼（耳朵/头发）', 'Spring bones (ears/hair)')} value={qualitySettings.springBones} onChange={(v) => updateQualityDetails({ springBones: v })} />
+              <ToggleRow label={t('显示帧率', 'Show FPS counter')} value={qualitySettings.showFps} onChange={(v) => updateQualityDetails({ showFps: v })} />
+              {qualitySettings.showFps && <label className="settings-control-row"><span>{t('帧率位置', 'FPS counter position')}</span>
+                <select aria-label="FPS counter position" value={qualitySettings.fpsPosition} onChange={e => updateQualityDetails({ fpsPosition: e.target.value as FpsPosition })} style={{ ...selectStyle, width: 170 }}>
+                  {FPS_POSITIONS.map(p => <option key={p} value={p}>{p === 'top-left' ? t('左上', 'Top left') : p === 'top-right' ? t('右上', 'Top right') : p === 'bottom-left' ? t('左下', 'Bottom left') : t('右下', 'Bottom right')}</option>)}
+                </select>
+              </label>}
+              <p className="settings-help">{petStatus?.fps !== undefined
+                ? t(`当前渲染：${petStatus.fps} FPS`, `Rendering now: ${petStatus.fps} FPS`)
+                : t('当前渲染：—', 'Rendering now: —')}</p>
             </div>
           )}
           {tab === 'lighting' && (
@@ -1374,6 +1368,12 @@ export function SettingsPanel({
                   {t('字幕已关闭（常规选项卡），预览不可见', 'Subtitles are off (General tab), so the preview is hidden')}
                 </div>
               )}
+              <div className="settings-control-row">
+                <span>{t('文字速度', 'Text speed')}<SettingsHelp label="Text speed help">Controls how quickly speech and Cuttle status text appear. 1× keeps the original pace; Instant shows the full text immediately. Audio playback speed is unchanged.</SettingsHelp></span>
+                <select aria-label="Text speed" value={bubbleSettings.textSpeed} onChange={e => setBubble({ textSpeed: Number(e.target.value) })} style={{ ...selectStyle, width: 150 }}>
+                  {Array.from(new Set([0, .25, .5, 1, 2, 4, 8, bubbleSettings.textSpeed])).sort((a, b) => a - b).map(speed => <option key={speed} value={speed}>{speed === 0 ? t('立即', 'Instant') : `${speed}×`}</option>)}
+                </select>
+              </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: 14 }}>{t('缩放', 'Scale')}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

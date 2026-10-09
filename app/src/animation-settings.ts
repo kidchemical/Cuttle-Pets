@@ -1,7 +1,9 @@
-export interface AnimationOverride { speed: number; transition: number; hold: number }
+export interface AnimationOverride { speed: number; transition: number; hold: number; groundFeet?: boolean }
 export interface AnimationSettings { speed: number; overrides: Record<string, AnimationOverride> }
 export const DEFAULT_ANIMATIONS: AnimationSettings = { speed: 1, overrides: {} }
-export const DEFAULT_ANIMATION: AnimationOverride = { speed: 1, transition: .3, hold: 10 }
+export const DEFAULT_ANIMATION: AnimationOverride = { speed: 1, transition: .3, hold: 10, groundFeet: false }
+const GROUNDED_ANIMATION: AnimationOverride = { ...DEFAULT_ANIMATION, groundFeet: true }
+export const GROUNDED_ANIMATIONS = new Set(['action:praying', 'action:sittingIdle', 'action:sittingTalk'])
 function bounded(value: unknown, fallback: number, min: number, max: number) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback
 }
@@ -10,12 +12,12 @@ export function normalizeAnimations(value: unknown): AnimationSettings {
   const overrides: Record<string, AnimationOverride> = {}
   if (source.overrides && typeof source.overrides === 'object') for (const [id, item] of Object.entries(source.overrides)) {
     if (!item || typeof item !== 'object') continue
-    overrides[id] = { speed: bounded(item.speed, 1, .1, 4), transition: bounded(item.transition, .3, 0, 3), hold: bounded(item.hold, 10, 0, 60) }
+    overrides[id] = { speed: bounded(item.speed, 1, .1, 4), transition: bounded(item.transition, .3, 0, 3), hold: bounded(item.hold, 10, 0, 60), groundFeet: typeof item.groundFeet === 'boolean' ? item.groundFeet : GROUNDED_ANIMATIONS.has(id) }
   }
   return { speed: bounded(source.speed, 1, .1, 4), overrides }
 }
 export function animationOptions(settings: AnimationSettings, id: string): AnimationOverride {
-  return settings.overrides[id] ?? DEFAULT_ANIMATION
+  return settings.overrides[id] ?? (GROUNDED_ANIMATIONS.has(id) ? GROUNDED_ANIMATION : DEFAULT_ANIMATION)
 }
 export function animationSpeed(settings: AnimationSettings, id: string) {
   return settings.speed * animationOptions(settings, id).speed

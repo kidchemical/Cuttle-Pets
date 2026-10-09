@@ -274,6 +274,10 @@ def cmd_status(a: argparse.Namespace) -> int:
     return _report(_request("GET", "/health"))
 
 
+def cmd_stats(a: argparse.Namespace) -> int:
+    return _report(_request("GET", "/render-stats"))
+
+
 def cmd_verbs(a: argparse.Namespace) -> int:
     return _report(_request("GET", "/"))
 
@@ -377,6 +381,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     st2 = sub.add_parser("status", help="server health")
     st2.set_defaults(func=cmd_status)
+
+    rs = sub.add_parser("stats", help="pet render stats: measured fps, caps, drawing-buffer size")
+    rs.set_defaults(func=cmd_stats)
 
     vb = sub.add_parser("verbs", help="list server verbs")
     vb.set_defaults(func=cmd_verbs)

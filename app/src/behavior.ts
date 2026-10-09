@@ -2,6 +2,8 @@ import { actionPresets, dancePresets, localizedPresetLabel, type DancePreset } f
 import type { CustomMotionType } from './custom-dances'
 import { proceduralAnimations } from './animation-settings'
 import { normalizeCompanionActions, type CompanionAction } from './companions'
+import { DEFAULT_GAZE_GAIN, MAX_GAZE_GAIN } from './cursor-gaze'
+import { DEFAULT_HEAD_TURN_GAIN, MAX_HEAD_TURN_GAIN } from './head-turn'
 
 // ── Behavior profiles ────────────────────────────────────────────────────────
 // A profile describes what the pet does in each state: an entry sequence when
@@ -53,6 +55,16 @@ export interface BehaviorEntry {
   preset?: DancePreset
   /** Pet/prop instructions run when this entry starts (show pet, hide hat…). */
   companions?: CompanionAction[]
+  /** Cursor-follow strengths while this entry plays; absent = `defaultCursorFollow`. */
+  follow?: CursorFollow
+}
+
+/** How strongly the eyes and head track the mouse cursor; 0 turns each off. */
+export interface CursorFollow {
+  /** Eye gaze gain, 0..MAX_GAZE_GAIN. */
+  eyes: number
+  /** Head glance gain, 0..MAX_HEAD_TURN_GAIN. */
+  head: number
 }
 
 export interface OccasionalEntry extends BehaviorEntry {
@@ -191,6 +203,14 @@ function cleanEntry(value: unknown): BehaviorEntry | null {
   }
   const companions = normalizeCompanionActions(item.companions)
   if (companions.length) entry.companions = companions
+  if (item.follow && typeof item.follow === 'object') {
+    const follow = item.follow as Record<string, unknown>
+    const fallback = defaultCursorFollow(animation)
+    entry.follow = {
+      eyes: bounded(follow.eyes, fallback.eyes, 0, MAX_GAZE_GAIN),
+      head: bounded(follow.head, fallback.head, 0, MAX_HEAD_TURN_GAIN),
+    }
+  }
   return entry
 }
 
@@ -531,6 +551,47 @@ export function resolvePetState(flags: { dancing: boolean; working: boolean; mus
   if (flags.working) return 'working'
   if (flags.music) return 'music'
   return 'idle'
+}
+
+// ── Cursor follow ────────────────────────────────────────────────────────────
+
+/**
+ * Follow strengths for entries that don't set their own: the idle loop and the
+ * music sway glance at the cursor; typing, actions, and dances keep their own
+ * head motion and look straight ahead.
+ */
+export function defaultCursorFollow(animation: string): CursorFollow {
+  return animation === 'idle' || animation === 'music'
+    ? { eyes: DEFAULT_GAZE_GAIN, head: DEFAULT_HEAD_TURN_GAIN }
+    : { eyes: 0, head: 0 }
+}
+
+export function entryCursorFollow(entry: BehaviorEntry): CursorFollow {
+  return entry.follow ?? defaultCursorFollow(entry.animation)
+}
+
+/** Profile entry at a playback location, if it still exists. */
+export function entryAt(profile: BehaviorProfile, location: BehaviorEntryLocation): BehaviorEntry | undefined {
+  const state = profile.states[location.state]
+  return state?.[location.phase]?.[location.index]
+}
+
+/**
+ * Cursor follow for the innermost playing behavior entry. Null when no
+ * concrete entry is playing (engine off, reaction, unlabeled preview, or a
+ * behavior reference between its nested entries); the renderer then falls
+ * back to following only while nothing is animating the head.
+ */
+export function resolveCursorFollow(profile: BehaviorProfile, entries: BehaviorEntryLocation[] | undefined): CursorFollow | null {
+  const location = entries?.[entries.length - 1]
+  const entry = location && entryAt(profile, location)
+  if (!entry || behaviorTarget(entry.animation)) return null
+  return entryCursorFollow(entry)
+}
+
+/** Identity of an entry or profile for playback bookkeeping. Follow tuning is a live render setting, not a new motion. */
+export function motionKey(value: BehaviorEntry | BehaviorProfile): string {
+  return JSON.stringify(value, (key, item) => key === 'follow' ? undefined : item)
 }
 
 // ── Animation catalog + labels (shared by the animations list and editor) ───

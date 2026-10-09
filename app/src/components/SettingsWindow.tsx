@@ -4,7 +4,6 @@ import { isTauri } from '@tauri-apps/api/core'
 import { SettingsPanel } from './SettingsPanel'
 import { loadSettings, saveSettings } from '../settings'
 import { normalizeAnimations } from '../animation-settings'
-import { normalizeGazeGain } from '../cursor-gaze'
 import { normalizeBehaviorSettings } from '../behavior'
 import { normalizePetSettings, normalizePropSettings } from '../companions'
 import { DEFAULT_MUSIC, DEFAULT_FIT, normalizeMusic, normalizeFit, modelFitKey } from '../music-settings'
@@ -18,6 +17,11 @@ const previewBubble = () => sendPetCommand({ type: 'bubble-preview' })
 
 /** Settings has its own webview; only the main window owns the pet and its effects. */
 export function SettingsWindow() {
+  useEffect(() => {
+    const resizing = () => sendPetCommand({ type: 'settings-resizing' })
+    window.addEventListener('resize', resizing)
+    return () => window.removeEventListener('resize', resizing)
+  }, [])
   const [settings, setSettings] = useState<Record<string, any>>({})
   const [ready, setReady] = useState(false)
   useEffect(() => {
@@ -64,7 +68,6 @@ export function SettingsWindow() {
     showText={settings.showText ?? true} onShowTextChange={showText => patch({ showText })}
     ttsEnabled={settings.ttsEnabled ?? true} onTtsEnabledChange={ttsEnabled => patch({ ttsEnabled })}
     tracking={settings.tracking || 'mouse'} onTrackingChange={tracking => patch({ tracking })}
-    gazeGain={normalizeGazeGain(settings.gazeGain)} onGazeGainChange={gazeGain => patch({ gazeGain })}
     qualitySettings={qualitySettings} onQualitySettingsChange={quality => patch({ quality })}
     volume={settings.volume ?? .5} onVolumeChange={volume => patch({ volume })}
     uiAlign={settings.uiAlign || 'right'} onUiAlignChange={uiAlign => patch({ uiAlign })}

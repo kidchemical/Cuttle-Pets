@@ -289,6 +289,32 @@ def watch_liveness():
         time.sleep(.5)
 
 
+# ── render stats ────────────────────────────────────────────────────────
+# The pet posts its measured frame rate and drawing-buffer size every few
+# seconds so diagnostics (CLI, agents) can read real numbers headlessly.
+_render_stats: dict[str, Any] = {}
+
+
+@app.post("/render-stats")
+def post_render_stats():
+    body = request.get_json(force=True, silent=True) or {}
+    def scalar(value: Any) -> bool:
+        return isinstance(value, (int, float, bool)) or (isinstance(value, str) and len(value) <= 64)
+    clean = {k: v for k, v in list(body.items())[:32] if isinstance(k, str) and len(k) <= 32 and scalar(v)}
+    _render_stats.clear()
+    _render_stats.update(clean)
+    _render_stats["_at"] = time.time()
+    return jsonify({"ok": True})
+
+
+@app.get("/render-stats")
+def get_render_stats():
+    """Last render stats the pet reported (fps, caps, buffer size)."""
+    stats = {k: v for k, v in _render_stats.items() if k != "_at"}
+    at = _render_stats.get("_at")
+    return jsonify({"ok": True, "stats": stats, "ageSeconds": round(time.time() - at, 1) if at else None})
+
+
 @app.get("/music")
 def music_status():
     _sync_music()

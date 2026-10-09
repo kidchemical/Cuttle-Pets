@@ -2,6 +2,8 @@ export type BubbleAlign = 'left' | 'center' | 'right'
 
 export interface BubbleSettings {
   /** Size multiplier applied to the base bubble (width 50%, height 70px). */
+  /** Reveal speed multiplier; 0 reveals text instantly. */
+  textSpeed: number
   scale: number
   /** Distance from the bottom of the window, in px. */
   bottom: number
@@ -42,6 +44,7 @@ export const FONT_CHOICES: { id: string; label: string }[] = [
 ]
 
 export const DEFAULT_BUBBLE_SETTINGS: BubbleSettings = {
+  textSpeed: 1,
   scale: 1,
   bottom: 80,
   align: 'center',
@@ -68,6 +71,7 @@ export function normalizeBubbleSettings(raw: unknown): BubbleSettings {
   const num = (v: unknown, fallback: number, lo: number, hi: number) =>
     typeof v === 'number' && Number.isFinite(v) ? clamp(v, lo, hi) : fallback
   return {
+    textSpeed: num(r.textSpeed, d.textSpeed, 0, 8),
     scale: num(r.scale, d.scale, 0.5, 2),
     bottom: num(r.bottom, d.bottom, 0, 400),
     align: r.align === 'left' || r.align === 'right' || r.align === 'center' ? r.align : d.align,

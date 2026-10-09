@@ -1,11 +1,10 @@
 import { DEFAULT_MUSIC, DEFAULT_FIT, normalizeMusic, normalizeFit, modelFitKey, type MusicSettings, type HeadphoneFit } from './music-settings'
 import { loadSettings, saveSettings } from './settings'
-import { DEFAULT_GAZE_GAIN, normalizeGazeGain } from './cursor-gaze'
 import { petUrl } from './config'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { VRMScene } from './components/VRMScene'
 import type { VRMSceneHandle, TouchRegion } from './components/VRMScene'
-import { normalizeQuality, normalizeQualitySettings, presetSettings, type QualitySettings } from './render-quality'
+import { applyPreset, normalizeQuality, normalizeQualitySettings, presetSettings, type FpsPosition, type QualitySettings } from './render-quality'
 import { DEFAULT_CURSOR_LIGHT, DEFAULT_GLOBAL_LIGHTING, normalizeCursorLight, normalizeGlobalLighting } from './lighting'
 import { DEFAULT_BUBBLE_SETTINGS, normalizeBubbleSettings, type BubbleSettings } from './bubble-settings'
 import { TextBubble } from './components/TextBubble'
@@ -14,7 +13,7 @@ import { ChatInput } from './components/ChatInput'
 import { ResizeHandles } from './components/ResizeHandles'
 import { openSettingsWindow, subscribeWindowEvent, replyScreenshot, publishStatus, type PetCommand } from './window-sync'
 import { DEFAULT_ANIMATIONS, normalizeAnimations, type AnimationSettings } from './animation-settings'
-import { normalizeBehaviorSettings, resolvePetState, playReactionStep, pickWeightedEntry, type BehaviorSettings, type BehaviorStateId } from './behavior'
+import { normalizeBehaviorSettings, resolveCursorFollow, resolvePetState, playReactionStep, pickWeightedEntry, type BehaviorSettings, type BehaviorStateId } from './behavior'
 import type { BehaviorPlayback } from './behavior-engine'
 import { normalizePetSettings, normalizePropSettings, type PetSettings, type PropSettings } from './companions'
 import type { CompanionSnapshot } from './companion-runtime'
@@ -27,7 +26,7 @@ import { checkForUpdates } from './update-check'
 import { APP_VERSION } from './version'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import { HistoryPanel } from './components/HistoryPanel'
 import { MoodIndicator } from './components/MoodIndicator'
 import { Menu, Pin, Move, RotateCcw, Rotate3D, EyeOff, Settings, Music, RefreshCw } from 'lucide-react'
@@ -57,6 +56,22 @@ const emotionActionMap: Record<string, string> = {
   neutral: 'salute',
 }
 
+
+const fpsCorner = (position: FpsPosition): React.CSSProperties => ({
+  [position.startsWith('top') ? 'top' : 'bottom']: 8,
+  [position.endsWith('left') ? 'left' : 'right']: 8,
+})
+
+const fpsCounterStyle: React.CSSProperties = {
+  position: 'absolute',
+  zIndex: 1000,
+  padding: '2px 6px',
+  borderRadius: 4,
+  background: 'rgba(0, 0, 0, 0.55)',
+  color: '#9fef9f',
+  font: '12px monospace',
+  pointerEvents: 'none',
+}
 
 const btnStyle: React.CSSProperties = {
   width: 32,
@@ -88,7 +103,6 @@ export default function App() {
   behaviorEnabledRef.current = behaviorSettings.enabled
   const [pinned, setPinned] = useState(true)
   const [tracking, setTracking] = useState<'mouse' | 'camera'>('mouse')
-  const [gazeGain, setGazeGain] = useState(DEFAULT_GAZE_GAIN)
   const [lightingSettings, setLightingSettings] = useState(DEFAULT_GLOBAL_LIGHTING)
   const [cursorLightSettings, setCursorLightSettings] = useState(DEFAULT_CURSOR_LIGHT)
   const [qualitySettings, setQualitySettings] = useState<QualitySettings>(() => presetSettings('high'))
@@ -139,6 +153,26 @@ export default function App() {
     return () => window.removeEventListener('blur', onBlur)
   }, [])
   const hoverControlsStyle = { visibility: viewportHovered ? 'visible' as const : 'hidden' as const }
+  const [fps, setFps] = useState(0)
+  useEffect(() => {
+    if (!qualitySettings.showFps) return
+    const timer = setInterval(() => setFps(Math.round(sceneRef.current?.getRenderStats().fps ?? 0)), 500)
+    return () => clearInterval(timer)
+  }, [qualitySettings.showFps])
+  // Measured render stats for diagnostics (`cuttle_pet.py stats`, GET /render-stats).
+  useEffect(() => {
+    let active = true
+    const timer = setInterval(async () => {
+      const stats = sceneRef.current?.getRenderStats()
+      if (!stats) return
+      const native = isTauri() ? await invoke<Record<string, number | string> | null>('native_frame_stats').catch(() => null) : null
+      if (!active) return
+      const q = qualitySettingsRef.current
+      void fetch(petUrl('/render-stats'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...stats, ...native, fps: Math.round(stats.fps * 10) / 10, maxFps: q.maxFps, idleFps: q.idleFps, preset: q.preset, pixelRatioCap: q.pixelRatioCap }) }).catch(() => {})
+    }, 5000)
+    return () => { active = false; clearInterval(timer) }
+  }, [])
 
   const applyPreferences = useCallback((s: Record<string, any>, initial = false) => {
     if (s.pinned !== undefined) { const pin = s.pinned; setPinned(pin); void getCurrentWindow().setAlwaysOnTop(pin); void invoke('set_pinned', { pinned: pin }).catch(() => {}) }
@@ -151,7 +185,6 @@ export default function App() {
     if (s.showText !== undefined) setShowText(s.showText)
     if (s.hideUI !== undefined) setHideUI(s.hideUI)
     if (s.tracking) { setTracking(s.tracking); sceneRef.current?.setTrackingMode(s.tracking) }
-    if (s.gazeGain !== undefined) setGazeGain(normalizeGazeGain(s.gazeGain))
     if (s.lighting !== undefined) setLightingSettings(normalizeGlobalLighting(s.lighting))
     if (s.cursorLight !== undefined) setCursorLightSettings(normalizeCursorLight(s.cursorLight))
     if (s.quality !== undefined) setQualitySettings(normalizeQualitySettings(s.quality))
@@ -187,6 +220,7 @@ export default function App() {
     return () => { active = false; stop() }
   }, [applyPreferences])
   useEffect(() => subscribeWindowEvent<PetCommand>('pet-command', command => {
+    if (command.type === 'settings-resizing') { sceneRef.current?.budgetSettingsResize(); return }
     if (command.type === 'status') { publishCurrentStatus(true); return }
     if (command.type === 'animation') {
       engineRef.current?.previewEntry({ animation: command.id, preset: command.preset, durationMs: command.durationMs, companions: command.companions }, command.mode === 'loop', command.source)
@@ -238,7 +272,7 @@ export default function App() {
     const controls = listen<string>('tray-control', event => {
       if (event.payload === 'music') setMusicEnabled(value => { saveSettings({ musicEnabled: !value }); return !value })
       if (event.payload.startsWith('quality:')) {
-        const qs = { ...presetSettings(normalizeQuality(event.payload.slice('quality:'.length))), maxFps: qualitySettingsRef.current.maxFps }
+        const qs = applyPreset(qualitySettingsRef.current, normalizeQuality(event.payload.slice('quality:'.length)))
         setQualitySettings(qs)
         saveSettings({ quality: qs })
       }
@@ -272,7 +306,7 @@ export default function App() {
     const state = managed.owned && managed.state ? managed.state
       : resolvePetState({ dancing: playback.dancing, working, music: musicEnabled && musicPlaying })
     const companions = sceneRef.current?.snapshotCompanions()?.pets
-    const snapshot = { state, actionId: playback.actionId, danceId: playback.danceId, working: playback.working, sipping: playback.sipping, musicMotion: playback.musicMotion, behaviorEntries: reactionRef.current ? [] : managed.owned ? managed.entries : [], reaction: reactionRef.current?.playing, companions: companions ? Object.fromEntries(Object.entries(companions).map(([id, pet]) => [id, { shown: pet.shown }])) : {} }
+    const snapshot = { state, actionId: playback.actionId, danceId: playback.danceId, working: playback.working, sipping: playback.sipping, musicMotion: playback.musicMotion, fps: Math.round(sceneRef.current?.getRenderStats().fps ?? 0), behaviorEntries: reactionRef.current ? [] : managed.owned ? managed.entries : [], reaction: reactionRef.current?.playing, companions: companions ? Object.fromEntries(Object.entries(companions).map(([id, pet]) => [id, { shown: pet.shown }])) : {} }
     const key = JSON.stringify(snapshot)
     const now = Date.now()
     if (force || key !== statusSnapshotRef.current.key || now - statusSnapshotRef.current.at >= 1000) {
@@ -288,10 +322,20 @@ export default function App() {
     return () => clearInterval(timer)
   }, [])
 
+  const behaviorState = resolvePetState({ dancing, working, music: musicEnabled && musicPlaying })
+  // The renderer polls this each frame: cursor follow comes from whichever
+  // behavior entry is playing right now, read live so slider edits apply
+  // without restarting the motion.
+  const behaviorProfileRef = useRef(behaviorSettings.current)
+  behaviorProfileRef.current = behaviorSettings.current
+  const cursorFollow = useCallback(() => {
+    const managed = behaviorPlaybackRef.current
+    return managed.owned && !reactionRef.current ? resolveCursorFollow(behaviorProfileRef.current, managed.entries) : null
+  }, [])
   const engine = useBehaviorEngine({
     enabled: behaviorSettings.enabled,
     profile: behaviorSettings.current,
-    state: resolvePetState({ dancing, working, music: musicEnabled && musicPlaying }),
+    state: behaviorState,
     paused: reactionActive || suspended,
     ready: sceneReady,
     onPlayback: playback => { behaviorPlaybackRef.current = playback; publishCurrentStatus() },
@@ -558,10 +602,11 @@ export default function App() {
       }}
     >
       <div style={hoverControlsStyle}><ResizeHandles /></div>
+      {qualitySettings.showFps && <div aria-label="Frame rate" style={{ ...fpsCounterStyle, ...fpsCorner(qualitySettings.fpsPosition) }}>{fps} FPS</div>}
       {modelError && <div role="alert" data-no-passthrough style={{ position: 'absolute', top: 20, left: 16, right: 16, zIndex: 1000, background: '#402020', color: 'white', padding: 12, borderRadius: 8 }}>
         {modelError}<button onClick={() => { setModelError(''); setModelPath(DEFAULT_MODEL); saveSettings({ modelPath: DEFAULT_MODEL }) }}>Use default model</button>
       </div>}
-      <VRMScene animationSettings={animationSettings} ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} gazeGain={gazeGain} lightingSettings={lightingSettings} cursorLightSettings={cursorLightSettings} pets={petSettings.pets} props={propSettings.props} onTouch={handleTouch} onModelError={message => { setSceneReady(false); setModelError(message) }} onModelLoaded={() => { setSceneReady(true); setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
+      <VRMScene animationSettings={animationSettings} ref={sceneRef} musicSettings={musicSettings} headphoneFit={normalizeFit(headphoneFits[modelFitKey(modelPath)] || DEFAULT_FIT)} modelPath={modelPath} qualitySettings={qualitySettings} cursorFollow={cursorFollow} lightingSettings={lightingSettings} cursorLightSettings={cursorLightSettings} pets={petSettings.pets} props={propSettings.props} onTouch={handleTouch} onModelError={message => { setSceneReady(false); setModelError(message) }} onModelLoaded={() => { setSceneReady(true); setModelError(''); sceneRef.current?.setTrackingMode(tracking); sceneRef.current?.setBgmVolume(volume); sceneRef.current?.setMusicMode(musicEnabled && musicPlaying); uploadVrmScreenshot() }} />
       <div style={hoverControlsStyle}>{!hideMood && <MoodIndicator uiAlign={uiAlign} />}</div>
       <TextBubble onMessage={handleVrmMessage} enabled={showText} ttsEnabled={ttsEnabled} bubble={bubbleSettings} />
       <div style={hoverControlsStyle}>{!hideUI && <ChatInput uiAlign={uiAlign} onHistoryOpen={() => setHistoryOpen(true)} onNewSession={clearContext} language={language} />}</div>

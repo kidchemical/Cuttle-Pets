@@ -5,6 +5,7 @@ import type { DancePreset } from './motion-controller'
 import type { CompanionAction } from './companions'
 
 export type PetCommand =
+  | { type: 'settings-resizing' }
   | { type: 'animation'; id: string; preset?: DancePreset; mode?: 'once' | 'loop'; durationMs?: number; source?: BehaviorEntryLocation; companions?: CompanionAction[] }
   | { type: 'companion'; action: CompanionAction }
   | { type: 'stop' }
@@ -40,6 +41,8 @@ export interface PetStatusPayload {
   working: boolean
   sipping: boolean
   musicMotion?: boolean
+  /** Frames the pet rendered in the last second. */
+  fps?: number
   behaviorEntries?: BehaviorEntryLocation[]
   reaction?: { id: string; index: number }
   companions?: Record<string, { shown: boolean }>

@@ -1,6 +1,6 @@
 import { alphaInputRegions } from '../input-regions'
 import { createExitShutdown } from '../exit-shutdown'
-import { applyGazeGain, cursorPayloadToClient, DEFAULT_GAZE_GAIN, type CursorPositionPayload } from '../cursor-gaze'
+import { cursorPayloadToClient, DEFAULT_GAZE_GAIN, type CursorPositionPayload } from '../cursor-gaze'
 import { intersectAnimatedModel } from '../mesh-hit-test'
 import { FramePacer } from '../frame-pacer'
 import { DEFAULT_ANIMATIONS, proceduralSpeed, type AnimationSettings } from '../animation-settings'
@@ -15,6 +15,8 @@ import { useEffect, useRef, useImperativeHandle, forwardRef, useState, useCallba
 import { listen } from '@tauri-apps/api/event'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
+import { splitVrmMaterialVariants } from '../material-variants'
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm'
 import { VRMLookAtQuaternionProxy } from '@pixiv/three-vrm-animation'
 import type { VRM } from '@pixiv/three-vrm'
@@ -22,7 +24,8 @@ import { EmoteController } from '../emote'
 import { LipSync } from '../lip-sync'
 import { MotionController } from '../motion-controller'
 import { buildTypingPoseCache, restoreTypingPose, applyTypingPose, applySipPose, applyMusicAngles, applyHeadTurn, faceDirection } from '../typing-pose'
-import { headTurnTarget, dampAngle } from '../head-turn'
+import { DEFAULT_HEAD_TURN_GAIN, headTurnTarget, dampAngle } from '../head-turn'
+import type { CursorFollow } from '../behavior'
 import type { TypingPoseCache } from '../typing-pose'
 
 export type TouchRegion = 'head' | 'arm' | 'leg' | 'chest' | 'belly' | 'buttocks'
@@ -34,7 +37,11 @@ interface VRMSceneProps {
   modelPath: string
   qualitySettings?: QualitySettings
   idleAnimationPath?: string
-  gazeGain?: number
+  /**
+   * Polled every frame: cursor-follow strengths of the playing behavior entry,
+   * or null to follow automatically (only while nothing animates the head).
+   */
+  cursorFollow?: () => CursorFollow | null
   lightingSettings?: GlobalLightingSettings
   cursorLightSettings?: CursorLightSettings
   onTouch?: (region: TouchRegion) => void
@@ -49,7 +56,7 @@ const NO_PETS: PetConfig[] = []
 const NO_PROPS: PropConfig[] = []
 
 import type { RenderQuality, QualitySettings } from '../render-quality'
-import { QUALITY_PRESETS, normalizeQualitySettings } from '../render-quality'
+import { QUALITY_PRESETS, frameCap, normalizeQualitySettings, SETTINGS_RESIZE_RECOVERY_MS } from '../render-quality'
 import { defaultViewFromBounds, isValidView, loadSavedCameraView, saveCameraView, type CameraView } from '../camera-framing'
 import { collectEarMorphSlots, dampenEarMorphs, type EarMorphSlot } from '../ear-morph-dampen'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -58,6 +65,8 @@ export type { RenderQuality, QualitySettings, QualityPresetOrCustom, QualityDeta
 export { RENDER_QUALITIES, QUALITY_PRESETS as QUALITY_CONFIGS, normalizeQuality, presetSettings, resolvePreset, normalizeQualitySettings } from '../render-quality'
 
 export interface VRMSceneHandle {
+  /** Reserve graphics headroom for 250 ms after a settings size change. */
+  budgetSettingsResize: () => void
   setEmotion: (emotion: string, intensity?: number) => void
   setEmotionWithReset: (emotion: string, durationMs: number, intensity?: number) => void
   resetCamera: () => void
@@ -83,6 +92,8 @@ export interface VRMSceneHandle {
   resetPose: () => void
   reset: () => void
   /** Live playback snapshot for the settings status banner + behavior engine. */
+  /** Frames rendered per second (last full second; 0 while paused) and drawing-buffer size. */
+  getRenderStats: () => { browserFps: number; maxBrowserGapMs: number; longBrowserGaps: number; frameMs: number; maxFrameMs: number; effectiveMaxFps: number; settingsResizing: boolean; fps: number; pixelRatio: number; width: number; height: number }
   getPlaybackStatus: () => { actionId: string | null; dancing: boolean; danceId: string | null; working: boolean; sipping: boolean; musicMotion: boolean }
   /** True while a one-shot action or dance owns the mixer. */
   isBusy: () => boolean
@@ -237,7 +248,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   headphoneFit = DEFAULT_FIT,
   qualitySettings,
   idleAnimationPath = '/idle_loop.vrma',
-  gazeGain = DEFAULT_GAZE_GAIN,
+  cursorFollow,
   lightingSettings = DEFAULT_GLOBAL_LIGHTING,
   cursorLightSettings = DEFAULT_CURSOR_LIGHT,
   onTouch,
@@ -262,8 +273,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   // characters never moves the user's camera.
   const cameraStateRef = useRef<CameraView | null>(null)
   const trackingModeRef = useRef<TrackingMode>('mouse')
-  const gazeGainRef = useRef(gazeGain)
-  gazeGainRef.current = gazeGain
+  const cursorFollowRef = useRef(cursorFollow)
+  cursorFollowRef.current = cursorFollow
   const lightingRef = useRef(normalizeGlobalLighting(lightingSettings))
   lightingRef.current = normalizeGlobalLighting(lightingSettings)
   const cursorLightRef = useRef(normalizeCursorLight(cursorLightSettings))
@@ -314,6 +325,14 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
   }
   // Set inside the render effect (it owns the rAF id); called via setSuspended.
   const suspendFnRef = useRef<(suspended: boolean) => void>(() => {})
+  // Suspend state outlives scene re-inits (model change, hot reload) so a
+  // lock that hid the window still shows it again on unlock.
+  const suspendActiveRef = useRef(false)
+  const fpsRef = useRef(0)
+  const settingsResizeUntilRef = useRef(0)
+  const effectiveMaxFpsRef = useRef(0)
+  const frameStatsRef = useRef({ browserFps: 0, maxBrowserGapMs: 0, longBrowserGaps: 0, frameMs: 0, maxFrameMs: 0 })
+  const renderPixelRatioRef = useRef(1)
   const captureScreenshotRef = useRef<() => string | null>(() => null)
   const companionsRef = useRef<CompanionLayer | null>(null)
   const companionConfigRef = useRef({ pets, props })
@@ -354,6 +373,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     captureScreenshot() {
       return captureScreenshotRef.current()
     },
+    budgetSettingsResize() { settingsResizeUntilRef.current = performance.now() + SETTINGS_RESIZE_RECOVERY_MS },
     panCamera(dx: number, dy: number) {
       panCameraRef.current?.(dx, dy)
     },
@@ -440,6 +460,11 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     isBusy() {
       const motion = motionRef.current
       return sipRequestedRef.current || sipActiveMirrorRef.current || sipBlendMirrorRef.current > 0.05 || (!!motion && (motion.actionPlaying || motion.isDancing))
+    },
+    getRenderStats() {
+      const canvas = canvasRef.current
+      return { ...frameStatsRef.current, effectiveMaxFps: effectiveMaxFpsRef.current, settingsResizing: performance.now() < settingsResizeUntilRef.current,
+        fps: fpsRef.current, pixelRatio: renderPixelRatioRef.current, width: canvas?.width ?? 0, height: canvas?.height ?? 0 }
     },
     getPlaybackStatus() {
       const motion = motionRef.current
@@ -635,6 +660,14 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     const companions = new CompanionLayer(scene, url => companionLoader.loadAsync(url), companionAssetUrl)
     companionsRef.current = companions
     companions.setStageLighting(lightingRef.current)
+    companions.setEnvironment(() => {
+      const pmrem = new THREE.PMREMGenerator(renderer)
+      const room = new RoomEnvironment()
+      const texture = pmrem.fromScene(room, 0.04).texture
+      room.dispose()
+      pmrem.dispose()
+      return texture
+    })
     companions.configure(companionConfigRef.current.pets, companionConfigRef.current.props)
 
     // ── State ─────────────────────────────────────────────────────────────────
@@ -677,6 +710,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
         VRMUtils.removeUnnecessaryVertices(loadedVrm.scene)
         VRMUtils.combineSkeletons(loadedVrm.scene)
+        // Shared materials across shader variants make three.js switch
+        // programs on every draw; give each variant its own material.
+        splitVrmMaterialVariants(loadedVrm)
         loadedVrm.scene.traverse((obj) => {
           obj.frustumCulled = false
         })
@@ -897,53 +933,82 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
     // ── Mouse tracking ────────────────────────────────────────────────────────
     const mouse = new THREE.Vector2(0, 0)
+    // Last cursor position and the last time anything moved the pet (idle frame cap).
+    const lastCursor = { x: NaN, y: NaN }
+    let lastActivity = performance.now()
     // Damped idle head-turn angles (radians); eased back to neutral whenever
     // the pet isn't idle so dances and actions own the head.
     let headTurnYaw = 0
     let headTurnPitch = 0
+    // Eye gain the gaze target was last aimed with (0 = not following).
+    let aimedEyes = 0
+
+    /** Effective eye/head follow this frame (mouse tracking only). */
+    function currentFollow(): CursorFollow {
+      if (trackingModeRef.current !== 'mouse') return { eyes: 0, head: 0 }
+      const entry = cursorFollowRef.current?.()
+      if (entry) return entry
+      // No behavior entry playing: follow only while nothing else drives the
+      // head, fading the head glance out as the typing pose blends in.
+      if (motion?.isDancing || motion?.actionPlaying) return { eyes: 0, head: 0 }
+      return { eyes: workingBlend > 0.5 ? 0 : DEFAULT_GAZE_GAIN, head: DEFAULT_HEAD_TURN_GAIN * (1 - workingBlend) }
+    }
 
     const _raycaster = new THREE.Raycaster()
     const _mouseVec = new THREE.Vector2()
+    const gazeCameraDirection = new THREE.Vector3()
+    const gazePlaneCenter = new THREE.Vector3()
+    const gazeIntersection = new THREE.Vector3()
+    const gazePlane = new THREE.Plane()
 
     // Shared gaze path: point the eyes at a window client-pixel position.
     // DOM mousemove only reaches us over the silhouette (click-through /
     // input regions starve it elsewhere), so the Rust cursor-position feed
     // below drives the same path with the global cursor position.
     function updateGazeFromClient(clientX: number, clientY: number) {
+      if (clientX !== lastCursor.x || clientY !== lastCursor.y) {
+        lastCursor.x = clientX
+        lastCursor.y = clientY
+        lastActivity = performance.now()
+      }
       mouse.x = (clientX / window.innerWidth) * 2 - 1
       mouse.y = -(clientY / window.innerHeight) * 2 + 1
 
       _mouseVec.set(mouse.x, mouse.y)
       _raycaster.setFromCamera(_mouseVec, camera)
-      const camDir = new THREE.Vector3()
-      camera.getWorldDirection(camDir)
+      const camDir = camera.getWorldDirection(gazeCameraDirection)
       // Cursor light anchor runs in every tracking mode: intersect the cursor
       // ray with a plane through the model focus so the light sits at the
       // pet's depth, nudged toward the camera so it lights the front instead
       // of the interior.
       {
-        const focusPlane = new THREE.Plane()
+        const focusPlane = gazePlane
         focusPlane.setFromNormalAndCoplanarPoint(camDir, lightFocus)
-        const hit = new THREE.Vector3()
+        const hit = gazeIntersection
         if (_raycaster.ray.intersectPlane(focusPlane, hit)) {
-          const towardCamera = camDir.clone().multiplyScalar(-0.6)
-          cursorLightTarget.copy(hit.add(towardCamera))
+          cursorLightTarget.copy(hit).addScaledVector(camDir, -0.6)
         }
       }
 
-      if (trackingModeRef.current !== 'mouse') return
-
-      // Compute lookAt target like airi's lookAtMouse, amplified so small
-      // cursor moves read clearly (VRM eye limits still cap the extremes)
-      const planeCenter = camera.position.clone().add(camDir)
-      const plane = new THREE.Plane()
+      const eyes = currentFollow().eyes
+      if (eyes > 0) aimEyesAtCursor(eyes)
+    }
+    // Point the eyes at the last cursor position, like airi's lookAtMouse,
+    // amplified so small cursor moves read clearly (VRM eye limits still cap
+    // the extremes).
+    function aimEyesAtCursor(gain: number) {
+      aimedEyes = gain
+      _mouseVec.set(mouse.x, mouse.y)
+      _raycaster.setFromCamera(_mouseVec, camera)
+      const camDir = camera.getWorldDirection(gazeCameraDirection)
+      const planeCenter = gazePlaneCenter.copy(camera.position).add(camDir)
+      const plane = gazePlane
       plane.setFromNormalAndCoplanarPoint(camDir, planeCenter)
-      const intersection = new THREE.Vector3()
+      const intersection = gazeIntersection
       if (_raycaster.ray.intersectPlane(plane, intersection)) {
-        const gained = applyGazeGain(intersection, planeCenter, gazeGainRef.current)
-        lookAtTarget.x = gained.x
-        lookAtTarget.y = gained.y
-        lookAtTarget.z = gained.z
+        lookAtTarget.x = planeCenter.x + (intersection.x - planeCenter.x) * gain
+        lookAtTarget.y = planeCenter.y + (intersection.y - planeCenter.y) * gain
+        lookAtTarget.z = planeCenter.z + (intersection.z - planeCenter.z) * gain
         if (vrm) {
           saccades.instantUpdate(vrm, lookAtTarget)
         }
@@ -1081,6 +1146,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     }
 
     function onWheel(e: WheelEvent) {
+      lastActivity = performance.now()
       if (!pointerOverModel(e.clientX, e.clientY)) return
       e.preventDefault()
       orbitRadius = THREE.MathUtils.clamp(
@@ -1197,6 +1263,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     }
 
     function onPointerDown(e: PointerEvent) {
+      lastActivity = performance.now()
       // Transparent space is click-through: ignore presses that don't start
       // on a mesh so the pet never steals clicks from windows behind it.
       // (When pass-through is engaged the OS won't deliver these at all;
@@ -1235,6 +1302,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     }
 
     function onPointerMove(e: PointerEvent) {
+      lastActivity = performance.now()
       // If left button held on model and moved beyond threshold → it's a drag, not a touch
       if (leftDownPos && e.buttons & 1) {
         const dx = Math.abs(e.clientX - leftDownPos.x)
@@ -1370,18 +1438,49 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     // animation jumps.
     const clock = new THREE.Clock()
     let animFrameId: number
-    let renderingPaused = document.hidden
+    let renderingPaused = document.hidden || suspendActiveRef.current
     const framePacer = new FramePacer()
+    const IDLE_AFTER_MS = 2000
+    let fpsFrames = 0
+    let browserFrames = 0, frameMs = 0, maxFrameMs = 0
+    let fpsWindowStart = performance.now()
+    let previousCallback = fpsWindowStart, maxBrowserGapMs = 0, longBrowserGaps = 0
     const animationTimes = { hands: 0, typing: 0, sip: 0 }
 
     function animate() {
       animFrameId = requestAnimationFrame(animate)
+      const frameStarted = performance.now()
+      const gap = frameStarted - previousCallback
+      previousCallback = frameStarted
+      maxBrowserGapMs = Math.max(maxBrowserGapMs, gap)
+      if (gap > 100) longBrowserGaps++
+      browserFrames++
+      const elapsed = frameStarted - fpsWindowStart
+      if (elapsed >= 1000) {
+        fpsRef.current = fpsFrames * 1000 / elapsed
+        frameStatsRef.current = { browserFps: Math.round(browserFrames * 1000 / elapsed * 10) / 10,
+          maxBrowserGapMs: Math.round(maxBrowserGapMs * 10) / 10, longBrowserGaps,
+          frameMs: Math.round(frameMs / Math.max(1, fpsFrames) * 100) / 100, maxFrameMs: Math.round(maxFrameMs * 100) / 100 }
+        browserFrames = 0; fpsFrames = 0; frameMs = 0; maxFrameMs = 0
+        maxBrowserGapMs = 0
+        fpsWindowStart = frameStarted
+      }
       const cfg = qualityDetailsRef.current
       const targetRatio = Math.min(window.devicePixelRatio || 1, cfg.pixelRatioCap)
       if (renderer.getPixelRatio() !== targetRatio) renderer.setPixelRatio(targetRatio)
+      renderPixelRatioRef.current = targetRatio
       {
         const now = performance.now()
-        if (!framePacer.shouldRender(now, cfg.maxFps)) return
+        // Idle = nothing has moved the pet for a moment: no cursor, gesture,
+        // speech, dance, action, music motion, or typing. Only then may the
+        // optional idle cap lower the frame rate.
+        const motion = motionRef.current
+        if ((motion && (motion.actionPlaying || motion.isDancing)) || musicModeRef.current || musicPreviewRef.current
+          || workingTargetRef.current || lipSyncRef.current.speaking || (window as any).__clawDragging) lastActivity = now
+        const cap = frameCap(cfg, now - lastActivity > IDLE_AFTER_MS, now < settingsResizeUntilRef.current)
+        effectiveMaxFpsRef.current = cap
+        if (!framePacer.shouldRender(now, cap)) return
+        fpsFrames++
       }
       const delta = Math.min(clock.getDelta(), 0.1)
 
@@ -1481,16 +1580,32 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
         }
         const musicPose = musicMotionRef.current.step(delta, performance.now() / 1000, musicOptions, listening, musicPreviewRef.current, workingTargetRef.current, sipBlend, effSpeed('music'))
         if (typingCache && !motion?.actionPlaying && !motion?.isDancing) applyMusicAngles(typingCache, musicPose.pitch, musicPose.roll)
-        // 1.8. Idle head-turn: glance slightly toward the cursor while the pet
-        // is idle (mouse tracking, no dance/action, faded out while working).
-        // Damped every frame so it eases in, follows, and settles to neutral.
+        // 1.8. Cursor follow, per the playing behavior entry. The head glance
+        // is damped every frame so it eases in, follows, and settles to
+        // neutral when the strength drops to 0.
+        const follow = currentFollow()
         if (typingCache) {
-          const idle = trackingModeRef.current === 'mouse' && !motion?.isDancing && !motion?.actionPlaying
-          const amount = idle ? 1 - workingBlend : 0
-          const target = headTurnTarget(mouse.x, mouse.y)
-          headTurnYaw = dampAngle(headTurnYaw, target.yaw * amount, delta)
-          headTurnPitch = dampAngle(headTurnPitch, target.pitch * amount, delta)
+          const target = headTurnTarget(mouse.x, mouse.y, follow.head)
+          headTurnYaw = dampAngle(headTurnYaw, target.yaw, delta)
+          headTurnPitch = dampAngle(headTurnPitch, target.pitch, delta)
           applyHeadTurn(typingCache, headTurnYaw, headTurnPitch)
+        }
+        // 1.9. Eyes: re-aim when following starts or its strength changes
+        // (mouse moves re-aim on their own). When not following, ease the
+        // eye target back to straight ahead of the head so the gaze settles
+        // instead of freezing on the last cursor point.
+        if (follow.eyes > 0) {
+          if (follow.eyes !== aimedEyes) aimEyesAtCursor(follow.eyes)
+        } else {
+          aimedEyes = 0
+          if (trackingModeRef.current === 'mouse' && vrm && typingCache?.head) {
+            const headPos = typingCache.head.getWorldPosition(new THREE.Vector3())
+            const fwd = faceDirection(typingCache)
+            const k = 1 - Math.exp(-delta * 6)
+            lookAtTarget.x += (headPos.x + fwd.x * 4 - lookAtTarget.x) * k
+            lookAtTarget.y += (headPos.y + fwd.y * 4 - lookAtTarget.y) * k
+            lookAtTarget.z += (headPos.z + fwd.z * 4 - lookAtTarget.z) * k
+          }
         }
         // 2. Humanoid update
         vrm.humanoid?.update()
@@ -1606,6 +1721,9 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
           }
         }
       }
+      const workMs = performance.now() - frameStarted
+      frameMs += workMs
+      maxFrameMs = Math.max(maxFrameMs, workMs)
     }
 
     // Pause the loop while hidden; resume on visible. rAF stops firing on its
@@ -1621,6 +1739,8 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     function pauseRendering() {
       if (renderingPaused) return
       renderingPaused = true
+      fpsRef.current = 0
+      frameStatsRef.current = { browserFps: 0, maxBrowserGapMs: 0, longBrowserGaps, frameMs: 0, maxFrameMs: 0 }
       cancelAnimationFrame(animFrameId)
       pendingHitTest?.resolve(true)
       pendingHitTest = null
@@ -1632,34 +1752,44 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       renderingPaused = false
       clock.getDelta()
       framePacer.reset()
+      fpsFrames = 0
+      browserFrames = 0; frameMs = 0; maxFrameMs = 0
+      fpsWindowStart = performance.now()
+      previousCallback = fpsWindowStart; maxBrowserGapMs = 0
       animFrameId = requestAnimationFrame(animate)
     }
     // Set while a screensaver/lock suspend is in force; only setSuspended
     // clears it. Tracks whether *we* hid the window so resume doesn't undo
     // a manual tray-hide made mid-suspend.
-    let suspendActive = false
-    let windowHiddenBySuspend = false
+    // The hidden-by-suspend flag lives in sessionStorage so it also survives
+    // a full page reload while locked.
+    const HIDDEN_BY_SUSPEND = 'cuttle-pet-hidden-by-suspend'
+    const hiddenBySuspend = () => sessionStorage.getItem(HIDDEN_BY_SUSPEND) === '1'
+    const setHiddenBySuspend = (value: boolean) => {
+      if (value) sessionStorage.setItem(HIDDEN_BY_SUSPEND, '1')
+      else sessionStorage.removeItem(HIDDEN_BY_SUSPEND)
+    }
     suspendFnRef.current = (suspended: boolean) => {
       if (suspended) {
-        if (suspendActive) return
-        suspendActive = true
+        if (suspendActiveRef.current) return
+        suspendActiveRef.current = true
         pauseRendering()
         getCurrentWindow().isVisible()
           .then((visible) => {
             // Resumed while the check was in flight — leave the window alone.
-            if (!suspendActive) return
+            if (!suspendActiveRef.current) return
             if (visible) {
-              windowHiddenBySuspend = true
+              setHiddenBySuspend(true)
               return getCurrentWindow().hide()
             }
-            windowHiddenBySuspend = false
+            // Already hidden: keep a flag set before a reload; otherwise the
+            // user hid it, and resume leaves it hidden.
           })
           .catch(() => { /* not running under Tauri (browser dev) */ })
       } else {
-        if (!suspendActive) return
-        suspendActive = false
-        if (windowHiddenBySuspend) {
-          windowHiddenBySuspend = false
+        suspendActiveRef.current = false
+        if (hiddenBySuspend()) {
+          setHiddenBySuspend(false)
           // Re-assert always-on-top: some WMs drop the topmost hint across hide/show.
           getCurrentWindow().show()
             .then(() => { if (getCachedSetting('pinned', true) !== false) return getCurrentWindow().setAlwaysOnTop(true) })
@@ -1672,7 +1802,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     function onVisibilityChange() {
       if (document.hidden) {
         pauseRendering()
-      } else if (!suspendActive) {
+      } else if (!suspendActiveRef.current) {
         resumeRendering()
       }
     }

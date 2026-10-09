@@ -1,3 +1,4 @@
+import { SettingsHelp } from './SettingsHelp'
 import { FlaskConical, Plus, Trash2 } from 'lucide-react'
 import {
   PET_ACTIONS, PET_ANCHORS, PET_MOVES, PROP_ACTIONS, describeCompanionAction,
@@ -32,7 +33,7 @@ export function CompanionActionsEditor({ value, pets, props, onChange, onTest, l
   }
 
   return <div style={{ display: 'grid', gap: 6 }}>
-    <span style={cMuted}>{t('宠物 / 道具（按顺序执行）', 'Pets / props (run in order)')}</span>
+    <span style={cMuted}>{t('宠物 / 道具', 'Pets / props')}<SettingsHelp>Instructions run in order.</SettingsHelp></span>
     {value.length === 0 && <span style={cMuted}>{t('无 — 加一步让宠物登场或戴上道具。', 'None — add a step to bring in the pet or equip a prop.')}</span>}
     {value.map((action, index) => <div key={index} style={cRow}>
       <TargetSelect action={action} pets={pets} props={props} onPick={(kind, id) => {

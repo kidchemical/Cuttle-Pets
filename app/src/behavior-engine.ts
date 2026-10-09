@@ -1,5 +1,5 @@
 import {
-  applyBaseById, applyCompanions, applyEmotion, behaviorTarget, playOnceById, resolveMain,
+  applyBaseById, applyCompanions, applyEmotion, behaviorTarget, motionKey, playOnceById, resolveMain,
   type BehaviorEntry, type BehaviorEntryLocation, type BehaviorProfile, type BehaviorScene, type BehaviorStateId,
 } from './behavior'
 
@@ -67,8 +67,8 @@ export class BehaviorEngine {
     const cached = this.mains.get(state)
     const configured = profile.states[state]
     // Resume the previous weighted pick while it remains in the edited profile.
-    if (cached && (configured.mains.some(e => JSON.stringify(e) === JSON.stringify(cached))
-      || (!configured.mains.length && JSON.stringify(configured.base) === JSON.stringify(cached)))) return cached
+    if (cached && (configured.mains.some(e => motionKey(e) === motionKey(cached))
+      || (!configured.mains.length && motionKey(configured.base) === motionKey(cached)))) return cached
     const pick = resolveMain(configured, () => this.time.random())
     if (pick) this.mains.set(state, pick)
     else this.mains.delete(state)
@@ -77,9 +77,10 @@ export class BehaviorEngine {
 
   update(input: Input) {
     const before = this.input
-    const fingerprint = JSON.stringify(input.profile)
+    // Cursor-follow tuning is read live by the renderer; editing it must not restart motion.
+    const fingerprint = motionKey(input.profile)
     if (before && before.enabled === input.enabled && before.paused === input.paused
-      && before.state === input.state && before.scene === input.scene && fingerprint === this.fingerprint) return
+      && before.state === input.state && before.scene === input.scene && fingerprint === this.fingerprint) { this.input = input; return }
     // A manual preview owns playback but tracks changing ambient state/profile
     // so completion resumes the latest state. Reactions and reloads can cancel it.
     if (this.preview && before?.scene === input.scene && input.scene && !input.paused) {
@@ -195,7 +196,7 @@ export class BehaviorEngine {
   }
 
   private mainSource(state: BehaviorStateId, main: BehaviorEntry, profile: BehaviorProfile): BehaviorEntryLocation | undefined {
-    const index = profile.states[state].mains.findIndex(entry => JSON.stringify(entry) === JSON.stringify(main))
+    const index = profile.states[state].mains.findIndex(entry => motionKey(entry) === motionKey(main))
     return index < 0 ? undefined : { state, phase: 'mains', index }
   }
 

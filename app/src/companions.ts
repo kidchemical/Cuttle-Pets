@@ -83,6 +83,8 @@ export interface PetConfig {
   followLag: number
   /** Texture-colored shadow lift, scaled by stage illumination (0–1). */
   lighting: number
+  /** Metallic finish. Reflections scale with stage brightness, so lights off stays dark. */
+  shiny: { enabled: boolean; metalness: number; smoothness: number; reflection: number }
   /** Relaxed procedural arms/feet; 0 retains the imported bind pose. */
   limbMotion: number
   /** Looping clip from the GLB, or '' for procedural idle only. */
@@ -274,6 +276,7 @@ export function normalizePet(value: unknown, fallbackId: string): PetConfig | nu
   const expressions = cleanExpressions(v.expressions, groups)
   const exprIds = new Set(expressions.map(e => e.id))
   const idle = v.idle && typeof v.idle === 'object' ? v.idle as Record<string, unknown> : {}
+  const shiny = v.shiny && typeof v.shiny === 'object' ? v.shiny as Record<string, unknown> : {}
   const blinkRaw = v.blink && typeof v.blink === 'object' ? v.blink as Record<string, unknown> : null
   const blinkGroup = blinkRaw ? groups.find(g => g.id === blinkRaw.group) : undefined
   const blinkFrames = blinkGroup ? strings(blinkRaw!.frames).filter(p => blinkGroup.parts.includes(p)).slice(0, 6) : []
@@ -305,6 +308,12 @@ export function normalizePet(value: unknown, fallbackId: string): PetConfig | nu
     },
     followLag: num(v.followLag, 0.6, 0.05, 2),
     lighting: num(v.lighting, 0.35, 0, 1),
+    shiny: {
+      enabled: shiny.enabled === true,
+      metalness: num(shiny.metalness, 0.8, 0, 1),
+      smoothness: num(shiny.smoothness, 0.7, 0, 1),
+      reflection: num(shiny.reflection, 1, 0, 2),
+    },
     limbMotion: num(v.limbMotion, 1, 0, 2),
     clip: typeof v.clip === 'string' && asset.clips.includes(v.clip) ? v.clip : '',
     wings: strings(v.wings).filter(b => asset.bones.includes(b)).slice(0, 8),

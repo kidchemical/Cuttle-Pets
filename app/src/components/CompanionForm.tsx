@@ -1,3 +1,4 @@
+import { SettingsHelp } from './SettingsHelp'
 import { useState, type CSSProperties } from 'react'
 import type { LibraryAsset } from '../asset-import'
 
@@ -56,11 +57,11 @@ export function CompanionLibraryPicker({ files, busy, onAdd, t }: {
   </div>
 }
 
-export function SliderField({ label, value, min, max, step, format, onChange }: {
+export function SliderField({ label, value, min, max, step, format, onChange, help }: {
   label: string; value: number; min: number; max: number; step: number
-  format: (value: number) => string; onChange: (value: number) => void
+  help?: string; format: (value: number) => string; onChange: (value: number) => void
 }) {
-  return <label style={{ display: 'grid', gap: 4 }}>{label}
+  return <label style={{ display: 'grid', gap: 4 }}><span>{label}{help && <SettingsHelp label={`${label} help`}>{help}</SettingsHelp>}</span>
     <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
       <input aria-label={label} type="range" min={min} max={max} step={step} value={value}
         onChange={e => onChange(Number(e.target.value))} style={{ flex: 1, minWidth: 80 }} />

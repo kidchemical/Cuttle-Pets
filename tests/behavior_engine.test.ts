@@ -232,6 +232,21 @@ async function main() {
     assert.equal(f.calls.length, whilePaused)
     f.engine.dispose()
   }
+  // Cursor-follow edits are live render tuning: no restart, same Main, same highlight.
+  {
+    const f = fixture()
+    f.engine.update({ ...f.input, state: 'dancing' }); await f.time.flush()
+    const before = f.calls.length
+    const edited = structuredClone(f.profile)
+    for (const main of edited.states.dancing.mains) main.follow = { eyes: 1.5, head: 0.5 }
+    f.engine.update({ ...f.input, state: 'dancing', profile: edited }); await f.time.flush()
+    assert.equal(f.calls.length, before, 'Follow edits do not replay motion')
+    f.scene.resetPose()
+    f.engine.resync()
+    assert.equal(f.calls.at(-1), 'danceLoop:jile', 'Resume keeps the same Main pick')
+    assert.deepEqual(f.statuses.at(-1)?.entries, [{ state: 'dancing', phase: 'mains', index: 0 }])
+    f.engine.dispose()
+  }
   console.log('behavior engine tests passed')
 }
 void main().catch(error => { console.error(error); process.exitCode = 1 })

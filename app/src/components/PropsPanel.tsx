@@ -1,3 +1,4 @@
+import { SettingsHelp } from './SettingsHelp'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useFileDrop, singleModelPath } from '../hooks/useFileDrop'
 import { FileDropHint } from './FileDropHint'
@@ -118,9 +119,9 @@ export function PropsPanel({ props, onChange, language = 'zh', onTest }: PropsPa
   return <div style={{ display: 'grid', gap: 12, fontSize: 14 }}>
     <div>
       <strong style={{ fontSize: 15 }}>{t('道具', 'Props')}</strong>
-      <div style={cMuted}>{t(
+      <SettingsHelp label="Props help">{t(
         '戴在角色身上的小物件：帽子、吉他、眼镜……固定在骨骼上跟随动作。平时戴着或藏着，行为和自定义反应里可以穿戴/摘下。',
-        'Wearables for your character: hats, guitars, glasses… pinned to a bone and following the motion. Worn or hidden; behaviors and reactions can equip/remove them.')}</div>
+        'Wearables for your character: hats, guitars, glasses… pinned to a bone and following the motion. Worn or hidden; behaviors and reactions can equip/remove them.')}</SettingsHelp>
     </div>
     <FileDropHint dragging={dragging}>{t('拖放模型到此页面导入（GLB / glTF / FBX / DAE）', 'Drop a model anywhere on this page to import (GLB / glTF / FBX / DAE).')}</FileDropHint>
     <div style={cRow}>

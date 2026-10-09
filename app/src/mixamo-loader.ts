@@ -158,7 +158,13 @@ export function retargetToVRM(asset: THREE.Group, vrm: VRM, takeName?: string): 
   const motionHipsHeight = Math.abs(sourceHipsWorld.clone().sub(sourceRootWorld).applyQuaternion(sourceBasis).y)
   const targetHips = vrm.humanoid?.getNormalizedBoneNode('hips')
   if (!targetHips) throw new Error('Target model has no hips bone')
-  const vrmHipsY = targetHips.getWorldPosition(_vec3).y
+  // A new clip can load while a grounded pose is playing. Retarget against
+  // the standing rest pose, not whichever hips position was last rendered.
+  const restPosition = vrm.humanoid?.normalizedRestPose?.hips?.position
+  const targetHipPosition = restPosition ? new THREE.Vector3().fromArray(restPosition) : targetHips.position.clone()
+  const vrmHipsY = targetHips.parent
+    ? targetHips.parent.localToWorld(_vec3.copy(targetHipPosition)).y
+    : targetHipPosition.y
   const vrmRootY = vrm.scene.getWorldPosition(_vec3).y
   const vrmHipsHeight = Math.abs(vrmHipsY - vrmRootY)
   if (motionHipsHeight < 1e-5) throw new Error('Source skeleton has no usable world-space hips height')
@@ -215,8 +221,8 @@ export function retargetToVRM(asset: THREE.Group, vrm: VRM, takeName?: string): 
           _vec3.fromArray(track.values, i).sub(first)
             .multiply(sourceParentScale).applyQuaternion(parentRestWorldRotation)
             .multiplyScalar(hipsPositionScale).applyQuaternion(targetParentInverse)
-            .divide(targetParentScale).add(targetHips.position)
-          value.push(targetHips.position.x, _vec3.y, targetHips.position.z)
+            .divide(targetParentScale).add(targetHipPosition)
+          value.push(targetHipPosition.x, _vec3.y, targetHipPosition.z)
         }
         tracks.push(
           new THREE.VectorKeyframeTrack(`${vrmNodeName}.${propertyName}`, Array.from(track.times), value),

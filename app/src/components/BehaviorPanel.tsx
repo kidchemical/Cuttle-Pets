@@ -1,13 +1,16 @@
+import { SettingsHelp } from './SettingsHelp'
 import { useEffect, useRef, useState } from 'react'
-import { Play, Repeat, Square, Plus, Trash2, Download, Upload, Save, FlaskConical } from 'lucide-react'
+import { Play, Repeat, Square, Plus, Trash2, Download, Upload, Save, FlaskConical, Eye } from 'lucide-react'
 import {
   BEHAVIOR_STATES, EMOTION_OPTIONS, RANDOM_ACTION, RANDOM_EMOTION, MAX_MAINS, animationCatalog, animationLabel,
-  normalizeProfile, normalizeReaction, defaultBehaviorProfile, exampleReaction,
+  behaviorTarget, entryCursorFollow, normalizeProfile, normalizeReaction, defaultBehaviorProfile, exampleReaction,
   slugifyReactionId, editReactionId, isValidReactionParamName, describeReaction, reactionCliExample,
   type AnimationOption, type BehaviorEntry, type BehaviorEntryLocation, type BehaviorSettings, type BehaviorStateId,
-  type CustomReaction, type OccasionalEntry, type ReactionParam, type StateBehavior, type WeightedEntry,
+  type CursorFollow, type CustomReaction, type OccasionalEntry, type ReactionParam, type StateBehavior, type WeightedEntry,
 } from '../behavior'
 import type { DancePreset } from '../motion-controller'
+import { MAX_GAZE_GAIN } from '../cursor-gaze'
+import { MAX_HEAD_TURN_GAIN } from '../head-turn'
 import type { PreviewMode } from './AnimationSettingsPanel'
 import type { PetStatusPayload } from '../window-sync'
 import { petUrl } from '../config'
@@ -245,6 +248,17 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
   const updateOccasional = (id: BehaviorStateId, index: number, patch: Partial<OccasionalEntry>) => {
     patchState(id, state => { state.occasionals[index] = { ...state.occasionals[index], ...patch } })
   }
+  const patchEntryAt = (location: { state: BehaviorStateId; phase: EntryPhase; index: number }, patch: Partial<BehaviorEntry>) => {
+    if (location.phase === 'mains') setMainEntry(location.state, location.index, patch)
+    else if (location.phase === 'occasionals') updateOccasional(location.state, location.index, patch)
+    else updateEntry(location.state, location.phase, location.index, patch)
+  }
+  /** Concrete entries follow the cursor themselves; behavior references defer to the entries they play. */
+  const followsCursor = (entry: BehaviorEntry) => {
+    if (behaviorTarget(entry.animation)) return false
+    const follow = entryCursorFollow(entry)
+    return follow.eyes > 0 || follow.head > 0
+  }
 
   const tryEntry = (entry: BehaviorEntry, loop: boolean) => {
     if (loop) onPreview?.(entry.animation, entry.preset, 'loop', entry.durationMs)
@@ -321,18 +335,18 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
 
     <label style={{ ...row, cursor: 'pointer' }}>
       <input type="checkbox" checked={settings.enabled} onChange={e => onChange({ ...settings, enabled: e.target.checked })} />
-      <span><strong>Behavior engine enabled</strong><br /><span style={muted}>When off, automatic behavior sequences and occasional actions stop.</span></span>
+      <span><strong>Behavior engine enabled</strong><SettingsHelp label="Behavior engine help">When off, automatic behavior sequences and occasional actions stop.</SettingsHelp></span>
     </label>
 
     <section aria-label="Custom reactions" style={{ border: '1px solid #39465c', borderRadius: 10, padding: 14, display: 'grid', gap: 12, background: '#1a2130' }}>
       <div>
         <strong style={{ fontSize: 15 }}>Custom reactions</strong>
-        <div style={muted}>One-shot behaviors any agent can call by id — e.g. after a git push. They play once and the pet returns to its current state. Persistent states (idle / working / music / dancing) stay fixed; reactions are the way to add new callable behaviors.</div>
+        <SettingsHelp label="Custom reactions help">One-shot behaviors any agent can call by id — e.g. after a git push. They play once and the pet returns to its current state. Persistent states (idle / working / music / dancing) stay fixed; reactions are the way to add new callable behaviors.</SettingsHelp>
       </div>
       <div style={row}>
         <button style={smallButton} onClick={() => addReaction()}><Plus size={12} style={{ verticalAlign: -2 }} /> New reaction</button>
         <button style={smallButton} onClick={() => addReaction(exampleReaction())} title="Add the rocket-launch celebrate-a-deploy example"><Plus size={12} style={{ verticalAlign: -2 }} /> Add rocket-launch example</button>
-        <span style={muted}>Agents browse these with <code>cuttle-pet behaviors</code> and call them with <code>cuttle-pet react &lt;id&gt;</code>.</span>
+        <SettingsHelp label="Agent commands help">Agents browse these with <code>cuttle-pet behaviors</code> and call them with <code>cuttle-pet react &lt;id&gt;</code>.</SettingsHelp>
       </div>
       {reactionMsg && <div role="status" style={{ color: '#9fd6ff' }}>{reactionMsg}</div>}
       {reactions.length === 0 && <span style={muted}>No custom reactions yet — add one, or start from the rocket-launch example.</span>}
@@ -355,7 +369,7 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
         <input aria-label="Agent description" value={reaction.description} onChange={e => patchReaction(reaction.id, r => { r.description = e.target.value.slice(0, 280) })} style={{ width: '100%', boxSizing: 'border-box' }} placeholder="Description agents see when browsing (when should they call this?)" />
         <code style={{ ...muted, wordBreak: 'break-all' }}>{reactionCliExample(reaction.id, reaction.params)}</code>
         <div style={{ display: 'grid', gap: 6 }}>
-          <span style={muted}>Parameters — referenced in speech text as {`{{name}}`}:</span>
+          <span style={muted}>Parameters<SettingsHelp label="Parameters help">Reference parameters in speech text as {`{{name}}`}.</SettingsHelp></span>
           {reaction.params.length === 0 && <span style={muted}>None. Add one for e.g. “dance for n seconds”.</span>}
           {reaction.params.map((param, index) => <ReactionParamRow
             key={index}
@@ -375,7 +389,7 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
           })}><Plus size={12} style={{ verticalAlign: -2 }} /> Add parameter</button></div>
         </div>
         <div style={{ display: 'grid', gap: 6 }}>
-          <span style={muted}>Steps — played in order, then the pet returns to its state:</span>
+          <span style={muted}>Steps<SettingsHelp label="Reaction steps help">Played in order, then the pet returns to its state.</SettingsHelp></span>
           {reaction.steps.map((step, index) => <div key={index} style={{ display: 'grid', gap: 6 }}>
           <div className="live-entry" data-reaction-step={`${reaction.id}:${index}`} data-active={status?.reaction?.id === reaction.id && status.reaction.index === index} style={{ ...row, border: '1px solid transparent', borderRadius: 8, padding: 6 }}>
             {status?.reaction?.id === reaction.id && status.reaction.index === index && <span className="playback-badge">Playing</span>}
@@ -415,12 +429,12 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
       </article>)}
     </section>
 
-    <p style={muted}>Choose an animation or another behavior in any entry. Start, End, and Occasionals play referenced behaviors once (Start → one Main → End), then resume. Main references sustain the chosen behavior. Circular references are skipped.</p>
+    <div><strong>Automatic states</strong><SettingsHelp label="Automatic states help">Choose an animation or another behavior in any entry. Start, End, and Occasionals play referenced behaviors once (Start → one Main → End), then resume. Main references sustain the chosen behavior. Circular references are skipped.</SettingsHelp></div>
     <div className="animation-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 1.65fr) minmax(150px, 0.85fr)', gap: 16, alignItems: 'stretch' }}>
         <div className="animation-list" role="listbox" aria-label="Behavior animations" style={{ overflowY: 'auto', height: '100%', minHeight: 330, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {BEHAVIOR_STATES.map(({ id: stateId, label: stateLabel, hint }) => (
             <div key={stateId} style={{ display: 'grid', gap: 6 }}>
-              <div><strong style={{ fontSize: 13 }}>{stateLabel}</strong><div style={muted}>{hint}</div></div>
+              <div><strong style={{ fontSize: 13 }}>{stateLabel}</strong><SettingsHelp label={`${stateLabel} help`}>{hint}</SettingsHelp></div>
               {PHASES.map(({ id: phase, label: phaseLabel, addLabel, cap }) => {
                 const entries = phaseEntries(stateId, phase)
                 return <div key={phase} style={{ display: 'grid', gap: 4 }}>
@@ -433,7 +447,7 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
                     const title = animationLabel(entry.animation, customDances, language)
                     return <div key={stateId + ':' + phase + ':' + index} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                       <button className="live-entry" data-entry={`${stateId}:${phase}:${index}`} data-active={isActive} role="option" aria-selected={isSel} onClick={() => setSelected({ state: stateId, phase, index })} style={{ ...button, padding: '6px 10px', flex: 1, minWidth: 0, background: isSel ? '#385a90' : '#262c38', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        <span className="live-entry-name">{title} <small style={{ color: '#b5becf' }}>{entryMeta(stateId, phase, entry)}</small></span>
+                        <span className="live-entry-name">{title} <small style={{ color: '#b5becf' }}>{entryMeta(stateId, phase, entry)}</small>{followsCursor(entry) && <Eye size={11} aria-label="Follows the cursor" style={{ marginLeft: 6, verticalAlign: -1, color: '#9fd6ff' }} />}</span>
                         {isActive && <span className="playback-badge">Playing</span>}
                       </button>
                       <div style={{ display: 'flex', flexDirection: 'row', gap: 2, flexShrink: 0 }}>
@@ -463,13 +477,12 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
                 else updateEntry(sel.state, sel.phase, sel.index, { animation: picked.animation, preset: picked.preset })
               }} />
             </label>
-            <label style={{ display: 'grid', gap: 8 }}>One-shot hold (procedural motions)
+            <label style={{ display: 'grid', gap: 8 }}><span>One-shot hold<SettingsHelp label="One-shot hold help">Clip animations finish naturally. This hold applies to procedural motions when played once.</SettingsHelp></span>
               <SecondsInput valueMs={selEntry.durationMs ?? 5000} onCommit={durationMs => {
                 if (sel.phase === 'mains') setMainEntry(sel.state, sel.index, { durationMs })
                 else if (sel.phase === 'occasionals') updateOccasional(sel.state, sel.index, { durationMs })
                 else updateEntry(sel.state, sel.phase, sel.index, { durationMs })
               }} />
-              <span style={muted}>Clip animations finish naturally. This hold applies to procedural motions when played once.</span>
             </label>
             {sel.phase === 'mains' && (() => {
               const mains = current.states[sel.state].mains
@@ -493,14 +506,21 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
             )}
             {sel.phase === 'occasionals' && (
               <label style={{ display: 'grid', gap: 8 }}>Timing
-                <span style={{ ...muted, display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>every
+                <span className="behavior-timing-interval" style={muted}>Every
                   <input aria-label="Minimum seconds" type="number" min={5} max={3600} value={(selEntry as OccasionalEntry).everyMin} onChange={e => updateOccasional(sel.state, sel.index, { everyMin: Number(e.target.value) })} style={numberInput} />
                   –<input aria-label="Maximum seconds" type="number" min={5} max={3600} value={(selEntry as OccasionalEntry).everyMax} onChange={e => updateOccasional(sel.state, sel.index, { everyMax: Number(e.target.value) })} style={numberInput} />s
-                  at {(selEntry as OccasionalEntry).chance !== undefined ? Math.round((selEntry as OccasionalEntry).chance * 100) : 0}%
-                  <input aria-label="Chance percent" type="range" min={0} max={100} step={5} value={Math.round((selEntry as OccasionalEntry).chance * 100)} onChange={e => updateOccasional(sel.state, sel.index, { chance: Number(e.target.value) / 100 })} style={{ flex: 1, minWidth: 80 }} />
+                </span>
+                <span className="behavior-chance">
+                  <input aria-label="Chance percent" type="range" min={0} max={100} step={5} value={Math.round((selEntry as OccasionalEntry).chance * 100)} onChange={e => updateOccasional(sel.state, sel.index, { chance: Number(e.target.value) / 100 })} />
+                  <output>{Math.round((selEntry as OccasionalEntry).chance * 100)}%</output>
                 </span>
               </label>
             )}
+            {behaviorTarget(selEntry.animation)
+              ? <div style={{ display: 'grid', gap: 4 }}><span>Cursor follow<SettingsHelp label="Referenced cursor follow help">Set on the entries of the referenced behavior; each one follows (or not) as it plays.</SettingsHelp></span>
+              </div>
+              : <CursorFollowEditor value={entryCursorFollow(selEntry)} custom={selEntry.follow !== undefined}
+                onChange={follow => patchEntryAt(sel, { follow })} />}
             <CompanionActionsEditor value={selEntry.companions ?? []} pets={pets} props={props} language={language} onTest={onCompanionTest}
               onChange={companions => {
                 const patch = { companions: companions.length ? companions : undefined }
@@ -515,6 +535,26 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
           </> : <span style={muted}>No entries yet — add one from any section on the left.</span>}
         </div>
       </div>
+  </div>
+}
+
+/** Eye + head cursor-follow strengths for one entry; `undefined` restores the animation's default. */
+function CursorFollowEditor({ value, custom, onChange }: { value: CursorFollow; custom: boolean; onChange: (follow: CursorFollow | undefined) => void }) {
+  const slider = (label: string, key: keyof CursorFollow, max: number) => <label style={{ display: 'grid', gap: 4 }}>
+    <span style={muted}>{label}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <input aria-label={`${label} follow strength`} type="range" min={0} max={max} step={0.1} value={value[key]}
+        onChange={e => onChange({ ...value, [key]: Number(e.target.value) })} style={{ flex: 1, minWidth: 0 }} />
+      <output style={{ minWidth: 44 }}>{value[key] > 0 ? value[key].toFixed(1) : 'Off'}</output>
+    </div>
+  </label>
+  return <div style={{ display: 'grid', gap: 8 }}>
+    <div style={{ ...row, justifyContent: 'space-between' }}>
+      <span>Cursor follow<SettingsHelp label="Cursor follow help">How strongly the pet tracks the mouse while this entry plays. 0 turns it off.{custom ? '' : ' Using the default for this animation.'}</SettingsHelp></span>
+      {custom && <button style={smallButton} onClick={() => onChange(undefined)} title="Idle and music sway follow by default; other animations look ahead">Use default</button>}
+    </div>
+    {slider('Eyes', 'eyes', MAX_GAZE_GAIN)}
+    {slider('Head', 'head', MAX_HEAD_TURN_GAIN)}
   </div>
 }
 
