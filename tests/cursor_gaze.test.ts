@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { applyGazeGain, cursorPayloadToClient, normalizeGazeGain, DEFAULT_GAZE_GAIN, MAX_GAZE_GAIN } from '../app/src/cursor-gaze'
+import { CursorActivity, applyGazeGain, cursorPayloadToClient, normalizeGazeGain, DEFAULT_GAZE_GAIN, MAX_GAZE_GAIN } from '../app/src/cursor-gaze'
 
 // Gaze must follow the global cursor even where no DOM mousemove reaches the
 // window (silhouette input regions / click-through). The Rust monitor reports
@@ -54,3 +54,20 @@ assert.equal(normalizeGazeGain(-1), 0)
 assert.equal(normalizeGazeGain(undefined), DEFAULT_GAZE_GAIN)
 assert.equal(normalizeGazeGain('junk'), DEFAULT_GAZE_GAIN)
 console.log('Cursor gaze mapping checks passed.')
+
+// Attention starts with movement, expires after three seconds, and resumes.
+const activity = new CursorActivity()
+activity.observe('native', 10, 20, 0)
+assert.equal(activity.isActive(0), false)
+activity.observe('native', 11, 20, 100)
+assert.equal(activity.isActive(3099), true)
+activity.observe('native', 11, 20, 3099)
+assert.equal(activity.isActive(3100), false)
+activity.observe('native', 11, 21, 3200)
+assert.equal(activity.isActive(3200), true)
+// DOM and native coordinates have separate baselines (DPI units can differ).
+activity.observe('dom', 100, 200, 6200)
+assert.equal(activity.isActive(6200), false)
+activity.observe('dom', 101, 200, 6300)
+assert.equal(activity.isActive(6300), true)
+assert.equal(activity.isActive(10000), false)

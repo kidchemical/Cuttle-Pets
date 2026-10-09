@@ -53,3 +53,20 @@ export function applyGazeGain(target: Vec3Like, center: Vec3Like, gain: number):
     z: center.z + (target.z - center.z) * gain,
   }
 }
+
+/** Actual cursor movement grants a short attention window, independent of behavior. */
+export class CursorActivity {
+  private positions = new Map<string, { x: number; y: number }>()
+  private lastMovement = -Infinity
+
+  observe(source: string, x: number, y: number, now: number): void {
+    const previous = this.positions.get(source)
+    this.positions.set(source, { x, y })
+    // The first sample establishes position; stationary polling isn't activity.
+    if (previous && (x !== previous.x || y !== previous.y)) this.lastMovement = now
+  }
+
+  isActive(now: number): boolean {
+    return now - this.lastMovement < 3000
+  }
+}

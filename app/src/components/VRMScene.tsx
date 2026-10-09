@@ -1,6 +1,6 @@
 import { alphaInputRegions } from '../input-regions'
 import { createExitShutdown } from '../exit-shutdown'
-import { cursorPayloadToClient, DEFAULT_GAZE_GAIN, type CursorPositionPayload } from '../cursor-gaze'
+import { CursorActivity, cursorPayloadToClient, DEFAULT_GAZE_GAIN, type CursorPositionPayload } from '../cursor-gaze'
 import { intersectAnimatedModel } from '../mesh-hit-test'
 import { FramePacer } from '../frame-pacer'
 import { DEFAULT_ANIMATIONS, proceduralSpeed, type AnimationSettings } from '../animation-settings'
@@ -935,6 +935,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     const mouse = new THREE.Vector2(0, 0)
     // Last cursor position and the last time anything moved the pet (idle frame cap).
     const lastCursor = { x: NaN, y: NaN }
+    const cursorActivity = new CursorActivity()
     let lastActivity = performance.now()
     // Damped idle head-turn angles (radians); eased back to neutral whenever
     // the pet isn't idle so dances and actions own the head.
@@ -945,7 +946,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
 
     /** Effective eye/head follow this frame (mouse tracking only). */
     function currentFollow(): CursorFollow {
-      if (trackingModeRef.current !== 'mouse') return { eyes: 0, head: 0 }
+      if (trackingModeRef.current !== 'mouse' || !cursorActivity.isActive(performance.now())) return { eyes: 0, head: 0 }
       const entry = cursorFollowRef.current?.()
       if (entry) return entry
       // No behavior entry playing: follow only while nothing else drives the
@@ -1015,6 +1016,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
       }
     }
     function onMouseMove(e: MouseEvent) {
+      cursorActivity.observe('dom', e.screenX, e.screenY, performance.now())
       updateGazeFromClient(e.clientX, e.clientY)
     }
     // Listen on both window and document to handle transparent window cases
@@ -1025,6 +1027,7 @@ export const VRMScene = forwardRef<VRMSceneHandle, VRMSceneProps>(function VRMSc
     // silhouette input regions). Pass-through ignores these events (its gate
     // is the input region), so this only moves the gaze.
     const unlistenGaze = listen<CursorPositionPayload>('cursor-position', (event) => {
+      cursorActivity.observe('native', event.payload.x, event.payload.y, performance.now())
       const { clientX, clientY } = cursorPayloadToClient(
         event.payload,
         window.innerWidth,
