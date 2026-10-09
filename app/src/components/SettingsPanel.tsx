@@ -1,4 +1,5 @@
 import { SettingsHelp } from './SettingsHelp'
+import { SettingsProfiles } from './SettingsProfiles'
 import { useFileDrop, singleModelPath } from '../hooks/useFileDrop'
 import { FileDropHint } from './FileDropHint'
 import { labelStyle, sectionStyle, selectStyle } from './settings-styles'
@@ -38,6 +39,8 @@ interface DanceItem {
 
 interface SettingsPanelProps {
   standalone?: boolean
+  profileSettings: Record<string, any>
+  onLoadProfile: (settings: Record<string, any>) => void
   animationSettings: AnimationSettings
   onAnimationSettingsChange: (value: AnimationSettings) => void
   onAnimationPreview?: (id: string, preset?: DancePreset, mode?: 'once' | 'loop', durationMs?: number, source?: BehaviorEntryLocation) => void
@@ -147,7 +150,7 @@ const QWEN_MODELS = [
 ]
 
 export function SettingsPanel({
-  standalone = false, animationSettings, onAnimationSettingsChange, onAnimationPreview, onAnimationStop, onBubblePreview,
+  standalone = false, profileSettings, onLoadProfile, animationSettings, onAnimationSettingsChange, onAnimationPreview, onAnimationStop, onBubblePreview,
   musicSettings, headphoneFit, musicEnabled, onMusicEnabledChange, onMusicSettingsChange, onHeadphoneFitChange, onMusicPreview,
   visible, onClose, currentModel, onModelChange,
   hideUI, onHideUIChange,
@@ -506,6 +509,8 @@ export function SettingsPanel({
             </button>}
           </div>
         </div>
+
+        <SettingsProfiles settings={profileSettings} onLoad={onLoadProfile} language={language} />
 
         {/* Tabs */}
         <nav className="settings-tabs" aria-label="Settings sections" style={tabBarStyle}>

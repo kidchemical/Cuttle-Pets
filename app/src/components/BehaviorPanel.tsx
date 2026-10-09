@@ -1,9 +1,9 @@
 import { SettingsHelp } from './SettingsHelp'
 import { useEffect, useRef, useState } from 'react'
-import { Play, Repeat, Square, Plus, Trash2, Download, Upload, Save, FlaskConical, Eye } from 'lucide-react'
+import { Play, Repeat, Square, Plus, Trash2, FlaskConical, Eye } from 'lucide-react'
 import {
   BEHAVIOR_STATES, EMOTION_OPTIONS, RANDOM_ACTION, RANDOM_EMOTION, MAX_MAINS, animationCatalog, animationLabel,
-  behaviorTarget, entryCursorFollow, normalizeProfile, normalizeReaction, defaultBehaviorProfile, exampleReaction,
+  behaviorTarget, entryCursorFollow, normalizeReaction, defaultBehaviorProfile, exampleReaction,
   slugifyReactionId, editReactionId, isValidReactionParamName, describeReaction, reactionCliExample,
   type AnimationOption, type BehaviorEntry, type BehaviorEntryLocation, type BehaviorSettings, type BehaviorStateId,
   type CursorFollow, type CustomReaction, type OccasionalEntry, type ReactionParam, type StateBehavior, type WeightedEntry,
@@ -97,10 +97,8 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
   }))]
   const current = settings.current
   const reactions = settings.reactions ?? []
-  const [importError, setImportError] = useState('')
   const [reactionMsg, setReactionMsg] = useState('')
   const [testingId, setTestingId] = useState<string | null>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
   /** Inspector selection: one entry in the state/phase list below. */
   const [selected, setSelected] = useState<{ state: BehaviorStateId; phase: EntryPhase; index: number } | null>(null)
 
@@ -265,39 +263,6 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
     else onPreview?.(entry.animation, entry.preset, 'once', entry.durationMs)
   }
 
-  const saveProfile = () => {
-    const name = current.name.trim() || 'Untitled'
-    const snapshot = normalizeProfile(clone({ ...current, name }), name)
-    const profiles = settings.profiles.filter(p => p.name !== snapshot.name)
-    onChange({ ...settings, current: snapshot, profiles: [...profiles, snapshot].slice(-20) })
-  }
-  const loadProfile = (name: string) => {
-    const saved = settings.profiles.find(p => p.name === name)
-    if (saved) onChange({ ...settings, current: clone(saved) })
-  }
-  const deleteProfile = (name: string) => {
-    onChange({ ...settings, profiles: settings.profiles.filter(p => p.name !== name) })
-  }
-  const exportProfile = () => {
-    const blob = new Blob([JSON.stringify(current, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${current.name.trim() || 'behavior'}.behavior.json`
-    link.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-  }
-  const importProfile = async (file: File) => {
-    setImportError('')
-    try {
-      const parsed = JSON.parse(await file.text())
-      const profile = normalizeProfile(parsed?.current ?? parsed, file.name.replace(/\.behavior\.json$/i, '').slice(0, 60) || 'Imported')
-      onChange({ ...settings, current: profile })
-    } catch {
-      setImportError('That file is not a valid behavior profile.')
-    }
-  }
-
   // Inspector selection: the explicit choice when still valid, else the topmost entry.
   const selValid = selected && phaseEntries(selected.state, selected.phase)[selected.index] !== undefined ? selected : null
   const selFallback = (() => {
@@ -316,22 +281,9 @@ export function BehaviorPanel({ settings, onChange, customDances, statusText, st
       <span aria-hidden style={{ width: 8, height: 8, borderRadius: '50%', background: '#7fe08a', display: 'inline-block' }} />
       <span>Now: <strong>{statusText}</strong></span>
     </div>}
-    <div style={{ ...row, background: '#1c2330', border: '1px solid #39465c', borderRadius: 8, padding: 12 }}>
-      <input aria-label="Profile name" value={current.name} onChange={e => patchCurrent(profile => ({ ...profile, name: e.target.value.slice(0, 60) }))} style={{ flex: '1 1 140px', minWidth: 0 }} />
-      <button style={smallButton} onClick={saveProfile} title="Save the current setup as a named profile"><Save size={13} style={{ verticalAlign: -2 }} /> Save profile</button>
-      <button style={smallButton} onClick={() => patchCurrent(() => defaultBehaviorProfile())} title="Reset the editor to the default setup">Reset to default</button>
-      <button style={smallButton} onClick={exportProfile} title="Download this profile as a JSON file to share"><Download size={13} style={{ verticalAlign: -2 }} /> Export</button>
-      <button style={smallButton} onClick={() => fileRef.current?.click()} title="Load a profile from a shared JSON file"><Upload size={13} style={{ verticalAlign: -2 }} /> Import</button>
-      <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={e => { const file = e.target.files?.[0]; if (file) void importProfile(file); e.target.value = '' }} />
+    <div style={row}>
+      <button style={smallButton} onClick={() => patchCurrent(() => defaultBehaviorProfile())} title="Reset behavior rules to their defaults">Reset behavior to default</button>
     </div>
-    {importError && <div role="alert" style={{ color: '#ff9d9d' }}>{importError}</div>}
-    {settings.profiles.length > 0 && <div style={row}>
-      <span style={muted}>Saved profiles:</span>
-      {settings.profiles.map(profile => <span key={profile.name} style={{ ...row, gap: 4, background: '#262c38', borderRadius: 7, padding: '3px 4px 3px 9px', border: '1px solid #505665' }}>
-        <button style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', padding: 0 }} onClick={() => loadProfile(profile.name)} title={`Load ${profile.name}`}>{profile.name}</button>
-        <button style={{ background: 'none', border: 'none', color: '#adb5c8', cursor: 'pointer', padding: '0 4px' }} onClick={() => deleteProfile(profile.name)} title={`Delete ${profile.name}`} aria-label={`Delete ${profile.name}`}><Trash2 size={13} /></button>
-      </span>)}
-    </div>}
 
     <label style={{ ...row, cursor: 'pointer' }}>
       <input type="checkbox" checked={settings.enabled} onChange={e => onChange({ ...settings, enabled: e.target.checked })} />

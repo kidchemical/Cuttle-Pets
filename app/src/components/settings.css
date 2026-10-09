@@ -14,7 +14,7 @@
 .pet-settings-window .settings-shell {
   display: grid !important;
   grid-template-columns: 152px minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   padding: 0 !important;
   background: var(--settings-bg) !important;
   border: 0 !important;
@@ -31,6 +31,24 @@
   cursor: default !important;
 }
 .settings-caption { margin: 4px 0 0; font-size: 12px; color: var(--settings-muted); }
+.settings-profile-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--settings-border);
+  background: #1c2330;
+}
+.settings-profile-label { font-size: 12px; font-weight: 600; color: var(--settings-muted); }
+.settings-profile-more { position: relative; }
+.settings-profile-more summary { display: flex; align-items: center; cursor: pointer; list-style: none; color: var(--settings-muted); }
+.settings-profile-more summary::-webkit-details-marker { display: none; }
+.settings-profile-menu { position: absolute; right: 0; top: 25px; z-index: 20; display: grid; gap: 5px; padding: 6px; border: 1px solid var(--settings-border); border-radius: 8px; background: #202838; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+.settings-profile-menu button { justify-content: flex-start; }
+.settings-profile-message { flex-basis: 100%; color: var(--settings-muted); font-size: 11px; }
+.pet-settings-window .settings-profile-toolbar { grid-column: 1 / -1; padding: 8px 24px; }
+.pet-settings-window .settings-profile-message { flex-basis: auto; }
 .pet-settings-window .settings-tabs {
   display: flex !important;
   flex-direction: column;

@@ -35,9 +35,7 @@ apply live and save automatically; profile Save is an intentional snapshot.
 Suggested header layout:
 
 ```text
-Profiles  [Current setup                     ▾]  [Load] [Save]  [⋯]
-                                                               Import bundle
-                                                               Export bundle
+Profiles  [Choose a profile… ▾]  [Load] [Save] [Export] [Import] [⋯]
 ```
 
 The profile menu also provides Rename and Delete. Save prompts for a profile
@@ -209,7 +207,7 @@ migration must not alter the live setup or delete user assets.
 5. **Behavior migration and UX cleanup.** Migrate old Behavior profiles
    idempotently, replace their local-only controls with the unified profile
    flow, and update user help/docs with the distinction between Save, Load,
-   Export ZIP, and Import ZIP.
+   Export, and Import.
 
 Keep each phase reviewable. Do not combine this feature with unrelated asset
 library redesign or remote profile hosting.

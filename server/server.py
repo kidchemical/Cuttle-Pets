@@ -46,6 +46,7 @@ from flask import Flask, Response, jsonify, request, send_file
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bridge import connection, music, beats
+import settings_profiles
 import screen as screen_monitor
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -88,6 +89,14 @@ ACTIVITY_MAP: dict[str, dict[str, Any]] = {
 }
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = settings_profiles.MAX_PROFILE_BYTES + 16 * 1024 * 1024
+app.register_blueprint(settings_profiles.create_blueprint(
+    lambda: DATA_DIR,
+    lambda: {"models": MODELS_DIR, "project_models": REPO_ROOT / "models",
+             "dances": DANCES_DIR, "audio": AUDIO_DIR, "pets": PETS_DIR, "props": PROPS_DIR,
+             "public": APP_PUBLIC},
+    lambda: _app_version(),
+))
 
 
 # ── CORS ───────────────────────────────────────────────────────────────────
