@@ -6,7 +6,7 @@
 
 When Cuttle works, she types. When it's done, she cheers. When tests go green, she tells you.
 
-[Quick start](#quick-start) · [What she does](#what-she-does) · [Any agent can drive her](#any-agent-can-drive-her) · [Cuttle bridge](#cuttle-bridge) · [Control API](#control-api) · [Models & animation](#models--animation) · [Settings](#settings) · [Music & beat tracking](#music--beat-tracking) · [Development](#development)
+[What she does](#what-she-does) · [Quick start](#quick-start) · [Any agent can drive her](#any-agent-can-drive-her) · [Architecture](#architecture) · [Control API](#control-api) · [Models & animation](#models--animation) · [Settings](#settings) · [Music & beat tracking](#music--beat-tracking) · [Windows](#windows) · [Development](#development)
 
 [![MIT license](https://img.shields.io/badge/license-MIT-7048e8.svg)](LICENSE.txt) [![Linux | Windows | macOS](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-191b45.svg)](#requirements) [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3b82f6.svg)](#requirements) [![Tauri 2](https://img.shields.io/badge/tauri-2-2fa37a.svg)](#requirements)
 
@@ -122,21 +122,6 @@ curl -X POST http://127.0.0.1:8790/pet/event \
 
 CLI exit codes are script-safe (`0` on success), so agents can chain commands reliably. The Cuttle bridge below is just one opinionated driver — bring your own for any other harness.
 
-## Cuttle bridge
-
-The bridge watches **all chats on your Cuttle account** (batched, every 3 seconds) and turns activity into reactions: thinking → ponders, streaming → types, done → celebrates, then back to idle. It's an activity indicator — it never reads or speaks full replies.
-
-```bash
-bash start_pet.sh   # includes the bridge
-```
-
-Then open the pet's **Settings → Cuttle → Connect to Cuttle** and sign in once with your normal Cuttle username and password. The pet keeps a separate login session (owner-only file, token not password) and reconnects itself after reboots. Restrict to specific chats when you want:
-
-```bash
-python3 bridge/bridge.py --session 868 --session 869 --verbose
-CUTTLE_PET_BRIDGE=0 bash start_pet.sh   # no bridge, direct CLI control only
-```
-
 ## Architecture
 
 ```mermaid
@@ -159,6 +144,21 @@ flowchart LR
 | `bridge/` | Polls Cuttle live-status and drives pet reactions |
 | `~/.cuttle-pet/` | Your data (never shipped): `models/` (`.vrm` library), `pets/` + `props/` (imported GLBs), `settings.json` |
 | `scripts/autostart.py` | Linux desktop-login autostart |
+
+## Cuttle bridge
+
+The bridge watches **all chats on your Cuttle account** (batched, every 3 seconds) and turns activity into reactions: thinking → ponders, streaming → types, done → celebrates, then back to idle. It's an activity indicator — it never reads or speaks full replies.
+
+```bash
+bash start_pet.sh   # includes the bridge
+```
+
+Then open the pet's **Settings → Cuttle → Connect to Cuttle** and sign in once with your normal Cuttle username and password. The pet keeps a separate login session (owner-only file, token not password) and reconnects itself after reboots. Restrict to specific chats when you want:
+
+```bash
+python3 bridge/bridge.py --session 868 --session 869 --verbose
+CUTTLE_PET_BRIDGE=0 bash start_pet.sh   # no bridge, direct CLI control only
+```
 
 ## Control API
 
