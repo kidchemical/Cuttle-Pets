@@ -1,4 +1,6 @@
-/* Shared settings tokens also apply to nested music and connection controls. */
+/* Shared settings tokens also apply to nested music and connection controls.
+   Each skin (chosen in the Appearance tab) overrides these via the
+   `data-settings-skin` attribute; keep every color routed through a variable. */
 .pet-settings-window, .pet-settings-panel {
   color-scheme: dark;
   --settings-bg: #171c26;
@@ -7,7 +9,18 @@
   --settings-text: #edf2fb;
   --settings-muted: #aebbd0;
   --settings-accent: #84b6ff;
-  font-family: "Segoe UI", system-ui, sans-serif;
+  --settings-accent-2: #84b6ff;
+  --settings-chrome: #1c2330;
+  --settings-root: #1b1d25;
+  --settings-panel: rgba(30, 30, 40, 0.95);
+  --settings-tab-active-bg: #304c75;
+  --settings-tab-active-text: #ffffff;
+  --settings-option-bg: #202838;
+  --settings-option-text: #edf2fb;
+  --settings-placeholder: #98a8c0;
+  --settings-scrollbar: #52627c;
+  --settings-font: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--settings-font);
   font-size: 14px;
   line-height: 1.5;
 }
@@ -27,7 +40,7 @@
   padding: 20px 24px;
   margin: 0 !important;
   border-bottom: 1px solid var(--settings-border);
-  background: #1c2330;
+  background: var(--settings-chrome);
   cursor: default !important;
 }
 .settings-caption { margin: 4px 0 0; font-size: 12px; color: var(--settings-muted); }
@@ -38,14 +51,9 @@
   gap: 7px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--settings-border);
-  background: #1c2330;
+  background: var(--settings-chrome);
 }
 .settings-profile-label { font-size: 12px; font-weight: 600; color: var(--settings-muted); }
-.settings-profile-more { position: relative; }
-.settings-profile-more summary { display: flex; align-items: center; cursor: pointer; list-style: none; color: var(--settings-muted); }
-.settings-profile-more summary::-webkit-details-marker { display: none; }
-.settings-profile-menu { position: absolute; right: 0; top: 25px; z-index: 20; display: grid; gap: 5px; padding: 6px; border: 1px solid var(--settings-border); border-radius: 8px; background: #202838; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
-.settings-profile-menu button { justify-content: flex-start; }
 .settings-profile-message { flex-basis: 100%; color: var(--settings-muted); font-size: 11px; }
 .pet-settings-window .settings-profile-toolbar { grid-column: 1 / -1; padding: 8px 24px; }
 .pet-settings-window .settings-profile-message { flex-basis: auto; }
@@ -56,7 +64,7 @@
   gap: 5px !important;
   padding: 16px 10px !important;
   margin: 0 !important;
-  background: #1c2330 !important;
+  background: var(--settings-chrome) !important;
   border-right: 1px solid var(--settings-border);
   border-radius: 0 !important;
   overflow-y: auto;
@@ -71,8 +79,8 @@
   background: transparent !important;
 }
 .pet-settings-window .settings-tab[aria-current="page"] {
-  color: #fff !important;
-  background: #304c75 !important;
+  color: var(--settings-tab-active-text) !important;
+  background: var(--settings-tab-active-bg) !important;
   box-shadow: inset 3px 0 var(--settings-accent);
 }
 .pet-settings-window .settings-content {
@@ -84,7 +92,7 @@
 .pet-settings-window .settings-version-footer {
   grid-column: 1 / -1;
   border-top: 1px solid var(--settings-border);
-  background: #1c2330;
+  background: var(--settings-chrome);
   padding: 8px 24px !important;
   white-space: nowrap;
 }
@@ -113,11 +121,11 @@
 }
 :is(.pet-settings-window, .pet-settings-panel) select { min-height: 38px; padding: 6px 10px !important; }
 :is(.pet-settings-window, .pet-settings-panel) select option {
-  color: #edf2fb !important;
-  background: #202838 !important;
+  color: var(--settings-option-text) !important;
+  background: var(--settings-option-bg) !important;
 }
 :is(.pet-settings-window, .pet-settings-panel) :is(textarea, input[type="text"], input[type="password"]) { padding: 10px !important; }
-:is(.pet-settings-window, .pet-settings-panel) ::placeholder { color: #98a8c0; opacity: 1; }
+:is(.pet-settings-window, .pet-settings-panel) ::placeholder { color: var(--settings-placeholder); opacity: 1; }
 :is(.pet-settings-window, .pet-settings-panel) input[type="range"] { accent-color: var(--settings-accent) !important; cursor: pointer; }
 :is(.pet-settings-window, .pet-settings-panel) input[type="checkbox"] { accent-color: var(--settings-accent); margin-right: 7px; }
 :is(.pet-settings-window, .pet-settings-panel) button:not(.settings-tab) {
@@ -132,7 +140,7 @@
 :is(.pet-settings-window, .pet-settings-panel) button:hover:not(:disabled) { filter: brightness(1.16); }
 :is(.pet-settings-window, .pet-settings-panel) button:disabled { opacity: .5; cursor: not-allowed; }
 :is(.pet-settings-window, .pet-settings-panel) :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--settings-accent) !important; outline-offset: 3px; }
-:is(.pet-settings-window, .pet-settings-panel) * { scrollbar-width: thin; scrollbar-color: #52627c transparent; }
+:is(.pet-settings-window, .pet-settings-panel) * { scrollbar-width: thin; scrollbar-color: var(--settings-scrollbar) transparent; }
 /* Keep the animations-list scrollbar off the per-row transport buttons.
    The padding is the real fix (works where scrollbar-gutter is unsupported);
    the gutter just avoids a layout shift where it is supported. */
@@ -173,7 +181,7 @@
 :is(.pet-settings-window, .pet-settings-panel) button.settings-info {
   display: inline-flex; vertical-align: middle; align-items: center; justify-content: center;
   margin-left: 6px; padding: 2px !important; width: 22px; height: 22px;
-  border: 0 !important; background: transparent !important; color: #aebbd0;
+  border: 0 !important; background: transparent !important; color: var(--settings-muted);
   flex: 0 0 auto;
 }
 .settings-tooltip {
@@ -186,3 +194,119 @@
 .behavior-chance { display: flex; gap: 12px; align-items: center; min-width: 0; }
 .behavior-chance output { flex: 0 0 4ch; text-align: right; white-space: nowrap; }
 .behavior-chance input { flex: 1; min-width: 0; width: 0; }
+
+/* ── Skins (Appearance tab) ────────────────────────────────────────────────
+   Static palettes only; the settings webview must not run keyframe animations
+   (a second animating webview competes with the pet renderer for the GPU). */
+.pet-settings-window[data-settings-skin="midnight"], .pet-settings-panel[data-settings-skin="midnight"] {
+  --settings-bg: #0f1117;
+  --settings-surface: #171a24;
+  --settings-border: #2a3040;
+  --settings-text: #e6ebf5;
+  --settings-muted: #8b94a8;
+  --settings-accent: #8b5cf6;
+  --settings-accent-2: #6d7cff;
+  --settings-chrome: #141824;
+  --settings-root: #0b0d13;
+  --settings-panel: rgba(18, 20, 28, 0.95);
+  --settings-tab-active-bg: #3b2d63;
+  --settings-tab-active-text: #ffffff;
+  --settings-option-bg: #171a24;
+  --settings-option-text: #e6ebf5;
+  --settings-placeholder: #7c869c;
+  --settings-scrollbar: #3a4256;
+}
+
+.pet-settings-window[data-settings-skin="glitch"], .pet-settings-panel[data-settings-skin="glitch"] {
+  --settings-bg: #0b0b10;
+  --settings-surface: #12121a;
+  --settings-border: #2a2a3c;
+  --settings-text: #eaeaf5;
+  --settings-muted: #8e8ea8;
+  --settings-accent: #ff2a6d;
+  --settings-accent-2: #05b8c8;
+  --settings-chrome: #08080c;
+  --settings-root: #06060a;
+  --settings-panel: rgba(11, 11, 16, 0.94);
+  --settings-tab-active-bg: #3a0f22;
+  --settings-tab-active-text: #ffffff;
+  --settings-option-bg: #12121a;
+  --settings-option-text: #eaeaf5;
+  --settings-placeholder: #7c7c96;
+  --settings-scrollbar: #3a2a3c;
+}
+/* Chromatic split on headings, matching the Cuttle Glitch theme. */
+.pet-settings-window[data-settings-skin="glitch"] :is(.settings-header h1, .settings-section-heading h2),
+.pet-settings-panel[data-settings-skin="glitch"] :is(.settings-header h1, .settings-section-heading h2) {
+  filter: drop-shadow(-1.5px 0 rgba(255, 42, 109, 0.75)) drop-shadow(1.5px 0 rgba(5, 217, 232, 0.75));
+}
+/* Static scanlines over the content column. */
+.pet-settings-window[data-settings-skin="glitch"] .settings-content,
+.pet-settings-panel[data-settings-skin="glitch"] .settings-content {
+  background-image: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 3px);
+}
+.pet-settings-window[data-settings-skin="glitch"] .settings-tab[aria-current="page"] {
+  box-shadow: inset 3px 0 var(--settings-accent-2);
+}
+
+.pet-settings-window[data-settings-skin="matrix"], .pet-settings-panel[data-settings-skin="matrix"] {
+  --settings-bg: #000a02;
+  --settings-surface: #021006;
+  --settings-border: #0e4420;
+  --settings-text: #4dff88;
+  --settings-muted: #22a84e;
+  --settings-accent: #00ff41;
+  --settings-accent-2: #00b82f;
+  --settings-chrome: #000600;
+  --settings-root: #000400;
+  --settings-panel: rgba(0, 10, 2, 0.95);
+  --settings-tab-active-bg: #06381a;
+  --settings-tab-active-text: #b6ffcb;
+  --settings-option-bg: #021006;
+  --settings-option-text: #b6ffcb;
+  --settings-placeholder: #1f8a42;
+  --settings-scrollbar: #0e4420;
+  --settings-font: 'Cascadia Code', 'Cascadia Mono', 'Fira Code', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+}
+
+.pet-settings-window[data-settings-skin="synthwave"], .pet-settings-panel[data-settings-skin="synthwave"] {
+  --settings-bg: #140a24;
+  --settings-surface: #1e1033;
+  --settings-border: #45297d;
+  --settings-text: #f3e9ff;
+  --settings-muted: #b9a3d6;
+  --settings-accent: #ff4fa3;
+  --settings-accent-2: #2de2e6;
+  --settings-chrome: #1a0f2e;
+  --settings-root: #0e0719;
+  --settings-panel: rgba(20, 10, 36, 0.95);
+  --settings-tab-active-bg: #5a2a86;
+  --settings-tab-active-text: #ffffff;
+  --settings-option-bg: #1e1033;
+  --settings-option-text: #f3e9ff;
+  --settings-placeholder: #9a86b8;
+  --settings-scrollbar: #45297d;
+}
+.pet-settings-window[data-settings-skin="synthwave"] :is(.settings-header h1, .settings-section-heading h2),
+.pet-settings-panel[data-settings-skin="synthwave"] :is(.settings-header h1, .settings-section-heading h2) {
+  text-shadow: 0 0 12px rgba(255, 79, 163, 0.45);
+}
+
+.pet-settings-window[data-settings-skin="nord"], .pet-settings-panel[data-settings-skin="nord"] {
+  --settings-bg: #2e3440;
+  --settings-surface: #3b4252;
+  --settings-border: #4c566a;
+  --settings-text: #eceff4;
+  --settings-muted: #aab3c4;
+  --settings-accent: #88c0d0;
+  --settings-accent-2: #81a1c1;
+  --settings-chrome: #292e39;
+  --settings-root: #242933;
+  --settings-panel: rgba(46, 52, 64, 0.95);
+  --settings-tab-active-bg: #434c5e;
+  --settings-tab-active-text: #eceff4;
+  --settings-option-bg: #3b4252;
+  --settings-option-text: #eceff4;
+  --settings-placeholder: #8892a4;
+  --settings-scrollbar: #4c566a;
+}

@@ -52,7 +52,7 @@ with sync_playwright() as p:
     assert status.bounding_box()['y'] < page.get_by_text('Imported Motion', exact=True).bounding_box()['y']
     page.get_by_role('button', name='Behavior', exact=True).click()
     enabled = page.get_by_role('checkbox', name='Behavior engine enabled', exact=False)
-    assert page.get_by_role('button', name='Save profile', exact=True).bounding_box()['y'] < enabled.bounding_box()['y']
+    assert page.get_by_role('button', name='Save', exact=True).bounding_box()['y'] < enabled.bounding_box()['y']
     with page.expect_response(lambda r: r.url.endswith('/settings') and r.request.method == 'POST'):
         page.get_by_label('Animation or behavior', exact=True).select_option('behavior:dancing')
     assert saved['behaviorSettings']['current']['states']['idle']['mains'][0]['animation'] == 'behavior:dancing'
@@ -60,7 +60,7 @@ with sync_playwright() as p:
     peer.wait_for_function("commands.some(c => c.type==='animation' && c.id==='behavior:dancing' && c.mode==='once')")
     page.get_by_role('button', name='Stop preview', exact=True).click()
     peer.wait_for_function("commands.some(c => c.type==='stop')")
-    page.get_by_role('button', name='Reset to default', exact=True).click()
+    page.get_by_role('button', name='Reset behavior to default', exact=True).click()
     peer.evaluate("""() => bus.postMessage({name:'pet-status',payload:{state:'music',actionId:'idle',danceId:null,working:false,sipping:false,musicMotion:true,behaviorEntries:[{state:'music',phase:'mains',index:0}]}})""")
     main = page.locator('[data-entry="music:mains:0"]')
     page.wait_for_function("document.querySelector('[data-entry=\"music:mains:0\"]')?.dataset.active === 'true'")

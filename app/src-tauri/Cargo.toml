@@ -1,6 +1,6 @@
 [package]
 name = "cuttle-pets"
-version = "0.12.1"
+version = "0.15.0"
 description = "Cuttle Pets Desktop Pet"
 authors = []
 edition = "2021"

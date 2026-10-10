@@ -17,31 +17,28 @@ apply live and save automatically; profile Save is an intentional snapshot.
 - Put a compact **Profiles** control in the Settings window header, visible on
   every tab. Profiles affect the whole app, so their controls should not look
   like a feature owned by General or Behavior.
-- Use one vocabulary everywhere: **Save** creates or updates a named local
-  snapshot; **Load** applies a selected local snapshot; **Export** creates a
-  portable bundle; **Import** adds a bundle to the local profile list.
-- Import installs and validates assets, then adds the profile to the list. It
-  does not silently replace the current setup. The user selects it and presses
-  **Load**. Show the installed profile and a clear next Load action when import
-  finishes.
-- Local Save stores settings plus stable references to the existing local
-  assets. Export packages those referenced assets. Do not duplicate binary
-  assets for every local Save.
-- Export only assets needed by the selected profile; do not bundle unrelated
-  content from the sender's entire asset library.
+- Use one vocabulary everywhere: **Save** writes the current setup to a
+  portable `.cuttleprofile` file; **Load** reads one and applies it. The app
+  keeps no profile library of its own, so there is no second, server-side
+  Save/Export pair to reconcile.
+- Save always packages the assets the current setup depends on, so the file is
+  self-contained and shareable. Loading installs any missing assets into the
+  local libraries, remaps the profile's asset references to those local files,
+  and applies the settings live as one operation.
 - Loading a profile replaces the profile-managed settings as one operation.
   Fields intentionally excluded from profiles remain as they were.
 
 Suggested header layout:
 
 ```text
-Profiles  [Choose a profile… ▾]  [Load] [Save] [Export] [Import] [⋯]
+Profiles  [Save] [Load]
 ```
 
-The profile menu also provides Rename and Delete. Save prompts for a profile
-name, prefilled from the active profile when updating one. Saving under an
-existing name asks whether to replace it. Load is disabled until a profile is
-selected. Delete only removes the local snapshot; it never deletes assets.
+Save prompts for a profile name, then asks where to store the bundle with the
+OS save dialog (a browser download in the web build). Load opens a bundle,
+shows a review summary (settings categories, asset counts and sizes, reused
+versus newly installed files), and asks for confirmation before installing
+anything.
 
 ## Profile contents
 
@@ -59,7 +56,7 @@ references needed by those settings.
 
 Exclude Cuttle login/session data, API keys and voice-provider credentials,
 workspace persona files, screen-observation/capture preferences, operating
-system window geometry, and the saved profile library itself. Do not package
+system window geometry, and any retired in-app profile library. Do not package
 built-in application assets; the receiving app supplies those. Respect native
 permissions on the receiving device even if a profile enables a feature that
 needs them.
@@ -121,13 +118,14 @@ global string replacement on arbitrary setting text.
   profile load normalizes a complete snapshot, then publishes and persists one
   patch for all profile-managed keys so the pet and Settings window stay in
   sync.
-- Store local profile definitions separately under the app's user data
-  directory, for example `profiles/<profile-id>.json`. These files contain the
-  snapshot and references into the shared local asset library, not another
-  copy of every asset. Keep this user data outside the app bundle.
-- Use a stable local profile ID; display names are editable and need not be
-  unique. On name conflicts during import, offer a rename or an explicit
-  replace. Replacing a profile definition must not remove its old assets.
+- Do not store profile definitions in the app. The profile exists only as the
+  portable bundle the user saves and loads. The server stages imports under the
+  user data directory and installs referenced assets into the shared local
+  libraries; it keeps no snapshot library and no second copy of every asset.
+- Use stable bundle-local asset IDs inside the bundle; display names live only
+  in the manifest and the downloaded filename. Loading never overwrites or
+  deletes existing user assets, so a re-downloaded file cannot silently replace
+  a user's content.
 - Keep imported assets in the existing typed libraries (`models`, `dances`,
   `audio`, `pets`, `props`) so current runtime loaders continue to work. Bundle
   references are translated to these local records during import.
@@ -154,38 +152,25 @@ files:
 4. Reuse an installed file with the same digest. If a filename is already in
    use for different content, install under a unique safe filename and rewrite
    the profile reference. Never overwrite or delete existing user assets.
-5. Commit installed assets and the local profile only after validation passes.
-   On failure, clean up staging and any files created by that import; leave
-   settings, existing profiles, and existing assets unchanged.
+5. Commit installed assets only after validation passes. On failure, clean up
+   staging and any files created by that import; leave settings, existing
+   assets, and the current setup unchanged.
 
-Show a review summary before import commits: profile name, settings categories,
-asset counts/sizes, reused files, and newly installed files. Clearly state that
-the profile will be added to the list and will not take effect until loaded.
+Show a review summary before an import commits: profile name, settings
+categories, asset counts/sizes, reused files, and newly installed files. Clearly
+state that required assets will be installed and the profile applied.
 Set explicit compressed and expanded size limits in the API and surface a
 readable error when either is exceeded.
 
-## Existing Behavior profile migration
+## Legacy Behavior profiles
 
-The current Behavior profile format stores only behavior states. Its name is
-clickable to load (which is why a separate Load control is hard to find),
-Export writes only the current behavior profile, and Import replaces the
-editor's current behavior profile without adding it to the saved list. Behavior
-profiles also omit the engine-enabled flag and custom reaction library.
-
-On first upgrade to unified profiles, preserve every existing named Behavior
-profile by migrating it into the new local profile list. Build each migrated
-full snapshot from the user's then-current settings, replacing only its
-Behavior state definition with the saved Behavior profile. Give it a visible
-name such as `Behavior — <old name>` and mark it as migrated in metadata. This
-preserves the old behavior-only effect when loaded while giving the new profile
-well-defined values for the other settings. Preserve the active Behavior
-configuration and reactions. Make migration idempotent so interruption or
-relaunch cannot create duplicates or lose the old profiles.
-
-After migration, remove the redundant Behavior-specific profile controls and
-legacy list once the new local profile records are safely written. Keep existing
-JSON behavior normalization for imported/older settings. The one-time
-migration must not alter the live setup or delete user assets.
+The old Behavior tab had its own local Save / Export / Import controls that
+stored behavior-only snapshots. Those controls were removed when the unified
+profile model landed. Because profiles are now ordinary files with no in-app
+library, there is nothing to migrate into: the legacy `behaviorSettings.profiles`
+list is simply no longer surfaced. Existing JSON behavior normalization stays in
+place for imported and older settings, and the live setup is never altered by
+this cleanup.
 
 ## Delivery phases
 
@@ -193,54 +178,55 @@ migration must not alter the live setup or delete user assets.
    preference and every asset reference in the current model, animation,
    Behavior/reaction, pet, and prop data. Write normalization and migration
    rules and decide archive size caps before implementing endpoints.
-2. **Local profile library.** Add versioned profile records and the header
-   selector, Save, Load, Rename, and Delete. Verify a complete setting snapshot
-   loads live and survives restart before adding ZIP support.
+2. **Profile file save/load.** Add the header Save and Load controls, the
+   versioned snapshot schema, and the export-from-current-settings path. Verify
+   a complete snapshot exported and loaded back applies live and survives
+   restart before adding asset bundling.
 3. **Asset-aware export.** Implement dependency discovery, stable bundle-local
    references, manifest generation, hashing, missing-file reporting, and ZIP
    download. Export/import a setup containing a custom VRM, custom dance and
    music, a pet, a prop, nested Behavior references, and custom reactions.
-4. **Validated import.** Add preview, staging, conflict mapping, atomic commit,
-   and registration in the local profile library. Test importing into a clean
-   data directory and loading the result without access to the sender's
-   directories.
-5. **Behavior migration and UX cleanup.** Migrate old Behavior profiles
-   idempotently, replace their local-only controls with the unified profile
-   flow, and update user help/docs with the distinction between Save, Load,
-   Export, and Import.
+4. **Validated load.** Add preview, staging, conflict mapping, atomic asset
+   install, and applying the restored settings live. Test loading into a clean
+   data directory without access to the sender's directories.
+5. **Legacy cleanup.** Retire the old Behavior-only profile controls and the
+   in-app profile library, and update user help/docs to describe Save and Load
+   as file operations.
 
 Keep each phase reviewable. Do not combine this feature with unrelated asset
 library redesign or remote profile hosting.
 
 ## Acceptance criteria
 
-- Save creates a named local profile; Load is an explicit visible action and
-  restores all included settings live without touching excluded settings.
-- A profile can be exported once and imported on a clean installation where
-  no sender-local paths or source installation are available.
-- The imported setup loads its selected custom VRM, configured pets and props,
+- Save writes a self-contained bundle of the current setup; Load restores all
+  included settings live without touching excluded settings.
+- A profile can be saved once and loaded on a clean installation where no
+  sender-local paths or source installation are available.
+- Loading a profile installs its selected custom VRM, configured pets and props,
   custom dance/audio, and every nested Behavior/reaction reference.
-- Re-importing the same ZIP is safe and does not duplicate identical asset
-  files. Name and filename conflicts never silently replace user data.
-- Invalid, corrupt, unsupported, oversized, or hostile ZIPs fail before
-  settings change; failed imports leave no partial asset/profile changes.
+- Loading the same bundle twice is safe and does not duplicate identical asset
+  files. Filename conflicts never silently replace user data.
+- Invalid, corrupt, unsupported, oversized, or hostile bundles fail before
+  settings change; failed loads leave no partial asset changes.
 - Secrets, Cuttle credentials, workspace persona content, screen-capture
-  preferences, window position, and built-in assets are absent from exports.
-- Existing Behavior profiles are preserved by a repeat-safe migration, and
-  the live setup is unchanged by migration.
+  preferences, window position, and built-in assets are absent from saved
+  profiles.
+- The retired Behavior profile list is no longer surfaced, and removing it does
+  not alter the live setup.
 - Existing ordinary setting edits still auto-save and apply immediately.
 
 ## Verification plan
 
 - Unit-test the profile allowlist, normalization, dependency walker, asset
-  reference rewrite, migration idempotence, hashes, and conflict naming.
-- API-test profile list/save/rename/delete, ZIP export/import, staged failure,
-  traversal and expansion-limit rejection, and no-partial-write behavior.
-- UI-test header controls on multiple tabs, Save/Load clarity, import review,
-  conflict resolution, progress/error states, and legacy Behavior migration.
+  reference rewrite, hashes, and conflict naming.
+- API-test bundle export from current settings, preview/commit load, staged
+  failure, traversal and expansion-limit rejection, and no-partial-write
+  behavior.
+- UI-test header controls on multiple tabs, Save/Load clarity, load review,
+  progress/error states, and that retired Behavior controls are gone.
 - Run an end-to-end round trip with a source profile and a separate empty
-  `CUTTLE_PET_DATA` directory. Stop the source server before loading the
-  imported profile to prove it has no dependency on the sender's asset paths.
+  `CUTTLE_PET_DATA` directory. Stop the source server before loading the saved
+  profile to prove it has no dependency on the sender's asset paths.
 - Verify normal live editing, multi-window Settings synchronization, offline
   settings merge-patches, existing settings migrations, and user data outside
   the app bundle remain intact.

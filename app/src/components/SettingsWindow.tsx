@@ -10,6 +10,7 @@ import { DEFAULT_MUSIC, DEFAULT_FIT, normalizeMusic, normalizeFit, modelFitKey }
 import { normalizeQualitySettings } from '../render-quality'
 import { normalizeCursorLight, normalizeGlobalLighting } from '../lighting'
 import { normalizeBubbleSettings } from '../bubble-settings'
+import { normalizeSettingsSkin } from '../settings-skins'
 import { petUrl } from '../config'
 import { requestScreenshot, sendPetCommand, subscribeWindowEvent } from '../window-sync'
 
@@ -54,38 +55,10 @@ export function SettingsWindow() {
       Object.assign(changed, patch)
       setSettings(previous => ({ ...previous, ...patch }))
     })
-    void loadSettings().then(async saved => {
+    void loadSettings().then(saved => {
       if (!active) return
-      let next = { ...saved, ...changed }
-      const behavior = normalizeBehaviorSettings(next.behaviorSettings, next.musicSettings)
-      if (behavior.profiles.length) {
-        try {
-          const response = await fetch(petUrl('/settings-profiles'))
-          if (!response.ok) throw new Error('Profile list unavailable')
-          const existing = (await response.json()).profiles as { name: string; source?: string }[]
-          for (const legacy of behavior.profiles) {
-            const baseName = `Behavior — ${legacy.name}`
-            if (existing.some(profile => profile.name === baseName && profile.source === 'behavior-migration')) continue
-            let name = baseName
-            let suffix = 2
-            while (existing.some(profile => profile.name === name)) name = `${baseName} (${suffix++})`
-            const snapshot = completeProfile({ ...next, behaviorSettings: { ...behavior, current: legacy, profiles: [] } })
-            const result = await fetch(petUrl('/settings-profiles'), {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name, settings: snapshot, source: 'behavior-migration' }),
-            })
-            if (!result.ok) throw new Error('Behavior profile migration failed')
-            existing.push({ name, source: 'behavior-migration' })
-          }
-          const migrated = { ...behavior, profiles: [] }
-          next = { ...next, behaviorSettings: migrated }
-          saveSettings({ behaviorSettings: migrated })
-        } catch (error) {
-          console.warn('Saved Behavior profiles will migrate when profile storage is available', error)
-        }
-      }
-      next = { ...next, ...changed }
-      if (active) { setSettings(next); setReady(true) }
+      setSettings({ ...saved, ...changed })
+      setReady(true)
     })
     const stopPreview = () => sendPetCommand({ type: 'music-preview', active: false })
     window.addEventListener('beforeunload', stopPreview)
@@ -173,5 +146,6 @@ export function SettingsWindow() {
     propSettings={propSettings} onPropSettingsChange={propSettings => patch({ propSettings })}
     lightingSettings={lightingSettings} onLightingSettingsChange={lighting => patch({ lighting })}
     cursorLightSettings={cursorLightSettings} onCursorLightSettingsChange={cursorLight => patch({ cursorLight })}
+    settingsSkin={normalizeSettingsSkin(settings.settingsSkin)} onSettingsSkinChange={settingsSkin => patch({ settingsSkin })}
   />
 }

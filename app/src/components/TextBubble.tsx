@@ -1,7 +1,7 @@
 import { petUrl } from '../config'
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { LipSync } from '../lip-sync'
-import { DEFAULT_BUBBLE_SETTINGS, hexToRgba, type BubbleSettings } from '../bubble-settings'
+import { DEFAULT_BUBBLE_SETTINGS, GLITCH_ACCENT, GLITCH_ACCENT_2, hexToRgba, type BubbleSettings } from '../bubble-settings'
 
 interface VrmMessage {
   playAction?: string
@@ -52,7 +52,15 @@ function getCharRate(text: string, _ttsEnabled: boolean): number {
   return Math.round(20 * ratio + 6 * (1 - ratio))
 }
 const HIDE_DELAY_MS = 2000     // delay after everything is done before hiding
+const STATUS_TEXT_MAX_CHARS = 200  // cap for status/activity text when the perf toggle is on
 const POP_DURATION_MS = 300
+
+// Glitch style: chromatic split + scanlines + an occasional jitter, borrowed
+// from the Cuttle "Glitch" theme. The per-character reveal only flickers
+// opacity (a cheap compositor property), so it stays lighter than the
+// transform-based pop-in.
+const GLITCH_TEXT_FILTER = `drop-shadow(-1.5px 0 ${hexToRgba(GLITCH_ACCENT, 0.75)}) drop-shadow(1.5px 0 ${hexToRgba(GLITCH_ACCENT_2, 0.75)})`
+const GLITCH_SCANLINES = 'repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 3px)'
 
 // Grapheme segmenter singleton
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
@@ -77,35 +85,53 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
     }
   }, [bs.scale, bs.align, bs.bottom])
 
+  const isGlitch = bs.bubbleStyle === 'glitch'
+
   const boxStyle: React.CSSProperties = useMemo(() => ({
-    background: bs.bubbleEnabled ? hexToRgba(bs.bubbleColor, bs.bubbleAlpha) : 'transparent',
-    backdropFilter: 'blur(6px)',
+    background: bs.bubbleEnabled
+      ? (isGlitch ? `${GLITCH_SCANLINES}, ${hexToRgba(bs.bubbleColor, bs.bubbleAlpha)}` : hexToRgba(bs.bubbleColor, bs.bubbleAlpha))
+      : 'transparent',
+    backdropFilter: bs.disableBubbleBlur ? 'none' : 'blur(6px)',
     borderRadius: bs.borderRadius,
-    border: bs.bubbleEnabled ? '1px solid rgba(255, 255, 255, 0.15)' : '1px solid transparent',
-    boxShadow: bs.bubbleEnabled ? '0 0 12px rgba(100, 160, 255, 0.25), 0 0 24px rgba(100, 160, 255, 0.1)' : 'none',
+    border: bs.bubbleEnabled
+      ? (isGlitch ? `1px solid ${hexToRgba(GLITCH_ACCENT_2, 0.5)}` : '1px solid rgba(255, 255, 255, 0.15)')
+      : '1px solid transparent',
+    boxShadow: bs.bubbleEnabled
+      ? (isGlitch
+        ? `0 0 14px ${hexToRgba(GLITCH_ACCENT, 0.35)}, inset 0 0 24px ${hexToRgba(GLITCH_ACCENT_2, 0.08)}`
+        : '0 0 12px rgba(100, 160, 255, 0.25), 0 0 24px rgba(100, 160, 255, 0.1)')
+      : 'none',
     padding: '4px 6px',
     height: Math.round(70 * bs.scale),
     overflowY: 'auto' as const,
     pointerEvents: 'auto',
     userSelect: 'text',
     cursor: 'text',
-  }), [bs.bubbleEnabled, bs.bubbleColor, bs.bubbleAlpha, bs.borderRadius, bs.scale])
+  }), [bs.bubbleEnabled, bs.bubbleColor, bs.bubbleAlpha, bs.borderRadius, bs.scale, bs.disableBubbleBlur, isGlitch])
 
   const textStyle: React.CSSProperties = useMemo(() => {
-    // 5x stacked shadow: 4 hard 1px outline layers + 1 wide glow, all at full slider alpha.
-    const c = hexToRgba(bs.textShadowColor, bs.textShadowIntensity)
-    return {
+    const base: React.CSSProperties = {
       color: bs.textColor,
       fontSize: bs.fontSize,
       lineHeight: 1.4,
       wordBreak: 'normal',
       overflowWrap: 'break-word',
       fontFamily: bs.fontFamily,
+    }
+    if (isGlitch) {
+      // Chromatic split on the whole block (one filter vs. per-glyph shadows)
+      // plus the skin's mostly-idle jitter.
+      return { ...base, filter: GLITCH_TEXT_FILTER, textShadow: 'none', animation: 'claw-glitch-jitter 7s steps(1) infinite' }
+    }
+    // 5x stacked shadow: 4 hard 1px outline layers + 1 wide glow, all at full slider alpha.
+    const c = hexToRgba(bs.textShadowColor, bs.textShadowIntensity)
+    return {
+      ...base,
       textShadow: bs.textShadow
         ? `-1px -1px 0 ${c}, 1px -1px 0 ${c}, -1px 1px 0 ${c}, 1px 1px 0 ${c}, 0 0 ${bs.textShadowBlur}px ${c}`
         : 'none',
     }
-  }, [bs.textColor, bs.fontSize, bs.fontFamily, bs.textShadow, bs.textShadowColor, bs.textShadowIntensity, bs.textShadowBlur])
+  }, [bs.textColor, bs.fontSize, bs.fontFamily, bs.textShadow, bs.textShadowColor, bs.textShadowIntensity, bs.textShadowBlur, isGlitch])
   const [text, setText] = useState('')
   const [visible, setVisible] = useState(false)
   const [charCount, setCharCount] = useState(0)
@@ -116,6 +142,8 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
   const typewriterRef = useRef<number | null>(null)
   const textSpeedRef = useRef(bs.textSpeed)
   textSpeedRef.current = bs.textSpeed
+  const limitStatusRef = useRef(bs.limitStatusText)
+  limitStatusRef.current = bs.limitStatusText
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Split text into grapheme clusters
@@ -419,7 +447,10 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
       audioNextIndexRef.current = 0
     }
 
-    const fullText = msg.text!
+    const rawText = msg.text!
+    const fullText = limitStatusRef.current && msg.working && rawText.length > STATUS_TEXT_MAX_CHARS
+      ? `${rawText.slice(0, STATUS_TEXT_MAX_CHARS).trimEnd()}…`
+      : rawText
     const graphemes = [...segmenter.segment(fullText)].map((s) => s.segment)
     chars.current = graphemes
     fullTextRef.current = fullText
@@ -513,7 +544,7 @@ export function TextBubble({ onMessage, enabled = true, ttsEnabled = true, bubbl
     }
   }, [handleMessage])
 
-  const words = useMemo(() => bubbleWords(chars.current, bs.textSpeed === 0), [text, bs.textSpeed === 0])
+  const words = useMemo(() => bubbleWords(chars.current, bs.textSpeed === 0 || bs.disableCharAnimation, isGlitch), [text, bs.textSpeed === 0, bs.disableCharAnimation, isGlitch])
   const showBubble = enabled && visible && (!!text || !!imageUrl)
 
   return (
@@ -626,10 +657,11 @@ const wordStyle: React.CSSProperties = {
 }
 
 interface BubbleWord { start: number; end: number; node: React.ReactNode; glyphs?: React.ReactNode[]; unbroken?: boolean }
-function bubbleWords(chars: string[], instant: boolean): BubbleWord[] {
+function bubbleWords(chars: string[], instant: boolean, glitch: boolean): BubbleWord[] {
   const out: BubbleWord[] = []
   let start = 0
-  const style = instant ? { ...popCharStyle, animation: 'none' } : popCharStyle
+  const charStyle = glitch ? glitchCharStyle : popCharStyle
+  const style = instant ? { ...charStyle, animation: 'none' } : charStyle
   while (start < chars.length) {
     const ch = chars[start]
     if (ch === '\n' || ch === ' ' || ch === '\t') {
@@ -659,6 +691,14 @@ function renderWords(words: BubbleWord[], charCount: number) {
 const popCharStyle: React.CSSProperties = {
   display: 'inline-block',
   animation: `claw-pop-in ${POP_DURATION_MS}ms ease-out both`,
+  whiteSpace: 'pre',
+}
+
+// Glitch reveal: opacity-only flicker (a compositor-friendly property) instead
+// of the default transform+opacity pop, so long text stays cheaper to animate.
+const glitchCharStyle: React.CSSProperties = {
+  display: 'inline-block',
+  animation: 'claw-glitch-in 150ms steps(1) both',
   whiteSpace: 'pre',
 }
 

@@ -38,6 +38,12 @@ fn raise_settings_window(window: &tauri::WebviewWindow) -> Result<(), String> {
     // discard focus while its cached minimized/visible flags are still stale.
     window.unminimize().map_err(|e| e.to_string())?;
     window.show().map_err(|e| e.to_string())?;
+    // A bare present/focus is ignored by window managers that apply
+    // focus-stealing prevention when the app is not active (e.g. a tray action
+    // while the window sits behind others). A momentary always-on-top toggle
+    // forces the window manager to restack it above the other windows.
+    let _ = window.set_always_on_top(true);
+    window.set_focus().map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
     {
         use gtk::prelude::*;
@@ -52,8 +58,7 @@ fn raise_settings_window(window: &tauri::WebviewWindow) -> Result<(), String> {
             }
         }).map_err(|e| e.to_string())?;
     }
-    #[cfg(not(target_os = "linux"))]
-    window.set_focus().map_err(|e| e.to_string())?;
+    let _ = window.set_always_on_top(false);
     Ok(())
 }
 
@@ -180,6 +185,67 @@ async fn pick_companion_file() -> Result<Option<String>, String> {
         .pick_file()
         .await;
     Ok(file.map(|f| f.path().to_string_lossy().to_string()))
+}
+
+/// A profile save in progress: the path picked in the native "Save As" dialog,
+/// held so the follow-up write does not have to round-trip a non-ASCII path
+/// through IPC headers.
+#[derive(Default)]
+struct PendingProfileSave(std::sync::Mutex<Option<std::path::PathBuf>>);
+
+/// Opens the native "Save As" dialog for a settings-profile bundle and remembers
+/// the chosen path for [`write_settings_profile`]. Returns the display path, or
+/// `None` when the user cancels.
+#[tauri::command]
+async fn choose_profile_save_path(
+    default_name: String,
+    state: tauri::State<'_, PendingProfileSave>,
+) -> Result<Option<String>, String> {
+    let file_name = if default_name.trim().is_empty() {
+        "Cuttle-Pet-Profile.cuttleprofile".to_string()
+    } else {
+        default_name
+    };
+    let chosen = rfd::AsyncFileDialog::new()
+        .set_file_name(&file_name)
+        .add_filter("Cuttle Pets Profile", &["cuttleprofile"])
+        .save_file()
+        .await;
+    let mut pending = state.0.lock().map_err(|_| "Save state is unavailable".to_string())?;
+    match chosen {
+        Some(handle) => {
+            let path = handle.path().to_path_buf();
+            *pending = Some(path.clone());
+            Ok(Some(path.to_string_lossy().to_string()))
+        }
+        None => {
+            *pending = None;
+            Ok(None)
+        }
+    }
+}
+
+/// Writes a profile bundle (raw IPC body) to the path chosen by
+/// [`choose_profile_save_path`] and returns that path.
+#[tauri::command]
+async fn write_settings_profile(
+    request: tauri::ipc::Request<'_>,
+    state: tauri::State<'_, PendingProfileSave>,
+) -> Result<String, String> {
+    let data = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        tauri::ipc::InvokeBody::Json(_) => return Err("Expected profile bundle data".into()),
+    };
+    let path = {
+        let mut pending = state.0.lock().map_err(|_| "Save state is unavailable".to_string())?;
+        pending.take().ok_or_else(|| "No save location was chosen".to_string())?
+    };
+    let display = path.to_string_lossy().to_string();
+    tauri::async_runtime::spawn_blocking(move || std::fs::write(&path, &data))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    Ok(display)
 }
 
 #[tauri::command]
@@ -581,6 +647,7 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default()
             .with_state_flags(WINDOW_STATE_FLAGS)
             .build())
+        .manage(PendingProfileSave::default())
         .invoke_handler(tauri::generate_handler![
             open_settings_window,
             native_frame_stats,
@@ -590,6 +657,8 @@ pub fn run() {
             pick_dance_file,
             pick_music_file,
             pick_companion_file,
+            choose_profile_save_path,
+            write_settings_profile,
             supports_input_regions,
             set_input_regions,
             start_cursor_monitor,

@@ -41,9 +41,6 @@ _STAGE_RE = re.compile(r"^[a-f0-9]{32}$")
 def create_blueprint(data_dir, asset_dirs, app_version):
     bp = Blueprint("settings_profiles", __name__)
 
-    def profile_dir() -> Path:
-        return data_dir() / "settings-profiles"
-
     def stage_dir() -> Path:
         return data_dir() / ".profile-imports"
 
@@ -62,75 +59,17 @@ def create_blueprint(data_dir, asset_dirs, app_version):
     def roots() -> dict[str, Path]:
         return asset_dirs()
 
-    @bp.get("/settings-profiles")
-    def list_profiles():
-        directory = profile_dir()
-        items = []
-        if directory.is_dir():
-            for path in sorted(directory.glob("*.json")):
-                try:
-                    profile = json.loads(path.read_text(encoding="utf-8"))
-                    if isinstance(profile, dict) and _ID_RE.fullmatch(profile.get("id", "")):
-                        items.append({"id": profile["id"], "name": profile.get("name", ""),
-                                      "updatedAt": profile.get("updatedAt", ""),
-                                      "source": profile.get("source")})
-                except (OSError, ValueError):
-                    continue
-        return jsonify({"profiles": items})
-
-    @bp.post("/settings-profiles")
-    def save_profile():
+    @bp.post("/settings-profiles/export")
+    def export_profile():
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             return jsonify({"ok": False, "error": "JSON object required"}), 400
         try:
             name = _clean_name(body.get("name"))
-            snapshot = _clean_settings(body.get("settings"))
-            profile_id = body.get("id") or uuid.uuid4().hex
-            if not isinstance(profile_id, str) or not _ID_RE.fullmatch(profile_id):
-                raise ValueError("Invalid profile ID")
-            directory = profile_dir()
-            directory.mkdir(parents=True, exist_ok=True)
-            path = directory / f"{profile_id}.json"
-            existing = _read_profile(directory, profile_id)
-            source = "behavior-migration" if body.get("source") == "behavior-migration" else (existing or {}).get("source")
-            profile = {"id": profile_id, "name": name, "schemaVersion": PROFILE_VERSION,
-                       "settings": snapshot, "updatedAt": int(time.time())}
-            if source == "behavior-migration":
-                profile["source"] = source
-            _atomic_json(path, profile)
-            return jsonify({"ok": True, "profile": {"id": profile_id, "name": name}})
+            archive = _export(name, body.get("settings"), roots(), app_version(), stage_dir() / "exports")
         except (ValueError, OSError) as error:
             return jsonify({"ok": False, "error": str(error)}), 400
-
-    @bp.get("/settings-profiles/<profile_id>")
-    def get_profile(profile_id: str):
-        profile = _read_profile(profile_dir(), profile_id)
-        if profile is None:
-            return jsonify({"ok": False, "error": "Profile not found"}), 404
-        return jsonify({"ok": True, "profile": profile})
-
-    @bp.delete("/settings-profiles/<profile_id>")
-    def delete_profile(profile_id: str):
-        if not _ID_RE.fullmatch(profile_id):
-            return jsonify({"ok": False, "error": "Profile not found"}), 404
-        path = profile_dir() / f"{profile_id}.json"
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return jsonify({"ok": False, "error": "Profile not found"}), 404
-        return jsonify({"ok": True})
-
-    @bp.get("/settings-profiles/<profile_id>/export")
-    def export_profile(profile_id: str):
-        profile = _read_profile(profile_dir(), profile_id)
-        if profile is None:
-            return jsonify({"ok": False, "error": "Profile not found"}), 404
-        try:
-            archive = _export(profile, roots(), app_version(), stage_dir() / "exports")
-        except (ValueError, OSError) as error:
-            return jsonify({"ok": False, "error": str(error)}), 400
-        filename = re.sub(r"[^A-Za-z0-9._-]+", "-", profile["name"]).strip("-._")[:60] or "Cuttle-Pet-Profile"
+        filename = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-._")[:60] or "Cuttle-Pet-Profile"
         response = send_file(archive, mimetype="application/zip", as_attachment=True,
                              download_name=f"{filename}.cuttleprofile", max_age=0)
         response.call_on_close(archive.close)
@@ -156,19 +95,12 @@ def create_blueprint(data_dir, asset_dirs, app_version):
                     output.write(chunk)
             manifest, settings, asset_rows = _validate_archive(archive_path, roots(), directory / "assets")
             profile_name = _clean_name(manifest.get("name"))
-            existing_names = {item["name"].casefold() for item in _list_profiles(profile_dir())}
-            suggested_name = profile_name
-            suffix = 2
-            while suggested_name.casefold() in existing_names:
-                suggested_name = f"{profile_name} ({suffix})"
-                suffix += 1
             _atomic_json(directory / "profile.json", {"name": profile_name, "settings": settings,
                                                          "manifest": manifest})
             total_bytes = sum(item["size"] for item in asset_rows)
             return jsonify({"ok": True, "token": stage_id,
-                            "preview": {"name": profile_name, "suggestedName": suggested_name,
-                                        "categories": list(settings), "assets": asset_rows,
-                                        "totalBytes": total_bytes}})
+                            "preview": {"name": profile_name, "categories": list(settings),
+                                        "assets": asset_rows, "totalBytes": total_bytes}})
         except (ValueError, OSError, EOFError, RuntimeError, NotImplementedError,
                 TypeError, KeyError, OverflowError, zlib.error, zipfile.BadZipFile,
                 json.JSONDecodeError) as error:
@@ -185,8 +117,6 @@ def create_blueprint(data_dir, asset_dirs, app_version):
             staged = json.loads((directory / "profile.json").read_text(encoding="utf-8"))
             manifest = staged["manifest"]
             settings = staged["settings"]
-            name = _clean_name(body.get("name") or staged["name"])
-            profile_id = uuid.uuid4().hex
             mapping: dict[tuple[str, str], str] = {}
             created: list[Path] = []
             try:
@@ -197,13 +127,7 @@ def create_blueprint(data_dir, asset_dirs, app_version):
                     if target[1]:
                         created.append(target[0])
                     mapping[(kind, asset_id)] = _local_reference(kind, target[0])
-                restored = _restore_refs(settings, mapping)
-                profile_directory = profile_dir()
-                profile_directory.mkdir(parents=True, exist_ok=True)
-                _atomic_json(profile_directory / f"{profile_id}.json", {
-                    "id": profile_id, "name": name, "schemaVersion": PROFILE_VERSION,
-                    "settings": _clean_settings(restored), "updatedAt": int(time.time()),
-                })
+                restored = _clean_settings(_restore_refs(settings, mapping))
             except Exception:
                 for path in created:
                     try:
@@ -211,9 +135,9 @@ def create_blueprint(data_dir, asset_dirs, app_version):
                     except OSError:
                         pass
                 raise
-            return jsonify({"ok": True, "profile": {"id": profile_id, "name": name}})
+            return jsonify({"ok": True, "settings": restored})
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
-            return jsonify({"ok": False, "error": str(error) or "Could not import profile"}), 400
+            return jsonify({"ok": False, "error": str(error) or "Could not load profile"}), 400
         finally:
             shutil.rmtree(directory, ignore_errors=True)
 
@@ -292,34 +216,6 @@ def _atomic_json(path: Path, value: Any) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-
-
-def _read_profile(directory: Path, profile_id: str) -> dict[str, Any] | None:
-    if not _ID_RE.fullmatch(profile_id):
-        return None
-    try:
-        profile = json.loads((directory / f"{profile_id}.json").read_text(encoding="utf-8"))
-        if not isinstance(profile, dict) or profile.get("id") != profile_id:
-            return None
-        profile["name"] = _clean_name(profile.get("name"))
-        profile["settings"] = _clean_settings(profile.get("settings"))
-        return profile
-    except (OSError, ValueError, TypeError):
-        return None
-
-
-def _list_profiles(directory: Path) -> list[dict[str, Any]]:
-    result = []
-    if directory.is_dir():
-        for path in directory.glob("*.json"):
-            try:
-                profile = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(profile, dict) and _ID_RE.fullmatch(profile.get("id", "")):
-                    result.append({"id": profile["id"], "name": profile.get("name", ""),
-                                   "source": profile.get("source")})
-            except (OSError, ValueError):
-                continue
-    return result
 
 
 def _reference_path(kind: str, value: Any, directories: dict[str, Path]) -> tuple[Path, str] | None:
@@ -445,8 +341,8 @@ def _is_builtin_asset(kind: str, value: str, directories: dict[str, Path]) -> bo
     return False
 
 
-def _export(profile: dict[str, Any], directories: dict[str, Path], version: str, temporary_dir: Path):
-    settings = _clean_settings(profile.get("settings"))
+def _export(name: Any, settings: Any, directories: dict[str, Path], version: str, temporary_dir: Path):
+    settings = _clean_settings(settings)
     inventory: dict[str, dict[str, Any]] = {}
     missing: list[str] = []
 
@@ -494,7 +390,7 @@ def _export(profile: dict[str, Any], directories: dict[str, Path], version: str,
     if missing:
         raise ValueError("Required profile assets could not be found: " + ", ".join(sorted(set(missing))))
     manifest = {"format": PROFILE_FORMAT, "version": PROFILE_VERSION,
-                "minimumAppVersion": version, "name": _clean_name(profile.get("name")),
+                "minimumAppVersion": version, "name": _clean_name(name),
                 "assets": [{key: value for key, value in asset.items() if key != "source"}
                            for asset in inventory.values()]}
     if len(inventory) + 2 > MAX_PROFILE_FILES:

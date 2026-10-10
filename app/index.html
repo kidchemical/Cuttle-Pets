@@ -53,6 +53,24 @@
       100% { opacity: 1; transform: scale(1) translateY(0); }
     }
 
+    /* Glitch style: cheap opacity-only reveal + occasional chromatic jitter. */
+    @keyframes claw-glitch-in {
+      0% { opacity: 0; }
+      45% { opacity: 0.35; }
+      60% { opacity: 0.9; }
+      75% { opacity: 0.3; }
+      100% { opacity: 1; }
+    }
+
+    @keyframes claw-glitch-jitter {
+      0%, 91%, 100% { transform: none; }
+      92% { transform: translate(-2px, 1px) skewX(-6deg); }
+      93% { transform: translate(2px, -1px); }
+      94% { transform: translate(-1px, 0) skewX(4deg); }
+      95% { transform: none; }
+      97% { transform: translate(1px, 1px); }
+    }
+
     @keyframes mood-bubble-float {
       0% { opacity: 1; transform: translateX(-50%) translateY(0) scale(0.8); }
       15% { opacity: 1; transform: translateX(-50%) translateY(-8px) scale(1.1); }

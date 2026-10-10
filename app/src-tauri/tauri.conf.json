@@ -1,6 +1,6 @@
 {
   "productName": "Cuttle Pets",
-  "version": "0.12.1",
+  "version": "0.15.0",
   "identifier": "com.cuttle.pets",
   "build": {
     "frontendDist": "../dist",

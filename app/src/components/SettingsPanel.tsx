@@ -25,7 +25,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isTauri, invoke } from '@tauri-apps/api/core'
 import type { DancePreset } from '../motion-controller'
 import { FPS_POSITIONS, RENDER_QUALITIES, applyPreset, resolvePreset, type FpsPosition, type QualitySettings } from '../render-quality'
-import { BUBBLE_PREVIEW_TEXT, DEFAULT_BUBBLE_SETTINGS, FONT_CHOICES, type BubbleSettings } from '../bubble-settings'
+import { BUBBLE_PREVIEW_TEXT, DEFAULT_BUBBLE_SETTINGS, FONT_CHOICES, GLITCH_BUBBLE_PRESET, type BubbleSettings } from '../bubble-settings'
+import { SETTINGS_SKINS, type SettingsSkinId } from '../settings-skins'
 import { CURSOR_LIGHT_MOTIONS, CURSOR_LIGHT_PRESET_IDS, DEFAULT_CURSOR_LIGHT, DEFAULT_GLOBAL_LIGHTING, applyCursorLightPreset, normalizeCursorLight, normalizeGlobalLighting, type CursorLightMotion, type CursorLightPreset, type CursorLightSettings, type GlobalLightingSettings } from '../lighting'
 
 interface DanceItem {
@@ -99,9 +100,11 @@ interface SettingsPanelProps {
   onLightingSettingsChange: (v: GlobalLightingSettings) => void
   cursorLightSettings: CursorLightSettings
   onCursorLightSettingsChange: (v: CursorLightSettings) => void
+  settingsSkin: SettingsSkinId
+  onSettingsSkinChange: (v: SettingsSkinId) => void
 }
 
-type Tab = 'animations' | 'behavior' | 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'quality' | 'display' | 'lighting' | 'pets' | 'props'
+type Tab = 'animations' | 'behavior' | 'music' | 'cuttle' | 'general' | 'voice' | 'model' | 'persona' | 'quality' | 'display' | 'lighting' | 'pets' | 'props' | 'appearance'
 
 const BUILTIN_MODELS = ['/model1.vrm', '/model2.vrm', '/model3.vrm', '/model4.vrm', '/model5.vrm']
 
@@ -174,6 +177,7 @@ export function SettingsPanel({
   propSettings, onPropSettingsChange,
   lightingSettings, onLightingSettingsChange,
   cursorLightSettings, onCursorLightSettingsChange,
+  settingsSkin, onSettingsSkinChange,
 }: SettingsPanelProps) {
   const testCompanion = (action: CompanionAction) => sendPetCommand({ type: 'companion', action })
   const t = (zh: string, en: string) => language === 'en' ? en : zh
@@ -496,7 +500,7 @@ export function SettingsPanel({
   const voices = currentProvider === 'qwen' ? QWEN_VOICES : EDGE_VOICES
 
   return (
-    <div className={standalone ? "pet-settings-window" : "pet-settings-panel"} style={{ ...overlayStyle, ...(standalone ? { background: '#1b1d25', alignItems: 'stretch', padding: 0 } : {}), ...(!standalone && tab === 'music' && musicPreview ? { background: 'transparent', alignItems: 'flex-end' } : {}) }} data-no-passthrough onClick={onClose}>
+    <div className={standalone ? "pet-settings-window" : "pet-settings-panel"} data-settings-skin={settingsSkin} style={{ ...overlayStyle, ...(standalone ? { background: 'var(--settings-root, #1b1d25)', alignItems: 'stretch', padding: 0 } : {}), ...(!standalone && tab === 'music' && musicPreview ? { background: 'transparent', alignItems: 'flex-end' } : {}) }} data-no-passthrough onClick={onClose}>
       <div className="settings-shell" style={{ ...panelStyle, ...(standalone ? { width: '100%', height: '100%', borderRadius: 0, display: 'flex', flexDirection: 'column' } : { width: panelWidth, maxWidth: '90vw', transform: `translate(${panelPos.x}px, ${panelPos.y}px)` }) }} data-no-passthrough onClick={(e) => e.stopPropagation()}>
         <div className="settings-header" style={headerStyle} onMouseDown={standalone ? undefined : onDragStart}>
           <div><h1 style={{ fontSize: 20, margin: 0 }}>{t('设置', 'Settings')}<VersionChip language={language} /></h1><p className="settings-caption">{t('个性化你的桌面伙伴', 'Make your desktop companion your own')}</p></div>
@@ -514,21 +518,21 @@ export function SettingsPanel({
 
         {/* Tabs */}
         <nav className="settings-tabs" aria-label="Settings sections" style={tabBarStyle}>
-          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'animations', 'behavior', 'pets', 'props', 'quality', 'display', 'lighting'] as const).map((tb) => (
+          {(['general', 'music', 'cuttle', 'voice', 'model', 'persona', 'animations', 'behavior', 'pets', 'props', 'quality', 'display', 'appearance', 'lighting'] as const).map((tb) => (
             <button
               key={tb}
               className="settings-tab" aria-current={tab === tb ? "page" : undefined}
               onClick={() => setTab(tb)}
               style={{ ...tabStyle, ...(tab === tb ? activeTabStyle : {}) }}
             >
-              {{ animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), quality: t('画质', 'Quality'), display: t('显示', 'Display'), lighting: t('灯光', 'Lighting'), pets: t('宠物', 'Pets'), props: t('道具', 'Props') }[tb]}
+              {{ animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), music: 'Music', cuttle: 'Cuttle', general: t('常规', 'General'), voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), quality: t('画质', 'Quality'), display: t('显示', 'Display'), appearance: t('外观', 'Appearance'), lighting: t('灯光', 'Lighting'), pets: t('宠物', 'Pets'), props: t('道具', 'Props') }[tb]}
             </button>
           ))}
         </nav>
 
         {/* Tab content */}
         <div className="settings-content" style={{ ...contentStyle, maxHeight: standalone ? undefined : tab === 'music' && musicPreview ? '32vh' : '60vh', ...(standalone ? { flex: 1, minHeight: 0 } : {}), overflowY: 'auto', paddingRight: 4 }}>
-          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), pets: t('宠物', 'Pets'), props: t('道具', 'Props'), quality: t('画质', 'Quality'), display: t('显示', 'Display'), lighting: t('灯光', 'Lighting') }[tab]}<SettingsHelp label="Settings help">{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</SettingsHelp></h2></div>}
+          {standalone && <div className="settings-section-heading"><h2>{{ general: t('常规', 'General'), music: 'Music', cuttle: 'Cuttle connection', voice: t('语音', 'Voice'), model: t('形象', 'Model'), persona: t('人设', 'Persona'), animations: t('动画', 'Animations'), behavior: t('行为', 'Behavior'), pets: t('宠物', 'Pets'), props: t('道具', 'Props'), quality: t('画质', 'Quality'), display: t('显示', 'Display'), appearance: t('外观', 'Appearance'), lighting: t('灯光', 'Lighting') }[tab]}<SettingsHelp label="Settings help">{t('更改会自动保存并实时应用。', 'Changes save automatically and apply live.')}</SettingsHelp></h2></div>}
           {tab === 'music'  && <MusicSettingsPanel fit={headphoneFit} music={musicSettings} enabled={musicEnabled} onFitChange={onHeadphoneFitChange} onMusicChange={onMusicSettingsChange} onEnabledChange={onMusicEnabledChange} onPreview={handlePreview} />}
           {tab === 'animations' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1380,6 +1384,24 @@ export function SettingsPanel({
                 </select>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14 }}>{t('样式', 'Style')}<SettingsHelp label="Bubble style help">Glitch borrows the Cuttle “Glitch” skin: chromatic split, scanlines, a pink/cyan glow, and an occasional jitter. Its reveal flickers opacity only, which is lighter than the transform pop-in.</SettingsHelp></span>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {(['default', 'glitch'] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setBubble(s === 'glitch' ? { ...GLITCH_BUBBLE_PRESET } : { bubbleStyle: 'default' })}
+                      style={{
+                        ...smallBtnStyle,
+                        background: bubbleSettings.bubbleStyle === s ? 'rgba(100, 160, 255, 0.4)' : 'rgba(255, 255, 255, 0.08)',
+                        borderColor: bubbleSettings.bubbleStyle === s ? 'rgba(100, 160, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                      }}
+                    >
+                      {s === 'default' ? t('默认', 'Default') : t('故障', 'Glitch')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: 14 }}>{t('缩放', 'Scale')}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <input
@@ -1551,6 +1573,43 @@ export function SettingsPanel({
                   </div>
                 </>
               )}
+              <div style={{ marginTop: 4, fontSize: 12, color: '#8b98ad', textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('性能', 'Performance')}</div>
+              <ToggleRow label={t('限制状态文字长度', 'Limit status text length')} value={bubbleSettings.limitStatusText} onChange={(v) => setBubble({ limitStatusText: v })} />
+              <ToggleRow label={t('禁用气泡模糊', 'Disable bubble blur')} value={bubbleSettings.disableBubbleBlur} onChange={(v) => setBubble({ disableBubbleBlur: v })} />
+              <ToggleRow label={t('禁用逐字动画', 'Disable per-character animation')} value={bubbleSettings.disableCharAnimation} onChange={(v) => setBubble({ disableCharAnimation: v })} />
+            </div>
+          )}
+          {tab === 'appearance' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={sectionStyle}>
+                <div style={labelStyle}>{t('窗口皮肤', 'Window skin')}<SettingsHelp label="Window skin help">{t('更改设置窗口自身的配色。皮肤是静态的（无动画），避免与宠物渲染器争抢 GPU。', "Restyles the settings window itself. Skins are static (no animations) so they don't compete with the pet renderer for the GPU.")}</SettingsHelp></div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10, marginTop: 4 }}>
+                  {SETTINGS_SKINS.map((skin) => {
+                    const active = settingsSkin === skin.id
+                    return (
+                      <button
+                        key={skin.id}
+                        onClick={() => onSettingsSkinChange(skin.id)}
+                        aria-pressed={active}
+                        style={{
+                          display: 'flex', flexDirection: 'column', gap: 8, padding: 10, textAlign: 'left', cursor: 'pointer',
+                          background: 'var(--settings-surface)', color: 'var(--settings-text)',
+                          border: `1px solid ${active ? 'var(--settings-accent)' : 'var(--settings-border)'}`,
+                          boxShadow: active ? '0 0 0 1px var(--settings-accent)' : 'none',
+                        }}
+                      >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 13 }}>
+                          <span aria-hidden>{skin.icon}</span>{language === 'en' ? skin.label : skin.labelZh}
+                        </span>
+                        <span aria-hidden style={{ display: 'flex', height: 16, borderRadius: 4, overflow: 'hidden', border: '1px solid var(--settings-border)' }}>
+                          <span style={{ flex: 1, background: skin.swatch[1] }} />
+                          <span style={{ flex: 1, background: skin.swatch[0] }} />
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -1596,14 +1655,14 @@ const overlayStyle: React.CSSProperties = {
 
 const panelStyle: React.CSSProperties = {
   width: 400,
-  background: 'rgba(30, 30, 40, 0.95)',
+  background: 'var(--settings-panel, rgba(30, 30, 40, 0.95))',
   backdropFilter: 'blur(12px)',
   borderRadius: 12,
-  border: '1px solid rgba(255, 255, 255, 0.15)',
+  border: '1px solid var(--settings-border, rgba(255, 255, 255, 0.15))',
   boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
   padding: 16,
-  color: '#fff',
-  fontFamily: '"Segoe UI", "Microsoft YaHei", sans-serif',
+  color: 'var(--settings-text, #fff)',
+  fontFamily: 'var(--settings-font, "Segoe UI", system-ui, sans-serif)',
 }
 
 const headerStyle: React.CSSProperties = {
