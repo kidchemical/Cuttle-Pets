@@ -6,9 +6,9 @@
 
 When Cuttle works, she types. When it's done, she cheers. When tests go green, she tells you.
 
-[Quick start](#quick-start) · [What she does](#what-she-does) · [Any agent can drive her](#any-agent-can-drive-her) · [Cuttle bridge](#cuttle-bridge) · [Control API](#control-api) · [Models & animation](#models--animation) · [Windows](#windows) · [Building](#building)
+[Quick start](#quick-start) · [What she does](#what-she-does) · [Any agent can drive her](#any-agent-can-drive-her) · [Cuttle bridge](#cuttle-bridge) · [Control API](#control-api) · [Models & animation](#models--animation) · [Settings](#settings) · [Music & beat tracking](#music--beat-tracking) · [Development](#development)
 
-[![MIT license](https://img.shields.io/badge/license-MIT-7048e8.svg)](LICENSE.txt) [![Linux | Windows | macOS](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-191b45.svg)](#requirements) [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3b82f6.svg)](#requirements) [![Tauri 2](https://img.shields.io/badge/tauri-2-2fa37a.svg)](#building)
+[![MIT license](https://img.shields.io/badge/license-MIT-7048e8.svg)](LICENSE.txt) [![Linux | Windows | macOS](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-191b45.svg)](#requirements) [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3b82f6.svg)](#requirements) [![Tauri 2](https://img.shields.io/badge/tauri-2-2fa37a.svg)](#requirements)
 
 <br>
 
@@ -49,47 +49,39 @@ When Cuttle works, she types. When it's done, she cheers. When tests go green, s
 
 ## Quick start
 
+She is three parts: a Python **control server** on `127.0.0.1:8790`, a Tauri **pet window** (three.js + VRM), and an optional **Cuttle bridge** that turns agent activity into reactions.
+
 ### Requirements
 
-- Linux (tested), Windows, or macOS
-- Python 3.11+ with Flask (`pip install -r requirements.txt`)
-- Node 20+ and Rust (for the Tauri window — see [Building](#building))
-- A `.vrm` model — author one free in [VRoid Studio](https://vroid.studio), or start with the bundled sample
+- **OS:** Linux (tested), Windows 10/11, or macOS
+- **Python 3.11+** — Flask, NumPy (and SoundCard on Windows for beat tracking)
+- **Node 20+** — the renderer and the Tauri CLI
+- **Rust (cargo)** — the Tauri host; `npm run tauri dev` compiles the native window
+- **Windows only:** the MSVC C++ build tools and the WebView2 runtime (see [Windows](#windows))
+- A `.vrm` model — author one free in [VRoid Studio](https://vroid.studio), or import your own
 - Optional: Cuttle running locally, if you want her to react to agent chats
 
-### Run it
+### Install and run
+
+**Linux / macOS** — from the repository root:
 
 ```bash
-# 1. control server (the only thing the pet window talks to)
-python3 server/server.py            # http://127.0.0.1:8790
-
-# 2. the pet window
-cd app && npm install && npm run tauri dev
-
-# 3. say hi
-python3 ../cli/cuttle_pet.py say "Hello from the terminal!" --emotion happy
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cd app && npm install && cd ..
+bash start_pet.sh                      # server + bridge + pet window
 ```
 
-Or launch everything at once:
+`start_pet.sh` builds the Tauri dev window on first run (the initial Rust compile takes a few minutes). Set `CUTTLE_PET_BRIDGE=0` to skip the bridge.
 
-```bash
-bash start_pet.sh                     # Linux
-powershell -ExecutionPolicy Bypass -File .\start_pet.ps1   # Windows
+**Windows** — full prerequisite walkthrough in [Windows](#windows). Once Rust, Node, and Python are installed, from the repository root:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\pip.exe install -r requirements.txt
+cd app; npm install; cd ..
+powershell -ExecutionPolicy Bypass -File .\start_pet.ps1
 ```
-
-On Linux with the NVIDIA driver loaded, the app keeps WebKitGTK's DMA-BUF
-renderer but forces shared-memory buffers (`WEBKIT_FORCE_DMABUF_RENDERER=1`,
-`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`). NVIDIA's GBM rejects the renderer's
-hardware buffers, which otherwise shows a blank window or crashes; the older
-workaround, `WEBKIT_DISABLE_DMABUF_RENDERER=1`, avoids that but falls back to
-non-composited CPU painting, which held a large pet window near 25 fps where
-shared-memory buffers reached about 60 fps at lower CPU. Setting any of these
-three variables yourself overrides the default (for example
-`WEBKIT_DISABLE_DMABUF_RENDERER=1` restores the old fallback). See
-[Tauri's Linux graphics notes](https://v2.tauri.app/develop/debug/linux-graphics/).
-With NVIDIA the app also defaults `__GL_YIELD=USLEEP`: the driver otherwise
-busy-waits on every WebGL frame and keeps a full CPU core busy even for an
-empty scene. An explicit `__GL_YIELD` value overrides it.
 
 ### Try it
 
@@ -101,6 +93,13 @@ python3 cli/cuttle_pet.py action greeting
 python3 cli/cuttle_pet.py event thinking --detail "Reading three files…"
 python3 cli/cuttle_pet.py event done --detail "Test complete!"
 python3 cli/cuttle_pet.py watch      # stream pet events to stdout
+```
+
+You can also run the parts by hand:
+
+```bash
+python3 server/server.py                       # control server only
+cd app && npm run tauri dev                     # pet window only
 ```
 
 ## Any agent can drive her
@@ -122,6 +121,21 @@ curl -X POST http://127.0.0.1:8790/pet/event \
 ```
 
 CLI exit codes are script-safe (`0` on success), so agents can chain commands reliably. The Cuttle bridge below is just one opinionated driver — bring your own for any other harness.
+
+## Cuttle bridge
+
+The bridge watches **all chats on your Cuttle account** (batched, every 3 seconds) and turns activity into reactions: thinking → ponders, streaming → types, done → celebrates, then back to idle. It's an activity indicator — it never reads or speaks full replies.
+
+```bash
+bash start_pet.sh   # includes the bridge
+```
+
+Then open the pet's **Settings → Cuttle → Connect to Cuttle** and sign in once with your normal Cuttle username and password. The pet keeps a separate login session (owner-only file, token not password) and reconnects itself after reboots. Restrict to specific chats when you want:
+
+```bash
+python3 bridge/bridge.py --session 868 --session 869 --verbose
+CUTTLE_PET_BRIDGE=0 bash start_pet.sh   # no bridge, direct CLI control only
+```
 
 ## Architecture
 
@@ -145,21 +159,6 @@ flowchart LR
 | `bridge/` | Polls Cuttle live-status and drives pet reactions |
 | `~/.cuttle-pet/` | Your data (never shipped): `models/` (`.vrm` library), `pets/` + `props/` (imported GLBs), `settings.json` |
 | `scripts/autostart.py` | Linux desktop-login autostart |
-
-## Cuttle bridge
-
-The bridge watches **all chats on your Cuttle account** (batched, every 3 seconds) and turns activity into reactions: thinking → ponders, streaming → types, done → celebrates, then back to idle. It's an activity indicator — it never reads or speaks full replies.
-
-```bash
-bash start_pet.sh   # includes the bridge
-```
-
-Then open the pet's **Settings → Cuttle → Connect to Cuttle** and sign in once with your normal Cuttle username and password. The pet keeps a separate login session (owner-only file, token not password) and reconnects itself after reboots. Restrict to specific chats when you want:
-
-```bash
-python3 bridge/bridge.py --session 868 --session 869 --verbose
-CUTTLE_PET_BRIDGE=0 bash start_pet.sh   # no bridge, direct CLI control only
-```
 
 ## Control API
 
@@ -203,139 +202,78 @@ python3 cli/cuttle_pet.py settings pinned true    # pin again
 
 Enable login autostart (Linux) with `python3 scripts/autostart.py enable`.
 
-## Animation settings
+### Linux / NVIDIA graphics
+
+With the NVIDIA driver loaded, the app keeps WebKitGTK's DMA-BUF renderer but forces shared-memory buffers (`WEBKIT_FORCE_DMABUF_RENDERER=1`, `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`). NVIDIA's GBM rejects the renderer's hardware buffers, which otherwise shows a blank window or crashes; the older workaround, `WEBKIT_DISABLE_DMABUF_RENDERER=1`, avoids that but falls back to non-composited CPU painting, which held a large pet window near 25 fps where shared-memory buffers reached about 60 fps at lower CPU. Setting any of these three variables yourself overrides the default (for example `WEBKIT_DISABLE_DMABUF_RENDERER=1` restores the old fallback). See [Tauri's Linux graphics notes](https://v2.tauri.app/develop/debug/linux-graphics/). With NVIDIA the app also defaults `__GL_YIELD=USLEEP`: the driver otherwise busy-waits on every WebGL frame and keeps a full CPU core busy even for an empty scene. An explicit `__GL_YIELD` value overrides it.
+
+## Settings
 
 Open **Settings** from the pet toolbar, tray menu, or **F4**. Settings opens in a
 separate, resizable desktop window, independent of the pet viewport. Changes apply
-live and are saved locally and to the control server.
-
-Opening Settings again restores and raises the existing window, keeping its
-position. New settings windows start centered. In the desktop app, drop files
-anywhere on **Model**, **Animations**, **Pets**, or **Props** to import into that
-page's library; the file-picker buttons use the same import paths. Model accepts
-VRM, Animations accepts VMD/VRMA/FBX and matching MP3 music, and Pets/Props accept
-GLB/glTF/FBX/DAE (converted to GLB when needed).
-
-The **Pets** page includes **Lighting fill**, **Limb motion**, and **Follow lag**.
-Lighting fill lifts shadows using the stage's brightness and color; switching
-all stage lights off also removes this fill, letting cursor lights shade the pet.
-Higher follow lag lets a companion trail more loosely behind its anchor. Float
-idle adds gentle sideways/depth drift and rotation; supported arm and foot bones
-relax and move procedurally when no authored animation clip is playing. Set limb
-motion to zero to keep the imported bind pose.
-
-**Quality → Frame rate limit** controls the FPS cap separately from visual presets.
-Choose a cap from 15–240 FPS or **Uncapped**; saved custom caps are also preserved.
-The cap is an upper limit: actual FPS also depends on the system webview's frame
-clock and graphics workload. On Linux, an unsupported DRM vblank query now uses
-a native software clock paced to the current monitor, avoiding WebKitGTK's fixed
-60 Hz fallback. `python3 cli/cuttle_pet.py stats` reports rendered FPS, browser
-callback rate, native paints, monitor refresh, callback gaps, and frame work. See
-[frame pacing diagnostics](.cuttle/docs/frame-pacing.md). While resizing settings,
-the pet briefly uses a 30 FPS budget to keep the controls responsive and returns
-to the selected limit 250 ms after resizing stops.
-
-**Display → Text speed** changes how quickly speech and Cuttle status text appear.
-Choose 0.25–8× or **Instant**. The default is 1×; this does not change audio playback.
+live and are saved locally and to the control server. Opening Settings again restores
+and raises the existing window, keeping its position; new windows start centered. In
+the desktop app, drop files anywhere on **Model**, **Animations**, **Pets**, or
+**Props** to import into that page's library; the file-picker buttons use the same
+import paths. Model accepts VRM, Animations accepts VMD/VRMA/FBX and matching MP3
+music, and Pets/Props accept GLB/glTF/FBX/DAE (converted to GLB when needed).
 Settings explanations live behind **ⓘ** icons, shown on hover, keyboard focus or tap.
 
-The **Animations** tab has a global speed multiplier and a searchable, scrollable
-list of idle, gesture, dance, imported dance, and procedural animations. Select an
-animation to adjust its individual speed; the effective speed is global × individual.
-Clips also have a transition duration, and gestures have a held-pose duration for
-interactions that request a hold. Use **Preview on pet**, **Stop preview**, and the
-reset buttons to try changes. **Anchor feet to floor** is a per-clip toggle that
-lowers the hips to keep the lowest foot, toe or knee on the model's standing floor.
-It defaults on for **Pray**, **Sitting idle** and **Sitting talk**; jumps and dances
-retain their authored vertical motion by default. Turning it off restores the
-original in-place retargeting. Procedural music motion can also be previewed from the
-Music tab. Speech remains synchronized to its audio; music beat matching works best
-at 1×. At effective speeds below 0.0625×, dance audio stays at 0.0625× (the browser's
-minimum playback rate).
+- **Pets** — **Lighting fill** lifts shadows using the stage's brightness and color (switching all stage lights off also removes this fill, letting cursor lights shade the pet). **Limb motion** and **Follow lag** control procedural bone motion and how loosely a companion trails its anchor. Float idle adds gentle sideways/depth drift and rotation; set limb motion to zero to keep the imported bind pose.
+- **Quality** — **Frame rate limit** caps FPS from 15–240 or **Uncapped**, separately from visual presets. The cap is an upper limit; actual FPS also depends on the webview's frame clock and graphics workload. On Linux, an unsupported DRM vblank query uses a native software clock paced to the current monitor, avoiding WebKitGTK's fixed 60 Hz fallback. `python3 cli/cuttle_pet.py stats` reports rendered FPS, browser callback rate, native paints, monitor refresh, callback gaps, and frame work — see [frame pacing diagnostics](.cuttle/docs/frame-pacing.md). While resizing, the pet briefly uses a 30 FPS budget and returns to the selected limit 250 ms after resizing stops.
+- **Display** — **Text speed** changes how quickly speech and status text appear (0.25–8× or **Instant**; does not change audio playback).
+- **Animations** — a global speed multiplier plus a searchable, scrollable list of idle, gesture, dance, imported, and procedural animations. Select one to adjust its individual speed (effective speed is global × individual). Clips have a transition duration and gestures a held-pose duration. **Anchor feet to floor** is a per-clip toggle that lowers the hips to keep the lowest foot, toe, or knee on the model's floor; it defaults on for **Pray**, **Sitting idle**, and **Sitting talk**, while jumps and dances keep their authored vertical motion. Use **Preview on pet**, **Stop preview**, and the reset buttons to try changes. At effective speeds below 0.0625×, dance audio stays at 0.0625× (the browser's minimum playback rate).
+- **Behavior** — owns all automatic action timing: Idle surprises, Working coffee sips, Music dance breaks, and each state's Start / Main / Occasionals / End. Referenced behaviors in Start, End, or Occasionals play Start → one weighted Main → End once, then resume the current state; Main references sustain another behavior. Clips finish naturally; one-shot procedural motions use the configurable hold time (5 seconds by default). Circular references are skipped. Turning the engine off stops automatic sequences and occasionals; manual previews still work.
+- **Custom reactions** — one-shot behaviors any agent can call by id, e.g. a `rocket-launch` celebration after a git push. Each reaction is an ordered step sequence (animation + emotion + speech + laptop/coffee props) with typed parameters referenced as `{{name}}` in speech text. Agents browse the library with `python3 cli/cuttle_pet.py behaviors` (`GET /behaviors`) and play one with `python3 cli/cuttle_pet.py react rocket-launch --param message="Shipped!"` (`POST /behaviors/trigger`). Reactions play once and the pet returns to its current state; the four persistent states (idle / working / music / dancing) stay fixed.
 
-The **Behavior** tab owns all automatic action timing: Idle surprises, Working
-coffee sips, Music dance breaks, and each state's Start / Main / Occasionals / End.
-Music's default Main is **Music nod / sway**; its default occasional is
-**Dancing (behavior)** every 45–90 seconds. Referenced behaviors in Start, End,
-or Occasionals play Start → one weighted Main → End once, then resume the
-current state. Main references sustain another behavior. Animation clips finish
-naturally; one-shot procedural motions use the configurable hold time (5 seconds
-by default). Circular references are skipped. Turning the behavior engine off
-stops automatic sequences and occasionals; manual previews still work.
+Currently playing entries on both settings pages show a mint gradient, a gentle glow, and a Playing badge. Blue marks the entry selected for editing. Nested behaviors highlight both the invoking entry and the currently playing step; reduced-motion preferences use a static highlight. Settings show the latest real playback snapshot immediately when available, request a fresh snapshot on opening, and show “Connecting to pet…” while waiting.
 
-Currently playing entries on both settings pages show a mint gradient, a gentle
-glow, and a Playing badge. Blue marks the entry selected for editing. Nested
-behaviors highlight both the invoking entry and the currently playing step;
-reduced-motion preferences use a static highlight.
+**Settings migration:** `behaviorSettings.version: 2` moves the legacy `musicSettings.randomDance` and `musicSettings.reactOnEnd` toggles into explicit Music Occasionals and End entries in the current and saved behavior profiles (enabled legacy dance breaks become a Dancing occasional; enabled end reactions become a clapping End entry). Existing entries are preserved and disabled toggles add nothing. Migration runs once and saves only the `behaviorSettings` preference through a merge patch; other preferences, model files, dances, and audio are untouched.
 
-Settings show the latest real playback snapshot immediately when available,
-request a fresh snapshot on opening, and show “Connecting to pet…” while waiting.
+## Music & beat tracking
 
-**Settings migration:** `behaviorSettings.version: 2` moves the legacy
-`musicSettings.randomDance` and `musicSettings.reactOnEnd` toggles into explicit
-Music Occasionals and End entries in the current and saved behavior profiles.
-Enabled legacy dance breaks become a Dancing behavior occasional; enabled end
-reactions become a clapping End entry. Existing entries are preserved, and full
-lists are left intact. Disabled toggles add no corresponding entry. Migration
-runs once and saves only the `behaviorSettings` preference through a merge patch;
-other preferences, model files, dances, and audio are untouched. Future edits
-are governed solely by the behavior profile. End entries run when leaving a
-state, including Music giving way to Working.
+Install Python dependencies with `python -m pip install -r requirements.txt`. NumPy runs the shared detector on both platforms. Windows additionally installs SoundCard (and CFFI) through the platform-specific requirement; Ubuntu requires `pw-record` and `wpctl` from PipeWire/WirePlumber.
 
-**Custom reactions** (Behavior tab) are one-shot behaviors any
-agent can call by id — e.g. a `rocket-launch` celebration after a git push.
-Each reaction is an ordered step sequence (animation + emotion + speech +
-laptop/coffee props) with typed parameters referenced as `{{name}}` in speech
-text. Agents browse the library with `python3 cli/cuttle_pet.py behaviors`
-(`GET /behaviors`) and play one with
-`python3 cli/cuttle_pet.py react rocket-launch --param message="Shipped!"`
-(`POST /behaviors/trigger`). Reactions play once and the pet returns to its
-current state; the four persistent states (idle / working / music / dancing)
-stay fixed.
+The detector combines bass, midrange, and treble spectral changes, estimates tempo from eight seconds of recent rhythm evidence, and tracks a continuous beat grid. Musical onsets provide evidence; only tracked grid pulses steer the pet's phase. New settings default to 60–200 BPM; existing saved minimum/maximum bounds remain in effect. The bass-band control changes one analysis band, rather than rejecting all higher-frequency rhythm. Sensitivity controls onset admission.
+
+Music settings show a large live BPM estimate: yellow while calculating, green when locked. If rhythm evidence drops out, the last estimate stays visible and is labeled accordingly. Analysis controls come first, followed by motion and per-model headphone fitting.
+
+Audio stays local in memory; microphones are never selected. Windows captures multiple playback channels and downmixes/resamples them internally, avoiding SoundCard's documented single-channel WASAPI issue. Output-device changes and capture errors cause a reconnect and reset the tracker. Windows playing status comes from audio signal presence, so all desktop audio can activate music mode; there is no native per-player media-session fallback. Mono-only Windows output endpoints are currently unsupported by the SoundCard backend.
+
+Music without a clear pulse can remain unlocked. Half/double tempo and beat-phase ambiguity remain possible; the bounds and manual fallback are available in Music settings. Confidence is a rhythm-stability heuristic, not a probability. Acquisition time differs from steady-state phase accuracy. Hardware capture latency and audible output delay (especially Bluetooth) require testing on the target device; sub-120 ms end-to-end latency is not guaranteed.
+
+Third-party license notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Windows
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\start_pet.ps1
-```
+The launcher needs more than the Python requirements: `npm run tauri dev` also compiles the **Rust** host, so `cargo` must be on `PATH` or `start_pet.ps1` stops with `cargo is required`.
 
-Same behavior as `start_pet.sh`: reuses a running control server, starts the bridge unless `$env:CUTTLE_PET_BRIDGE` is `'0'`, then opens the Tauri dev window. Needs Python 3 with `pip install -r requirements.txt`, Node 20+, and Rust on `PATH`. (Release binaries are planned; dev-window launch for now.)
+1. **Install the prerequisites once** (any PowerShell):
 
-### Live beat tracking
+   ```powershell
+   winget install Python.Python.3.12
+   winget install OpenJS.NodeJS.LTS
+   winget install Rustlang.Rustup
+   winget install Microsoft.VisualStudio.2022.BuildTools
+   winget install Microsoft.EdgeWebView2Runtime
+   ```
 
-Install Python dependencies with `python -m pip install -r requirements.txt`.
-NumPy runs the shared detector on both platforms. Windows additionally installs
-SoundCard (and CFFI) through the platform-specific requirement; Ubuntu requires
-`pw-record` and `wpctl` from PipeWire/WirePlumber.
+   Prefer installers from the source? [Python](https://www.python.org/downloads/), [Node.js LTS](https://nodejs.org/), [Rust via rustup](https://rustup.rs). Tauri's Windows build additionally needs the **MSVC C++ build tools** (Visual Studio 2022, "Desktop development with C++" workload) and the **WebView2 runtime** — see [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/). Close and reopen the terminal after installing so `cargo` and `node` are on `PATH`; verify with `rustc --version` and `node --version`.
 
-The detector combines bass, midrange, and treble spectral changes, estimates tempo
-from eight seconds of recent rhythm evidence, and tracks a continuous beat grid.
-Musical onsets provide evidence; only tracked grid pulses steer the pet's phase.
-New settings default to 60–200 BPM; existing saved minimum/maximum bounds remain
-in effect. The bass-band control changes one analysis band, rather than rejecting
-all higher-frequency rhythm. Sensitivity controls onset admission.
+2. **Set up the repo** (from the repository root):
 
-Music settings show a large live BPM estimate: yellow while calculating, green
-when locked. If rhythm evidence drops out, the last estimate stays visible and
-is labeled accordingly. Analysis controls come first, followed by motion and
-per-model headphone fitting.
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\pip.exe install -r requirements.txt
+   cd app; npm install; cd ..
+   ```
 
-Audio stays local in memory; microphones are never selected. Windows captures
-multiple playback channels and downmixes/resamples them internally, avoiding
-SoundCard's documented single-channel WASAPI issue. Output-device changes and
-capture errors cause a reconnect and reset the tracker. Windows playing status
-comes from audio signal presence, so all desktop audio can activate music mode;
-there is no native per-player media-session fallback. Mono-only Windows output
-endpoints are currently unsupported by the SoundCard backend.
+3. **Launch** (server, bridge, then the Tauri dev window):
 
-Music without a clear pulse can remain unlocked. Half/double tempo and beat-phase
-ambiguity remain possible; the bounds and manual fallback are available in Music
-settings. Confidence is a rhythm-stability heuristic, not a probability.
-Acquisition time differs from steady-state phase accuracy. Hardware
-capture latency and audible output delay (especially Bluetooth) require testing
-on the target device; sub-120 ms end-to-end latency is not guaranteed.
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\start_pet.ps1
+   ```
 
-Third-party license notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+`start_pet.ps1` mirrors `start_pet.sh`: it reuses a running control server, starts the bridge unless `$env:CUTTLE_PET_BRIDGE` is `'0'`, then opens the Tauri dev window. The first run compiles Rust and takes a few minutes. Release binaries are planned; dev-window launch for now.
 
 ## Development
 
