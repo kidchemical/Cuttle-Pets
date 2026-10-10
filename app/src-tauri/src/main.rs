@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    claw_sama_lib::run()
+    cuttle_pets_lib::run()
 }

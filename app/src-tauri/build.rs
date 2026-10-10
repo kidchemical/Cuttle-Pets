@@ -1,7 +1,7 @@
 fn main() {
     println!("cargo:rerun-if-changed=icons");
     #[cfg(target_os = "linux")]
-    println!("cargo:rustc-link-arg-bin=claw-sama=-Wl,--export-dynamic-symbol=drmWaitVBlank");
+    println!("cargo:rustc-link-arg-bin=cuttle-pets=-Wl,--export-dynamic-symbol=drmWaitVBlank");
     #[cfg(target_os = "macos")]
     {
         println!("cargo:rustc-link-lib=framework=Speech");

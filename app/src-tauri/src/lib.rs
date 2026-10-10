@@ -555,6 +555,20 @@ pub fn run() {
     {
         std::env::set_var("__GL_YIELD", "USLEEP");
     }
+    // Wayland does not let clients restore absolute window coordinates or keep
+    // an always-on-top window pinned, so the pet loses its saved placement.
+    // When an Xwayland display is present, prefer the X11 backend (the dev
+    // launcher used to do this; the packaged app must do it itself). An
+    // explicit GDK_BACKEND or CUTTLE_PET_BACKEND overrides the default.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("GDK_BACKEND").is_none()
+        && std::env::var("XDG_SESSION_TYPE").unwrap_or_default() == "wayland"
+        && std::env::var_os("DISPLAY").is_some()
+    {
+        let backend = std::env::var("CUTTLE_PET_BACKEND").unwrap_or_else(|_| "x11".to_string());
+        std::env::set_var("GDK_BACKEND", &backend);
+        eprintln!("[Cuttle Pets] Wayland session with Xwayland: GDK_BACKEND={backend}");
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // When a second instance is launched, show and focus the existing window
@@ -610,7 +624,7 @@ pub fn run() {
             {
                 use tauri::menu::{MenuBuilder, SubmenuBuilder};
 
-                let app_menu = SubmenuBuilder::new(app, "Claw Sama")
+                let app_menu = SubmenuBuilder::new(app, "Cuttle Pets")
                     .item(&MenuItem::with_id(app, "app_toggle", "Show / Hide", true, Some("CmdOrCtrl+Shift+H"))?)
                     .item(&MenuItem::with_id(app, "app_settings", "Settings", true, Some("CmdOrCtrl+,"))?)
                     .separator()

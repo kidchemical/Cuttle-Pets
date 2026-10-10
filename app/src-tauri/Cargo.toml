@@ -1,16 +1,16 @@
 [package]
-name = "claw-sama"
+name = "cuttle-pets"
 version = "0.12.1"
-description = "Claw Sama Desktop Pet"
+description = "Cuttle Pets Desktop Pet"
 authors = []
 edition = "2021"
 
 [lib]
-name = "claw_sama_lib"
+name = "cuttle_pets_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "claw-sama"
+name = "cuttle-pets"
 path = "src/main.rs"
 
 [build-dependencies]
